@@ -1,0 +1,11 @@
+venv/
+__pycache__/
+*.pyc
+*.pyo
+.env
+*.log
+*.err.log
+*.bak-*
+*.plist
+qdrant_storage/
+.DS_Store
