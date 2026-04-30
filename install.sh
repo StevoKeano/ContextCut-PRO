@@ -203,7 +203,8 @@ $INSTALL_DIR/venv/bin/python $INSTALL_DIR/ingest.py --watch &
 echo "ContextCut started. Dashboard: http://localhost:$DASH_PORT"
 EOF
   chmod +x "$INSTALL_DIR/start.sh"
-  echo "  Linux: run ~/contextcut/start.sh to start services."
+  echo "  Linux: starting services now..."
+  bash "$INSTALL_DIR/start.sh"
 fi
 
 # ── Initial ingest ────────────────────────────────────────────────────────────
