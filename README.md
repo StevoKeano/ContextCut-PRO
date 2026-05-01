@@ -24,6 +24,7 @@ Most RAG implementations stuff your entire knowledge base into every prompt. Con
 | "Explain quantum physics"  | 3,000+ tokens (junk)     | ~5 tokens (nothing relevant)  |
 
 **Result: 50–90% token reduction on real workloads.**
+![alt text](dashboard.png)
 
 ---
 
