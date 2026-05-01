@@ -48,6 +48,8 @@ VOYAGE_API_KEY = os.environ.get("VOYAGE_API_KEY", "")
 # Files to never ingest
 EXCLUDE_FILES = {"MEMORY.md"}
 
+last_embed_time = 0  # used to remain below the voayageai RPM threshold of 3 RPM.
+
 # ── Clients ───────────────────────────────────────────────────────────────────
 vc = voyageai.Client(api_key=VOYAGE_API_KEY)
 qc = QdrantClient(host=QDRANT_HOST, port=QDRANT_PORT)
@@ -70,9 +72,13 @@ def ingest_file(path: Path):
     text = path.read_text(encoding="utf-8", errors="ignore").strip()
     if not text:
         return
-    result = vc.embed([text[:8000]], model=VOYAGE_MODEL, input_type="document")
+    
+    # Use the centralized rate-limited wrapper instead of vc.embed
+    result = safe_embed([text[:8000]], model=VOYAGE_MODEL, input_type="document")
+    
     vector = result.embeddings[0]
-    fid    = file_id(path)
+    fid = file_id(path)
+    
     qc.upsert(
         collection_name=COLLECTION,
         points=[PointStruct(
@@ -80,13 +86,28 @@ def ingest_file(path: Path):
             vector=vector,
             payload={
                 "filename": path.name,
-                "path":     str(path),
-                "text":     text[:4000],
+                "path": str(path),
+                "text": text[:4000],
             }
         )]
     )
     print(f"  [ok] {path.name}")
-    time.sleep(21)  # Voyage AI free tier: stay under 3 RPM
+
+def safe_embed(text, model, input_type):
+    global last_embed_time
+    # Ensure a minimum gap of 22 seconds between calls
+    elapsed = time.time() - last_embed_time
+    if elapsed < 22:
+        time.sleep(22 - elapsed)
+    
+    try:
+        result = vc.embed([text[:8000]], model=model, input_type=input_type)
+        last_embed_time = time.time()
+        return result
+    except voyageai.error.RateLimitError:
+        # If we still hit a limit, sleep longer and retry
+        time.sleep(30)
+        return safe_embed(text, model, input_type)
 
 def should_ingest(path: Path) -> bool:
     return (
