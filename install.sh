@@ -199,7 +199,6 @@ else
 source $INSTALL_DIR/.env
 export \$(cat $INSTALL_DIR/.env | xargs)
 $INSTALL_DIR/venv/bin/python $INSTALL_DIR/qdrant_proxy.py &
-$INSTALL_DIR/venv/bin/python $INSTALL_DIR/ingest.py --watch &
 echo "ContextCut started. Dashboard: http://localhost:$DASH_PORT"
 EOF
   chmod +x "$INSTALL_DIR/start.sh"
