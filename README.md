@@ -28,6 +28,8 @@ Most RAG implementations stuff your entire knowledge base into every prompt. Con
 
 ---
 
+Note: This is the local AI context optimizer for Ollama + Qdrant. There is another unrelated repo with a similar name.
+
 ## How it works
 
 ```
@@ -161,4 +163,18 @@ Start at `0.30` and adjust based on your domain. Narrow technical domains score 
 
 ## License
 
-MIT — Built for homelab power users.
+This project is licensed under the **MIT License** for free personal, educational, research, and open use.
+
+### Commercial Use
+
+Companies, teams, or commercial deployments interested in using ContextCut in a business environment, accessing **Pro features**, priority support, or advanced optimizations should purchase a Pro License.
+
+**Pro License – $29.88 one-time per seat**
+
+- Lifetime commercial usage rights
+- Priority support
+- Advanced context-cutting rules & presets
+- Pro dashboard features (multi-workspace, analytics, etc.)
+- License key activation
+
+[Buy Pro License →](https://your-gumroad-link.com/l/contextcut-pro)
