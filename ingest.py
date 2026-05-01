@@ -68,14 +68,22 @@ def ensure_collection():
 def file_id(path: Path) -> str:
     return hashlib.md5(str(path).encode()).hexdigest()
 
+def sanitize_text(text: str) -> str:
+    # 1. Remove control characters or problematic formatting
+    # 2. Ensure it's a clean string
+    return text.replace('\r\n', '\n').replace('"', '\\"').strip()
+
 def ingest_file(path: Path):
-    text = path.read_text(encoding="utf-8", errors="ignore").strip()
-    if not text:
+    raw_text = path.read_text(encoding="utf-8", errors="ignore").strip()
+    if not raw_text:
         return
     
-    # Use the centralized rate-limited wrapper instead of vc.embed
-    result = safe_embed([text[:8000]], model=VOYAGE_MODEL, input_type="document")
+    # Sanitize before embedding
+    clean_text = sanitize_text(raw_text[:8000])
     
+    # Pass the sanitized list to your safe_embed function
+    result = safe_embed([clean_text], model=VOYAGE_MODEL, input_type="document")
+      
     vector = result.embeddings[0]
     fid = file_id(path)
     
