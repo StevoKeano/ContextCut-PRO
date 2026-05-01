@@ -1,3 +1,11 @@
+## Quick Install
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/StevoKeano/ContextCut/main/install.sh -o /tmp/install.sh
+chmod +x /tmp/install.sh
+bash /tmp/install.sh
+```
+
 # ContextCut
 
 **Stop wasting tokens. Inject only what matters.**
@@ -10,10 +18,10 @@ ContextCut is a transparent semantic RAG proxy for Ollama, OpenClaw, and any Ope
 
 Most RAG implementations stuff your entire knowledge base into every prompt. ContextCut uses vector similarity to inject **only the chunks that are actually relevant** to each query — and skips injection entirely when nothing scores above your threshold.
 
-| Query | Without ContextCut | With ContextCut |
-|---|---|---|
+| Query                      | Without ContextCut       | With ContextCut               |
+| -------------------------- | ------------------------ | ----------------------------- |
 | "What are the guardrails?" | 3,000+ tokens (all docs) | 806 tokens (1 relevant chunk) |
-| "Explain quantum physics" | 3,000+ tokens (junk) | ~5 tokens (nothing relevant) |
+| "Explain quantum physics"  | 3,000+ tokens (junk)     | ~5 tokens (nothing relevant)  |
 
 **Result: 50–90% token reduction on real workloads.**
 
@@ -52,6 +60,7 @@ curl -fsSL https://raw.githubusercontent.com/StevoKeano/ContextCut/main/install.
 ```
 
 The installer will ask for:
+
 - Voyage AI API key
 - Ollama host/port
 - Qdrant host/port
@@ -91,19 +100,19 @@ python qdrant_proxy.py
 
 All settings via environment variables:
 
-| Variable | Default | Description |
-|---|---|---|
-| `VOYAGE_API_KEY` | *(required)* | Voyage AI API key |
-| `CONTEXTCUT_UPSTREAM` | `http://localhost:11434` | Ollama or OpenAI-compatible endpoint |
-| `CONTEXTCUT_QDRANT_HOST` | `localhost` | Qdrant host |
-| `CONTEXTCUT_QDRANT_PORT` | `6333` | Qdrant port |
-| `CONTEXTCUT_COLLECTION` | `contextcut` | Qdrant collection name |
-| `CONTEXTCUT_KB_DIR` | `~/contextcut/knowledge` | Markdown knowledge base directory |
-| `CONTEXTCUT_PROXY_PORT` | `18788` | Proxy listen port |
-| `CONTEXTCUT_DASHBOARD_PORT` | `18787` | Dashboard port |
-| `CONTEXTCUT_CTX_LIMIT` | `8192` | Model context window (for % display) |
-| `CONTEXTCUT_TOP_K` | `5` | Max chunks to retrieve from Qdrant |
-| `CONTEXTCUT_MIN_SCORE` | `0.30` | Minimum relevance threshold (0.0–1.0) |
+| Variable                    | Default                  | Description                           |
+| --------------------------- | ------------------------ | ------------------------------------- |
+| `VOYAGE_API_KEY`            | _(required)_             | Voyage AI API key                     |
+| `CONTEXTCUT_UPSTREAM`       | `http://localhost:11434` | Ollama or OpenAI-compatible endpoint  |
+| `CONTEXTCUT_QDRANT_HOST`    | `localhost`              | Qdrant host                           |
+| `CONTEXTCUT_QDRANT_PORT`    | `6333`                   | Qdrant port                           |
+| `CONTEXTCUT_COLLECTION`     | `contextcut`             | Qdrant collection name                |
+| `CONTEXTCUT_KB_DIR`         | `~/contextcut/knowledge` | Markdown knowledge base directory     |
+| `CONTEXTCUT_PROXY_PORT`     | `18788`                  | Proxy listen port                     |
+| `CONTEXTCUT_DASHBOARD_PORT` | `18787`                  | Dashboard port                        |
+| `CONTEXTCUT_CTX_LIMIT`      | `8192`                   | Model context window (for % display)  |
+| `CONTEXTCUT_TOP_K`          | `5`                      | Max chunks to retrieve from Qdrant    |
+| `CONTEXTCUT_MIN_SCORE`      | `0.30`                   | Minimum relevance threshold (0.0–1.0) |
 
 ---
 

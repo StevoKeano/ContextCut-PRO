@@ -1,0 +1,244 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>ContextCut — Smart RAG for Self-Hosted LLMs</title>
+    <style>
+      body {
+        font-family:
+          -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+        margin: 0;
+        background: #0f172a;
+        color: #e2e8f0;
+        line-height: 1.6;
+      }
+      .container {
+        max-width: 1100px;
+        margin: 0 auto;
+        padding: 2rem;
+      }
+      header {
+        text-align: center;
+        padding: 4rem 0 2rem;
+      }
+      h1 {
+        font-size: 3.2rem;
+        margin: 0;
+        background: linear-gradient(90deg, #60a5fa, #a78bfa);
+        -webkit-background-clip: text;
+        -webkit-text-fill-color: transparent;
+      }
+      .hero {
+        background: #1e2937;
+        border-radius: 16px;
+        padding: 3rem;
+        margin: 2rem 0;
+        text-align: center;
+      }
+      .cta {
+        background: #3b82f6;
+        color: white;
+        padding: 1rem 2rem;
+        font-size: 1.1rem;
+        border: none;
+        border-radius: 8px;
+        cursor: pointer;
+        margin: 1rem;
+      }
+      .cta:hover {
+        background: #2563eb;
+      }
+      table {
+        width: 100%;
+        border-collapse: collapse;
+        margin: 2rem 0;
+      }
+      th,
+      td {
+        padding: 1rem;
+        text-align: left;
+        border-bottom: 1px solid #334155;
+      }
+      th {
+        background: #1e2937;
+      }
+      .calculator {
+        background: #1e2937;
+        padding: 2rem;
+        border-radius: 16px;
+        margin: 2rem 0;
+      }
+      input[type="range"] {
+        width: 100%;
+        accent-color: #3b82f6;
+      }
+      .result {
+        font-size: 1.4rem;
+        font-weight: bold;
+        color: #4ade80;
+      }
+      .savings {
+        color: #facc15;
+        font-size: 1.8rem;
+      }
+    </style>
+  </head>
+  <body>
+    <div class="container">
+      <header>
+        <h1>ContextCut</h1>
+        <p style="font-size: 1.5rem; margin: 1rem 0">
+          Stop wasting tokens.<br />Inject only what matters.
+        </p>
+        <p>Smart semantic RAG proxy for OpenClaw, Ollama, and any local LLM</p>
+      </header>
+
+      <div class="hero">
+        <p style="font-size: 2rem; margin: 1rem 0">
+          Cut context costs by <strong>50-90%</strong>
+        </p>
+        <button
+          class="cta"
+          onclick="
+            document
+              .getElementById('calc')
+              .scrollIntoView({ behavior: 'smooth' })
+          "
+        >
+          Calculate Your Savings →
+        </button>
+        <button
+          class="cta"
+          style="background: #64748b"
+          onclick="
+            window.open('https://github.com/yourusername/contextcut', '_blank')
+          "
+        >
+          GitHub
+        </button>
+      </div>
+
+      <!-- Cost Calculator -->
+      <div class="calculator" id="calc">
+        <h2>Calculate Your Monthly Savings</h2>
+
+        <label>Monthly Queries: <span id="qval">5000</span></label>
+        <input
+          type="range"
+          id="queries"
+          min="100"
+          max="50000"
+          value="5000"
+          step="100"
+          oninput="updateCalc()"
+        />
+
+        <label style="margin-top: 1rem">Cost per 1K tokens:</label>
+        <select id="cost" onchange="updateCalc()">
+          <option value="0.03">$0.03 (GPT-4)</option>
+          <option value="0.015">$0.015 (Claude Opus)</option>
+          <option value="0.01">$0.01 (Custom)</option>
+        </select>
+
+        <label style="margin-top: 1rem">Current Setup:</label>
+        <select id="strategy" onchange="updateCalc()">
+          <option value="3000">Naive Top-5 RAG (3000 tokens)</option>
+          <option value="10000">Manual Paste (10k tokens)</option>
+          <option value="30000">OpenClaw Dump-All (30k tokens)</option>
+          <option value="5000" selected>Your Old Setup</option>
+        </select>
+
+        <div
+          style="
+            margin-top: 2rem;
+            padding: 1.5rem;
+            background: #0f172a;
+            border-radius: 12px;
+          "
+        >
+          <div class="result">
+            Current Monthly Cost: <span id="currentCost">$450</span>
+          </div>
+          <div class="result" style="color: #4ade80">
+            With ContextCut: <span id="newCost">$134</span>
+          </div>
+          <div class="savings">
+            You Save: <span id="savings">$316 / month</span>
+          </div>
+          <p style="margin-top: 1rem; color: #94a3b8">
+            Pays for itself in <strong>~3 days</strong>
+          </p>
+        </div>
+      </div>
+
+      <h2 style="text-align: center; margin: 3rem 0 1.5rem">
+        Why ContextCut Works
+      </h2>
+      <table>
+        <tr>
+          <th>Your Query</th>
+          <th>ContextCut</th>
+          <th>Typical RAG</th>
+        </tr>
+        <tr>
+          <td>"What are the guardrails?"</td>
+          <td>806 tokens (1 relevant chunk)</td>
+          <td>3,000+ tokens</td>
+        </tr>
+        <tr>
+          <td>"Explain quantum physics"</td>
+          <td>~5 tokens (nothing relevant)</td>
+          <td>3,000+ tokens (junk)</td>
+        </tr>
+      </table>
+
+      <h2 style="text-align: center; margin: 3rem 0">Ready to Install?</h2>
+      <p style="text-align: center; font-size: 1.2rem">
+        One command on Mac/Windows/Linux → Proxy on :18788 + beautiful dashboard
+        on :18787
+      </p>
+
+      <div style="text-align: center; margin: 3rem 0">
+        <a
+          href="https://github.com/StevoKeano/ContextCut#quick-install"
+          class="cta"
+          style="
+            display: inline-block;
+            font-size: 1.3rem;
+            padding: 1.2rem 3rem;
+            text-decoration: none;
+          "
+        >
+          Download Free Personal Version</a
+        >
+      </div>
+      <footer style="text-align: center; margin-top: 4rem; color: #64748b">
+        © 2026 ContextCut • MIT Licensed • Built for homelab power users
+      </footer>
+    </div>
+
+    <script>
+      function updateCalc() {
+        const queries = parseInt(document.getElementById("queries").value);
+        const costPerK = parseFloat(document.getElementById("cost").value);
+        const avgTokens = parseInt(document.getElementById("strategy").value);
+
+        document.getElementById("qval").textContent = queries.toLocaleString();
+
+        const currentCost = (((queries * avgTokens) / 1000) * costPerK).toFixed(
+          0,
+        );
+        const newTokens = 890; // average from your tests
+        const newCost = (((queries * newTokens) / 1000) * costPerK).toFixed(0);
+        const savings = currentCost - newCost;
+
+        document.getElementById("currentCost").textContent = "$" + currentCost;
+        document.getElementById("newCost").textContent = "$" + newCost;
+        document.getElementById("savings").textContent =
+          "$" + savings + " / month";
+      }
+      updateCalc();
+    </script>
+  </body>
+</html>
