@@ -59,7 +59,9 @@ Your app → ContextCut proxy :18788 → [Qdrant semantic search] → Ollama :11
 ## Install (macOS / Linux)
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/StevoKeano/ContextCut/main/install.sh | bash
+curl -fsSL https://raw.githubusercontent.com/StevoKeano/ContextCut/main/install.sh -o /tmp/install.sh
+chmod +x /tmp/install.sh
+bash /tmp/install.sh
 ```
 
 The installer will ask for:
