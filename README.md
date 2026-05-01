@@ -179,4 +179,4 @@ Companies, teams, or commercial deployments interested in using ContextCut in a 
 - Pro dashboard features (multi-workspace, analytics, etc.)
 - License key activation
 
-[Buy Pro License →](https://your-gumroad-link.com/l/contextcut-pro)
+[Buy Pro License →](https://5984630877416.gumroad.com/l/ContextCut-Pro)
