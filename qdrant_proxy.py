@@ -260,7 +260,7 @@ def make_dashboard() -> str:
           <td class="hitcell">{hits_str}</td>
         </tr>"""
 
-    no_rows = '<tr><td colspan="6" class="empty">No requests yet — use the Chat tab or send a query through the proxy</td></tr>'
+    no_rows = '<tr><td colspan="6" class="empty">No requests yet — send a message below</td></tr>'
 
     return f"""<!DOCTYPE html>
 <html lang="en">
@@ -272,205 +272,253 @@ def make_dashboard() -> str:
 <style>
 :root{{--bg:#080c14;--surf:#0d1420;--surf2:#111927;--border:#1e2d42;--text:#c9d8f0;--muted:#4a6080;--accent:#00d4ff;--green:#22c55e;--yellow:#f59e0b;--red:#ef4444;--r:6px}}
 *{{box-sizing:border-box;margin:0;padding:0}}
-body{{background:var(--bg);color:var(--text);font-family:'JetBrains Mono',monospace;font-size:13px;min-height:100vh}}
-.header{{background:var(--surf);border-bottom:1px solid var(--border);padding:0 24px;display:flex;align-items:center;gap:16px;height:52px}}
-.logo{{font-family:'Syne',sans-serif;font-size:22px;font-weight:800;color:var(--accent);letter-spacing:-.5px}}
+body{{background:var(--bg);color:var(--text);font-family:'JetBrains Mono',monospace;font-size:13px;display:flex;flex-direction:column;height:100vh;overflow:hidden}}
+/* ── header ── */
+.header{{background:var(--surf);border-bottom:1px solid var(--border);padding:0 20px;display:flex;align-items:center;gap:14px;height:48px;flex-shrink:0}}
+.logo{{font-family:'Syne',sans-serif;font-size:20px;font-weight:800;color:var(--accent);letter-spacing:-.5px}}
 .logo span{{color:var(--text)}}
-.hinfo{{color:var(--muted);font-size:11px;flex:1}}
-.live{{display:flex;align-items:center;gap:6px;color:var(--muted);font-size:11px}}
+.hinfo{{color:var(--muted);font-size:11px;flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}}
+.live{{display:flex;align-items:center;gap:5px;color:var(--muted);font-size:11px;flex-shrink:0}}
 .dot{{width:7px;height:7px;border-radius:50%;background:var(--green);animation:pulse 2s infinite}}
 @keyframes pulse{{0%,100%{{opacity:1}}50%{{opacity:.3}}}}
-.tabs{{display:flex;border-bottom:1px solid var(--border);background:var(--surf);padding:0 24px}}
-.tab{{padding:12px 20px;cursor:pointer;border-bottom:2px solid transparent;color:var(--muted);font-size:11px;font-weight:600;letter-spacing:.08em;text-transform:uppercase;transition:.2s}}
-.tab:hover{{color:var(--text)}}.tab.active{{color:var(--accent);border-bottom-color:var(--accent)}}
-.panel{{display:none;padding:20px}}.panel.active{{display:block}}
+/* ── main two-column layout ── */
+.main{{display:flex;flex:1;overflow:hidden;gap:0}}
+/* ── LEFT: stats + table (scrollable) ── */
+.left{{width:55%;border-right:1px solid var(--border);display:flex;flex-direction:column;overflow:hidden}}
+.left-scroll{{flex:1;overflow-y:auto;padding:14px}}
+.left-scroll::-webkit-scrollbar{{width:4px}}.left-scroll::-webkit-scrollbar-thumb{{background:var(--border);border-radius:2px}}
+/* ── RIGHT: chat ── */
+.right{{flex:1;display:flex;flex-direction:column;overflow:hidden}}
 /* cards */
-.cards{{display:grid;grid-template-columns:repeat(auto-fit,minmax(140px,1fr));gap:10px;margin-bottom:20px}}
-.card{{background:var(--surf);border:1px solid var(--border);border-radius:var(--r);padding:14px}}
-.card-label{{color:var(--muted);font-size:10px;text-transform:uppercase;letter-spacing:.1em;margin-bottom:6px}}
-.card-val{{font-size:24px;font-weight:600;font-family:'Syne',sans-serif}}
+.cards{{display:grid;grid-template-columns:repeat(3,1fr);gap:8px;margin-bottom:12px}}
+.card{{background:var(--surf);border:1px solid var(--border);border-radius:var(--r);padding:11px}}
+.card-label{{color:var(--muted);font-size:9px;text-transform:uppercase;letter-spacing:.1em;margin-bottom:5px}}
+.card-val{{font-size:20px;font-weight:600;font-family:'Syne',sans-serif}}
 .green{{color:var(--green)}}.yellow{{color:var(--yellow)}}.red{{color:var(--red)}}
 /* ctx bar */
-.ctx-wrap{{background:var(--surf);border:1px solid var(--border);border-radius:var(--r);padding:14px;margin-bottom:20px}}
-.ctx-label{{color:var(--muted);font-size:10px;text-transform:uppercase;letter-spacing:.1em;margin-bottom:8px}}
-.ctx-track{{background:var(--bg);border-radius:3px;height:16px;overflow:hidden}}
+.ctx-wrap{{background:var(--surf);border:1px solid var(--border);border-radius:var(--r);padding:11px;margin-bottom:12px}}
+.ctx-label{{color:var(--muted);font-size:9px;text-transform:uppercase;letter-spacing:.1em;margin-bottom:7px}}
+.ctx-track{{background:var(--bg);border-radius:3px;height:14px;overflow:hidden}}
 .ctx-fill{{height:100%;border-radius:3px;transition:width .5s;background:{bc};width:{min(last_pct,100)}%}}
-.ctx-info{{display:flex;justify-content:space-between;margin-top:5px;font-size:11px;color:var(--muted)}}
+.ctx-info{{display:flex;justify-content:space-between;margin-top:4px;font-size:10px;color:var(--muted)}}
 /* table */
-table{{width:100%;border-collapse:collapse;background:var(--surf);border-radius:var(--r);overflow:hidden;border:1px solid var(--border)}}
-th{{background:#0a1628;color:var(--muted);text-align:left;padding:9px 12px;font-size:10px;text-transform:uppercase;letter-spacing:.1em;border-bottom:1px solid var(--border)}}
-td{{padding:8px 12px;border-top:1px solid var(--border);vertical-align:middle}}
+.tbl-wrap{{background:var(--surf);border:1px solid var(--border);border-radius:var(--r);overflow:hidden}}
+table{{width:100%;border-collapse:collapse}}
+th{{background:#0a1628;color:var(--muted);text-align:left;padding:8px 10px;font-size:9px;text-transform:uppercase;letter-spacing:.1em;border-bottom:1px solid var(--border)}}
+td{{padding:7px 10px;border-top:1px solid var(--border);vertical-align:middle;font-size:12px}}
 tr:hover td{{background:var(--surf2)}}
-.ts{{color:var(--muted);white-space:nowrap;font-size:11px}}.qcell{{max-width:220px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}}.num{{text-align:right;white-space:nowrap}}.hitcell{{max-width:280px}}
-.hit{{display:inline-block;background:#0a1a2e;border:1px solid var(--border);border-radius:3px;padding:1px 5px;margin:1px;font-size:10px;color:var(--muted)}}.hit em{{color:var(--accent);font-style:normal}}
-.mini-bar{{height:3px;background:var(--border);border-radius:2px;margin-top:3px;overflow:hidden}}.mini-fill{{height:100%;border-radius:2px}}
-.empty{{text-align:center;padding:36px;color:var(--muted)}}
-/* chat */
-.chat-layout{{display:grid;grid-template-columns:1fr 270px;gap:14px;height:calc(100vh - 128px)}}
-.chat-main{{display:flex;flex-direction:column;background:var(--surf);border:1px solid var(--border);border-radius:var(--r);overflow:hidden}}
-.chat-messages{{flex:1;overflow-y:auto;padding:18px;display:flex;flex-direction:column;gap:12px}}
+.ts{{color:var(--muted);white-space:nowrap;font-size:10px}}
+.qcell{{max-width:160px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}}
+.num{{text-align:right;white-space:nowrap}}
+.hitcell{{max-width:180px}}
+.hit{{display:inline-block;background:#0a1a2e;border:1px solid var(--border);border-radius:3px;padding:1px 4px;margin:1px;font-size:10px;color:var(--muted)}}
+.hit em{{color:var(--accent);font-style:normal}}
+.mini-bar{{height:3px;background:var(--border);border-radius:2px;margin-top:3px;overflow:hidden}}
+.mini-fill{{height:100%;border-radius:2px}}
+.empty{{text-align:center;padding:28px;color:var(--muted);font-size:12px}}
+.tbl-footer{{font-size:10px;color:var(--muted);text-align:right;padding:6px 10px;border-top:1px solid var(--border)}}
+/* ── CHAT ── */
+.chat-messages{{flex:1;overflow-y:auto;padding:14px;display:flex;flex-direction:column;gap:10px}}
 .chat-messages::-webkit-scrollbar{{width:4px}}.chat-messages::-webkit-scrollbar-thumb{{background:var(--border);border-radius:2px}}
-.msg{{max-width:85%}}.msg.user{{align-self:flex-end}}.msg.assistant{{align-self:flex-start}}
-.bubble{{padding:10px 14px;border-radius:var(--r);line-height:1.6;white-space:pre-wrap;word-break:break-word}}
+.msg{{max-width:88%}}
+.msg.user{{align-self:flex-end}}.msg.assistant{{align-self:flex-start}}
+.bubble{{padding:9px 13px;border-radius:var(--r);line-height:1.6;white-space:pre-wrap;word-break:break-word;font-size:13px}}
 .msg.user .bubble{{background:var(--accent);color:#000;font-weight:500}}
 .msg.assistant .bubble{{background:var(--surf2);border:1px solid var(--border)}}
-.msg-meta{{font-size:10px;color:var(--muted);margin-top:3px}}.msg.user .msg-meta{{text-align:right}}
-.typing{{display:flex;gap:4px;padding:10px 14px;background:var(--surf2);border:1px solid var(--border);border-radius:var(--r);width:fit-content}}
+.msg-meta{{font-size:10px;color:var(--muted);margin-top:3px;padding:0 4px}}
+.msg.user .msg-meta{{text-align:right}}
+.msg-stat{{display:inline-flex;gap:6px;align-items:center;flex-wrap:wrap}}
+.stat-pill{{background:var(--surf);border:1px solid var(--border);border-radius:3px;padding:1px 6px;font-size:10px}}
+.stat-pill.ctx{{color:var(--accent)}}.stat-pill.save{{color:var(--green)}}.stat-pill.hit{{color:var(--muted)}}
+/* typing */
+.typing{{display:flex;gap:4px;padding:9px 13px;background:var(--surf2);border:1px solid var(--border);border-radius:var(--r);width:fit-content}}
 .typing span{{width:6px;height:6px;border-radius:50%;background:var(--muted);animation:blink 1.2s infinite}}
 .typing span:nth-child(2){{animation-delay:.2s}}.typing span:nth-child(3){{animation-delay:.4s}}
 @keyframes blink{{0%,100%{{opacity:.2}}50%{{opacity:1}}}}
-.chat-input-row{{display:flex;gap:8px;padding:10px;border-top:1px solid var(--border)}}
-.chat-input{{flex:1;background:var(--bg);border:1px solid var(--border);border-radius:var(--r);padding:9px 12px;color:var(--text);font-family:'JetBrains Mono',monospace;font-size:13px;resize:none;outline:none;line-height:1.5}}
-.chat-input:focus{{border-color:var(--accent)}}
-.send-btn{{background:var(--accent);color:#000;border:none;border-radius:var(--r);padding:9px 16px;font-family:'Syne',sans-serif;font-weight:700;font-size:13px;cursor:pointer;white-space:nowrap;transition:.15s}}
-.send-btn:hover{{opacity:.85}}.send-btn:disabled{{opacity:.4;cursor:not-allowed}}
-.chat-side{{display:flex;flex-direction:column;gap:10px;overflow-y:auto}}
-.side-card{{background:var(--surf);border:1px solid var(--border);border-radius:var(--r);padding:12px;flex-shrink:0}}
-.side-title{{font-size:10px;text-transform:uppercase;letter-spacing:.1em;color:var(--muted);margin-bottom:8px}}
-.gauge-val{{font-family:'Syne',sans-serif;font-size:32px;font-weight:800;color:var(--accent);text-align:center}}
-.gauge-sub{{font-size:10px;color:var(--muted);text-align:center;margin-top:2px}}
-.model-input{{width:100%;background:var(--bg);border:1px solid var(--border);border-radius:var(--r);padding:7px 10px;color:var(--text);font-family:'JetBrains Mono',monospace;font-size:12px;outline:none}}
+/* input bar */
+.chat-input-bar{{border-top:1px solid var(--border);padding:10px;display:flex;flex-direction:column;gap:8px;flex-shrink:0;background:var(--surf)}}
+.model-row{{display:flex;align-items:center;gap:8px}}
+.model-label{{font-size:10px;color:var(--muted);white-space:nowrap}}
+.model-input{{flex:1;background:var(--bg);border:1px solid var(--border);border-radius:var(--r);padding:5px 9px;color:var(--text);font-family:'JetBrains Mono',monospace;font-size:12px;outline:none}}
 .model-input:focus{{border-color:var(--accent)}}
-.hit-row{{background:var(--bg);border:1px solid var(--border);border-radius:3px;padding:5px 8px;margin-bottom:3px}}
-.hit-name{{color:var(--text);font-size:11px}}.hit-score{{color:var(--accent);font-size:10px;margin-top:1px}}
-.saved-val{{font-family:'Syne',sans-serif;font-size:28px;font-weight:800;color:var(--green)}}
+.input-row{{display:flex;gap:8px;align-items:flex-end}}
+.chat-input{{flex:1;background:var(--bg);border:1px solid var(--border);border-radius:var(--r);padding:8px 12px;color:var(--text);font-family:'JetBrains Mono',monospace;font-size:13px;resize:none;outline:none;line-height:1.5;max-height:120px}}
+.chat-input:focus{{border-color:var(--accent)}}
+.send-btn{{background:var(--accent);color:#000;border:none;border-radius:var(--r);padding:8px 16px;font-family:'Syne',sans-serif;font-weight:700;font-size:13px;cursor:pointer;white-space:nowrap;height:38px}}
+.send-btn:hover{{opacity:.85}}.send-btn:disabled{{opacity:.4;cursor:not-allowed}}
 </style>
 </head>
 <body>
+
 <div class="header">
   <div class="logo">Context<span>Cut</span></div>
-  <div class="hinfo">{UPSTREAM} &nbsp;·&nbsp; Qdrant {QDRANT_HOST}:{QDRANT_PORT} &nbsp;·&nbsp; min_score={MIN_SCORE} &nbsp;·&nbsp; top_k={TOP_K}</div>
+  <div class="hinfo">{UPSTREAM} · Qdrant {QDRANT_HOST}:{QDRANT_PORT} · min_score={MIN_SCORE} · top_k={TOP_K}</div>
   <div class="live"><span class="dot"></span>live</div>
 </div>
-<div class="tabs">
-  <div class="tab active" onclick="switchTab('chat',this)">💬 Chat</div>
-  <div class="tab" onclick="switchTab('monitor',this)">📊 Monitor</div>
-</div>
 
-<!-- ── CHAT ── -->
-<div class="panel active" id="tab-chat" style="padding:14px">
-  <div class="chat-layout">
-    <div class="chat-main">
-      <div class="chat-messages" id="messages">
-        <div class="msg assistant">
-          <div class="bubble">👋 Welcome to ContextCut. Ask anything — relevant context from your knowledge base will be injected automatically before the query reaches the LLM.</div>
-        </div>
+<div class="main">
+
+  <!-- ── LEFT: Stats + Table ── -->
+  <div class="left">
+    <div class="left-scroll">
+      <div class="cards">
+        <div class="card"><div class="card-label">Requests</div><div class="card-val" id="cardReq">{s['total_requests']}</div></div>
+        <div class="card"><div class="card-label">Last CTX</div><div class="card-val {'green' if last_pct<60 else 'yellow' if last_pct<80 else 'red'}" id="cardCtx">{last_pct}%</div></div>
+        <div class="card"><div class="card-label">Tokens Saved</div><div class="card-val green" id="cardSave">{s.get('total_saved',0):,}</div></div>
+        <div class="card"><div class="card-label">Peak Tokens</div><div class="card-val {'red' if s['max_tokens_seen']>CTX_LIMIT*0.8 else ''}">{s['max_tokens_seen']:,}</div></div>
+        <div class="card"><div class="card-label">CTX Limit</div><div class="card-val">{CTX_LIMIT:,}</div></div>
+        <div class="card"><div class="card-label">Last Request</div><div class="card-val" style="font-size:13px">{s['last_seen'] or '—'}</div></div>
       </div>
-      <div class="chat-input-row">
-        <textarea class="chat-input" id="chatInput" rows="2" placeholder="Type a message… (Enter to send, Shift+Enter for newline)" onkeydown="handleKey(event)"></textarea>
+      <div class="ctx-wrap">
+        <div class="ctx-label">Most Recent Context Usage</div>
+        <div class="ctx-track"><div class="ctx-fill" id="ctxBar"></div></div>
+        <div class="ctx-info"><span id="ctxTok">{last_tok:,} / {CTX_LIMIT:,} tokens</span><strong style="color:{bc}" id="ctxPct">{last_pct}%</strong></div>
+      </div>
+      <div class="tbl-wrap">
+        <table>
+          <thead><tr><th>Time</th><th>Query</th><th>Before</th><th>After</th><th>CTX%</th><th>Hits</th></tr></thead>
+          <tbody id="tblBody">{rows_html if rows_html else no_rows}</tbody>
+        </table>
+        <div class="tbl-footer">Token counting: {TOKEN_METHOD} · auto-refreshes on each request</div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ── RIGHT: Chat ── -->
+  <div class="right">
+    <div class="chat-messages" id="messages">
+      <div class="msg assistant">
+        <div class="bubble">👋 <strong>ContextCut</strong> — Ask anything. Relevant context from your knowledge base is injected automatically. Watch the left panel update after each message.</div>
+      </div>
+    </div>
+    <div class="chat-input-bar">
+      <div class="model-row">
+        <span class="model-label">Model:</span>
+        <input class="model-input" id="modelInput" type="text" value="{DEFAULT_MODEL}" placeholder="e.g. qwen3:14b-q8_0">
+      </div>
+      <div class="input-row">
+        <textarea class="chat-input" id="chatInput" rows="2"
+          placeholder="Type a message… (Enter to send, Shift+Enter for newline)"
+          onkeydown="handleKey(event)"></textarea>
         <button class="send-btn" id="sendBtn" onclick="sendMessage()">Send ↑</button>
       </div>
     </div>
-    <div class="chat-side">
-      <div class="side-card">
-        <div class="side-title">Model</div>
-        <input class="model-input" id="modelInput" type="text" value="{DEFAULT_MODEL}" placeholder="e.g. qwen2.5-coder:32b-8k">
-      </div>
-      <div class="side-card">
-        <div class="side-title">Context Usage</div>
-        <div class="gauge-val" id="gaugePct">—</div>
-        <div class="gauge-sub" id="gaugeSub">of {CTX_LIMIT:,} tokens</div>
-        <div class="ctx-track" style="margin-top:10px"><div class="ctx-fill" id="gaugeBar" style="width:0%;background:var(--green)"></div></div>
-        <div style="display:flex;justify-content:space-between;font-size:10px;color:var(--muted);margin-top:4px">
-          <span id="tokBefore">before: —</span><span id="tokAfter">after: —</span>
-        </div>
-      </div>
-      <div class="side-card">
-        <div class="side-title">Qdrant Hits</div>
-        <div id="hitsList"><div style="color:var(--muted);font-size:11px">No query yet</div></div>
-      </div>
-      <div class="side-card">
-        <div class="side-title">Session Tokens Saved</div>
-        <div class="saved-val" id="sessionSaved">0</div>
-        <div style="font-size:10px;color:var(--muted);margin-top:2px">not sent to LLM</div>
-      </div>
-    </div>
   </div>
-</div>
 
-<!-- ── MONITOR ── -->
-<div class="panel" id="tab-monitor">
-  <div class="cards">
-    <div class="card"><div class="card-label">Total Requests</div><div class="card-val">{s['total_requests']}</div></div>
-    <div class="card"><div class="card-label">Last Context</div><div class="card-val {'green' if last_pct<60 else 'yellow' if last_pct<80 else 'red'}">{last_pct}%</div></div>
-    <div class="card"><div class="card-label">Tokens Saved</div><div class="card-val green">{s['total_saved']:,}</div></div>
-    <div class="card"><div class="card-label">Peak Tokens</div><div class="card-val {'red' if s['max_tokens_seen']>CTX_LIMIT*0.8 else ''}">{s['max_tokens_seen']:,}</div></div>
-    <div class="card"><div class="card-label">CTX Limit</div><div class="card-val">{CTX_LIMIT:,}</div></div>
-    <div class="card"><div class="card-label">Last Request</div><div class="card-val" style="font-size:15px">{s['last_seen'] or '—'}</div></div>
-  </div>
-  <div class="ctx-wrap">
-    <div class="ctx-label">Most Recent Context Usage</div>
-    <div class="ctx-track"><div class="ctx-fill"></div></div>
-    <div class="ctx-info"><span>{last_tok:,} / {CTX_LIMIT:,} tokens</span><strong style="color:{bc}">{last_pct}%</strong></div>
-  </div>
-  <table>
-    <thead><tr><th>Time</th><th>Query</th><th>Before</th><th>After</th><th>CTX %</th><th>Qdrant Hits</th></tr></thead>
-    <tbody>{rows_html if rows_html else no_rows}</tbody>
-  </table>
-  <div style="margin-top:8px;font-size:10px;color:var(--muted);text-align:right">Token counting: {TOKEN_METHOD}</div>
 </div>
 
 <script>
-let sessionSaved = 0;
-
-function switchTab(name, el) {{
-  document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
-  document.querySelectorAll('.panel').forEach(p => p.classList.remove('active'));
-  el.classList.add('active');
-  document.getElementById('tab-' + name).classList.add('active');
-  if (name === 'monitor') setTimeout(() => location.reload(), 50);
+function esc(s) {{
+  return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/\\n/g,'<br>');
 }}
 
 function handleKey(e) {{
-  if (e.key === 'Enter' && !e.shiftKey) {{ e.preventDefault(); sendMessage(); }}
+  if (e.key==='Enter' && !e.shiftKey) {{ e.preventDefault(); sendMessage(); }}
 }}
 
-function esc(s) {{
-  return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
-}}
-
-function appendMsg(role, text, meta) {{
+function appendMsg(role, text, statHtml) {{
   const box = document.getElementById('messages');
   const div = document.createElement('div');
   div.className = 'msg ' + role;
-  div.innerHTML = `<div class="bubble">${{esc(text)}}</div>` +
-    (meta ? `<div class="msg-meta">${{esc(meta)}}</div>` : '');
+  div.innerHTML =
+    `<div class="bubble">${{esc(text)}}</div>` +
+    (statHtml ? `<div class="msg-meta"><div class="msg-stat">${{statHtml}}</div></div>` : '');
   box.appendChild(div);
-  box.scrollTop = box.scrollHeight;
+  // scroll so TOP of new answer is visible
+  div.scrollIntoView({{behavior:'smooth', block:'start'}});
 }}
 
 function showTyping() {{
   const box = document.getElementById('messages');
   const div = document.createElement('div');
-  div.className = 'msg assistant'; div.id = 'typing';
+  div.className = 'msg assistant'; div.id = 'typing-indicator';
   div.innerHTML = '<div class="typing"><span></span><span></span><span></span></div>';
-  box.appendChild(div); box.scrollTop = box.scrollHeight;
+  box.appendChild(div);
+  div.scrollIntoView({{behavior:'smooth', block:'start'}});
 }}
 
-function removeTyping() {{ const el=document.getElementById('typing'); if(el) el.remove(); }}
+function removeTyping() {{
+  const el = document.getElementById('typing-indicator');
+  if (el) el.remove();
+}}
 
-function updateSidebar(d) {{
+function updateStats(d) {{
+  if (!d) return;
   const pct = d.pct || 0;
-  const col = pct < 60 ? '#22c55e' : pct < 80 ? '#f59e0b' : '#ef4444';
-  document.getElementById('gaugePct').textContent = pct + '%';
-  document.getElementById('gaugePct').style.color = col;
-  document.getElementById('gaugeBar').style.cssText = `width:${{Math.min(pct,100)}}%;background:${{col}}`;
-  document.getElementById('tokBefore').textContent = 'before: ' + (d.tokens_before||0);
-  document.getElementById('tokAfter').textContent  = 'after: '  + (d.tokens_after||0);
-  const saved = Math.max(0,(d.tokens_before||0)-(d.tokens_after||0));
-  if (saved > 0) {{
-    sessionSaved += saved;
-    document.getElementById('sessionSaved').textContent = sessionSaved.toLocaleString();
-  }}
-  const hl = document.getElementById('hitsList');
-  if (d.hits && d.hits.length) {{
-    hl.innerHTML = d.hits.map(h =>
-      `<div class="hit-row"><div class="hit-name">${{esc(h.source)}}</div><div class="hit-score">score: ${{h.score}}</div></div>`
-    ).join('');
-  }} else {{
-    hl.innerHTML = '<div style="color:var(--muted);font-size:11px">No chunks above threshold ({MIN_SCORE})</div>';
+  const col = pct < 60 ? 'var(--green)' : pct < 80 ? 'var(--yellow)' : 'var(--red)';
+  const bar = document.getElementById('ctxBar');
+  if (bar) {{ bar.style.width = Math.min(pct,100)+'%'; bar.style.background = col; }}
+  const cp = document.getElementById('ctxPct');
+  if (cp) {{ cp.textContent = pct+'%'; cp.style.color = col; }}
+  const ct = document.getElementById('ctxTok');
+  if (ct) ct.textContent = (d.tokens_after||0).toLocaleString() + ' / {CTX_LIMIT:,} tokens';
+  // refresh table row
+  const tb = document.getElementById('tblBody');
+  if (tb && d.ts) {{
+    const hits = (d.hits||[]).map(h=>`<span class="hit">${{esc(h.source.replace('.md',''))}} <em>${{h.score}}</em></span>`).join(' ') || '<span style="color:#4b5563">—</span>';
+    const newRow = `<tr>
+      <td class="ts">${{d.ts}}</td>
+      <td class="qcell">${{esc((d.query||'').substring(0,60))}}</td>
+      <td class="num">${{d.tokens_before||0}}</td>
+      <td class="num">${{d.tokens_after||0}}</td>
+      <td class="num" style="color:${{col}}">${{pct}}%<div class="mini-bar"><div class="mini-fill" style="width:${{Math.min(pct,100)}}%;background:${{col}}"></div></div></td>
+      <td class="hitcell">${{hits}}</td>
+    </tr>`;
+    if (tb.querySelector('.empty')) tb.innerHTML = newRow;
+    else tb.insertAdjacentHTML('afterbegin', newRow);
   }}
 }}
+
+
+// ── Left panel live polling (every 3s) ───────────────────────────────────────
+let _lastTs = null;
+
+async function pollStats() {{
+  const g = (id) => document.getElementById(id);
+  try {{
+    const sr = await fetch('/stats');
+    if (sr.ok) {{
+      const d = await sr.json();
+      if(g('cardReq'))  g('cardReq').textContent  = d.total_requests||0;
+      if(g('cardSave')) g('cardSave').textContent = (d.total_saved||0).toLocaleString();
+      if(g('cardPeak')) g('cardPeak').textContent = (d.max_tokens_seen||0).toLocaleString();
+      const pct = d.pct||0;
+      const col = pct<60?'var(--green)':pct<80?'var(--yellow)':'var(--red)';
+      if(g('cardCtx')){{ g('cardCtx').textContent=pct+'%'; g('cardCtx').style.color=col; }}
+      if(g('ctxBar')){{ g('ctxBar').style.width=Math.min(pct,100)+'%'; g('ctxBar').style.background=col; }}
+      if(g('ctxTok')) g('ctxTok').textContent=(d.tokens_after||0).toLocaleString()+' / {CTX_LIMIT} tokens';
+      if(g('ctxPct')){{ g('ctxPct').textContent=pct+'%'; g('ctxPct').style.color=col; }}
+    }}
+  }} catch(e) {{}}
+  try {{
+    const lr = await fetch('/log');
+    if (!lr.ok) return;
+    const rows = await lr.json();
+    if (!rows.length) return;
+    const sig = rows[0].ts + '|' + rows[0].tokens_after;
+    if (sig === _lastTs) return;
+    _lastTs = sig;
+    const tb = g('tblBody');
+    if (!tb) return;
+    tb.innerHTML = rows.map(r => {{
+      const p = r.pct||0;
+      const c = p<60?'var(--green)':p<80?'var(--yellow)':'var(--red)';
+      const hits = (r.hits||[]).map(h=>
+        `<span class="hit">${{esc((h.source||'?').replace('.md',''))}} <em>${{h.score}}</em></span>`
+      ).join(' ') || '<span style="color:#4b5563">\u2014</span>';
+      return `<tr>
+        <td class="ts">${{r.ts||''}}</td>
+        <td class="qcell">${{esc((r.query||'').substring(0,60))}}</td>
+        <td class="num">${{r.tokens_before||0}}</td>
+        <td class="num">${{r.tokens_after||0}}</td>
+        <td class="num" style="color:${{c}}">${{p}}%<div class="mini-bar"><div class="mini-fill" style="width:${{Math.min(p,100)}}%;background:${{c}}"></div></div></td>
+        <td class="hitcell">${{hits}}</td>
+      </tr>`;
+    }}).join('');
+  }} catch(e) {{ console.error('poll/log error:', e); }}
+}}
+setInterval(pollStats, 3000);
+pollStats();
 
 async function sendMessage() {{
   const input   = document.getElementById('chatInput');
@@ -478,31 +526,48 @@ async function sendMessage() {{
   const model   = document.getElementById('modelInput').value.trim();
   const text    = input.value.trim();
   if (!text) return;
-  if (!model) {{ alert('Enter a model name in the sidebar first.'); return; }}
+  if (!model) {{ alert('Enter a model name first.'); return; }}
   input.value = '';
   sendBtn.disabled = true;
-  appendMsg('user', text);
+  appendMsg('user', text, '');
   showTyping();
   try {{
     const resp = await fetch('/v1/chat/completions', {{
-      method:'POST',
-      headers:{{'Content-Type':'application/json'}},
+      method: 'POST',
+      headers: {{'Content-Type':'application/json'}},
       body: JSON.stringify({{model, messages:[{{role:'user',content:text}}], stream:false}})
     }});
     removeTyping();
-    if (!resp.ok) {{ appendMsg('assistant','❌ Error '+resp.status+': '+await resp.text()); return; }}
+    if (!resp.ok) {{
+      appendMsg('assistant', '❌ Error ' + resp.status + ': ' + await resp.text(), '');
+      return;
+    }}
     const data    = await resp.json();
     const content = data.choices?.[0]?.message?.content || '(no response)';
     const usage   = data.usage || {{}};
-    appendMsg('assistant', content,
-      `prompt: ${{usage.prompt_tokens||'?'}} tokens · completion: ${{usage.completion_tokens||'?'}} tokens`);
+    // fetch stats from proxy
+    let statHtml = '';
     try {{
       const sr = await fetch('/stats');
-      if (sr.ok) updateSidebar(await sr.json());
+      if (sr.ok) {{
+        const d = await sr.json();
+        updateStats(d);
+        const saved  = Math.max(0,(d.tokens_before||0)-(d.tokens_after||0));
+        const pct    = d.pct||0;
+        const col    = pct<60?'var(--green)':pct<80?'var(--yellow)':'var(--red)';
+        const hits   = (d.hits||[]).length;
+        statHtml =
+          `<span class="stat-pill ctx" style="color:${{col}}">${{pct}}% CTX</span>` +
+          `<span class="stat-pill">↑${{usage.prompt_tokens||'?'}} prompt</span>` +
+          `<span class="stat-pill">↓${{usage.completion_tokens||'?'}} completion</span>` +
+          (saved>0 ? `<span class="stat-pill save">-${{saved}} saved</span>` : '') +
+          (hits>0  ? `<span class="stat-pill hit">${{hits}} chunk${{hits>1?'s':''}} injected</span>` : '<span class="stat-pill">no injection</span>');
+      }}
     }} catch(e) {{}}
+    appendMsg('assistant', content, statHtml);
   }} catch(e) {{
     removeTyping();
-    appendMsg('assistant','❌ Network error: '+e.message);
+    appendMsg('assistant', '❌ Network error: ' + e.message, '');
   }} finally {{
     sendBtn.disabled = false;
     input.focus();
@@ -516,6 +581,16 @@ class DashboardHandler(BaseHTTPRequestHandler):
     def log_message(self, fmt, *args): pass
 
     def do_GET(self):
+        if self.path == "/log":
+            with _lock:
+                rows = list(_log)
+            body = json.dumps(rows).encode()
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+            return
         if self.path == "/stats":
             body = json.dumps(make_stats_json()).encode()
             self.send_response(200)
