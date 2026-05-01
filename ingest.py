@@ -74,35 +74,43 @@ def sanitize_text(text: str) -> str:
     # 2. Ensure it's a clean string
     return text.replace('\r\n', '\n').replace('"', '\\"').strip()
 
+processing_queue = set()
+
 def ingest_file(path: Path):
-    raw_text = path.read_text(encoding="utf-8", errors="ignore").strip()
-    if not raw_text:
-        return
+    if path.name in processing_queue:
+        return # Skip if already being processed
+    processing_queue.add(path.name)
     
-    # Sanitize before embedding
-    clean_text = sanitize_text(raw_text[:8000])
-    
-    # Pass the sanitized list to your safe_embed function
-    # clean_text is a string
-    result = safe_embed([clean_text], model=VOYAGE_MODEL, input_type="document")
+    try:
+        raw_text = path.read_text(encoding="utf-8", errors="ignore").strip()
+        if not raw_text:
+            return
+        
+        # Sanitize before embedding
+        clean_text = sanitize_text(raw_text[:8000])
+        
+        # Pass the sanitized list to your safe_embed function
+        # clean_text is a string
+        result = safe_embed([clean_text], model=VOYAGE_MODEL, input_type="document")
 
-    vector = result.embeddings[0]
-    fid = file_id(path)
-    
-    qc.upsert(
-        collection_name=COLLECTION,
-        points=[PointStruct(
-            id=int(fid[:8], 16),
-            vector=vector,
-            payload={
-                "filename": path.name,
-                "path": str(path),
-                "text": clean_text[:4000],
-            }
-        )]
-    )
-    print(f"  [ok] {path.name}")
-
+        vector = result.embeddings[0]
+        fid = file_id(path)
+        
+        qc.upsert(
+            collection_name=COLLECTION,
+            points=[PointStruct(
+                id=int(fid[:8], 16),
+                vector=vector,
+                payload={
+                    "filename": path.name,
+                    "path": str(path),
+                    "text": clean_text[:4000],
+                }
+            )]
+        )
+        print(f"  [ok] {path.name}")
+    finally:
+        processing_queue.remove(path.name)
 
 
 def safe_embed(texts, model, input_type):
