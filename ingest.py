@@ -30,6 +30,7 @@ import sys
 import time
 import argparse
 import hashlib
+import random
 from pathlib import Path
 
 import voyageai
@@ -102,21 +103,23 @@ def ingest_file(path: Path):
     )
     print(f"  [ok] {path.name}")
 
+
+
 def safe_embed(texts, model, input_type):
     global last_embed_time
-    # Ensure a minimum gap of 22 seconds
     elapsed = time.time() - last_embed_time
     if elapsed < 22:
         time.sleep(22 - elapsed)
     
     try:
-        # Pass the list 'texts' directly; do NOT wrap it in another list
         result = vc.embed(texts, model=model, input_type=input_type)
         last_embed_time = time.time()
         return result
     except voyageai.error.RateLimitError:
-        print(" [!] Rate limit hit, backing off...")
-        time.sleep(30)
+        # Increase sleep and add jitter to clear the rate limit state
+        wait_time = 60 + random.uniform(5, 15)
+        print(f" [!] Rate limit hit, backing off for {wait_time:.1f}s...")
+        time.sleep(wait_time)
         return safe_embed(texts, model, input_type)
 
 def should_ingest(path: Path) -> bool:
