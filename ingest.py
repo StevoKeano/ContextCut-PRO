@@ -96,7 +96,7 @@ def ingest_file(path: Path):
             payload={
                 "filename": path.name,
                 "path": str(path),
-                "text": text[:4000],
+                "text": clean_text[:4000],
             }
         )]
     )
