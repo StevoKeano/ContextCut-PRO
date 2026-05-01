@@ -82,8 +82,9 @@ def ingest_file(path: Path):
     clean_text = sanitize_text(raw_text[:8000])
     
     # Pass the sanitized list to your safe_embed function
+    # clean_text is a string
     result = safe_embed([clean_text], model=VOYAGE_MODEL, input_type="document")
-      
+
     vector = result.embeddings[0]
     fid = file_id(path)
     
@@ -101,21 +102,22 @@ def ingest_file(path: Path):
     )
     print(f"  [ok] {path.name}")
 
-def safe_embed(text, model, input_type):
+def safe_embed(texts, model, input_type):
     global last_embed_time
-    # Ensure a minimum gap of 22 seconds between calls
+    # Ensure a minimum gap of 22 seconds
     elapsed = time.time() - last_embed_time
     if elapsed < 22:
         time.sleep(22 - elapsed)
     
     try:
-        result = vc.embed([text[:8000]], model=model, input_type=input_type)
+        # Pass the list 'texts' directly; do NOT wrap it in another list
+        result = vc.embed(texts, model=model, input_type=input_type)
         last_embed_time = time.time()
         return result
     except voyageai.error.RateLimitError:
-        # If we still hit a limit, sleep longer and retry
+        print(" [!] Rate limit hit, backing off...")
         time.sleep(30)
-        return safe_embed(text, model, input_type)
+        return safe_embed(texts, model, input_type)
 
 def should_ingest(path: Path) -> bool:
     return (
