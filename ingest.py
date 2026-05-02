@@ -82,7 +82,7 @@ def ingest_file(path: Path):
     processing_queue.add(path.name)
     
     try:
-        if path.exists == False:
+        if not path.exists:
             return # Skip if it's been removed
         raw_text = path.read_text(encoding="utf-8", errors="ignore").strip()
         if not raw_text:
