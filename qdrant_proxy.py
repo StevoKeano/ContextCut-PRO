@@ -339,8 +339,12 @@ tr:hover td{{background:var(--surf2)}}
 .chat-input-bar{{border-top:1px solid var(--border);padding:10px;display:flex;flex-direction:column;gap:8px;flex-shrink:0;background:var(--surf)}}
 .model-row{{display:flex;align-items:center;gap:8px}}
 .model-label{{font-size:10px;color:var(--muted);white-space:nowrap}}
-.model-input{{flex:1;background:var(--bg);border:1px solid var(--border);border-radius:var(--r);padding:5px 9px;color:var(--text);font-family:'JetBrains Mono',monospace;font-size:12px;outline:none}}
+.model-combo{{flex:1;display:flex;gap:4px}}
+.model-input{{flex:1;background:var(--bg);border:1px solid var(--border);border-radius:var(--r);padding:5px 9px;color:var(--text);font-family:'JetBrains Mono',monospace;font-size:12px;outline:none;min-width:0}}
 .model-input:focus{{border-color:var(--accent)}}
+.model-select{{background:var(--bg);border:1px solid var(--border);border-radius:var(--r);padding:4px 6px;color:var(--muted);font-size:11px;cursor:pointer;outline:none;font-family:'JetBrains Mono',monospace}}
+.model-select:focus{{border-color:var(--accent)}}
+.model-select option{{background:var(--surf);color:var(--text)}}
 .input-row{{display:flex;gap:8px;align-items:flex-end}}
 .chat-input{{flex:1;background:var(--bg);border:1px solid var(--border);border-radius:var(--r);padding:8px 12px;color:var(--text);font-family:'JetBrains Mono',monospace;font-size:13px;resize:none;outline:none;line-height:1.5;max-height:120px}}
 .chat-input:focus{{border-color:var(--accent)}}
@@ -394,7 +398,12 @@ tr:hover td{{background:var(--surf2)}}
     <div class="chat-input-bar">
       <div class="model-row">
         <span class="model-label">Model:</span>
-        <input class="model-input" id="modelInput" type="text" value="{DEFAULT_MODEL}" placeholder="e.g. qwen3:14b-q8_0">
+        <div class="model-combo">
+          <input class="model-input" id="modelInput" type="text" value="{DEFAULT_MODEL}" placeholder="e.g. qwen3:14b-q8_0">
+          <select class="model-select" id="modelSelect" title="Available models" onchange="if(this.value){{document.getElementById('modelInput').value=this.value;this.value=\'\';}}">
+            <option value="">▾</option>
+          </select>
+        </div>
       </div>
       <div class="input-row">
         <textarea class="chat-input" id="chatInput" rows="2"
@@ -471,6 +480,22 @@ function updateStats(d) {{
 
 
 // ── Left panel live polling (every 3s) ───────────────────────────────────────
+async function fetchModels() {{
+  try {{
+    const r = await fetch('/api/tags');
+    if (!r.ok) return;
+    const d = await r.json();
+    const models = (d.models||[]).map(m=>m.name).sort();
+    if (!models.length) return;
+    const sel = document.getElementById('modelSelect');
+    if (!sel) return;
+    sel.innerHTML = '<option value="">▾</option>' +
+      models.map(m=>`<option value="${{m}}">${{m}}</option>`).join('');
+    const inp = document.getElementById('modelInput');
+    if (inp && !inp.value && models.length) inp.value = models[0];
+  }} catch(e) {{}}
+}}
+
 let _lastTs = null;
 
 async function pollStats() {{
@@ -519,6 +544,7 @@ async function pollStats() {{
 }}
 setInterval(pollStats, 3000);
 pollStats();
+fetchModels();
 
 async function sendMessage() {{
   const input   = document.getElementById('chatInput');
@@ -590,6 +616,20 @@ class DashboardHandler(BaseHTTPRequestHandler):
             self.send_header("Content-Length", str(len(body)))
             self.end_headers()
             self.wfile.write(body)
+            return
+        if self.path == "/api/tags":
+            try:
+                with urllib.request.urlopen(f"{UPSTREAM}/api/tags", timeout=5) as r:
+                    body = r.read()
+                self.send_response(200)
+                self.send_header("Content-Type", "application/json")
+                self.send_header("Content-Length", str(len(body)))
+                self.end_headers()
+                self.wfile.write(body)
+            except Exception as e:
+                self.send_response(502)
+                self.end_headers()
+                self.wfile.write(str(e).encode())
             return
         if self.path == "/stats":
             body = json.dumps(make_stats_json()).encode()
