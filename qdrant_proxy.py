@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-ContextCut — Qdrant-enriching reverse proxy for any local LLM endpoint.
+ContextCut-PRO — Qdrant-enriching reverse proxy for any local LLM endpoint.
 
   Proxy port    (CONTEXTCUT_PROXY_PORT)      — receives requests, injects context, forwards to LLM
   Dashboard port (CONTEXTCUT_DASHBOARD_PORT)  — Chat interface + real-time monitor
@@ -267,7 +267,7 @@ def make_dashboard() -> str:
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
-<title>ContextCut</title>
+<title>ContextCut-PRO</title>
 <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;600&family=Syne:wght@400;700;800&display=swap" rel="stylesheet">
 <style>
 :root{{--bg:#080c14;--surf:#0d1420;--surf2:#111927;--border:#1e2d42;--text:#c9d8f0;--muted:#4a6080;--accent:#00d4ff;--green:#22c55e;--yellow:#f59e0b;--red:#ef4444;--r:6px}}
@@ -392,7 +392,7 @@ tr:hover td{{background:var(--surf2)}}
   <div class="right">
     <div class="chat-messages" id="messages">
       <div class="msg assistant">
-        <div class="bubble">👋 <strong>ContextCut</strong> — Ask anything. Relevant context from your knowledge base is injected automatically. Watch the left panel update after each message.</div>
+        <div class="bubble">👋 <strong>ContextCut-PRO</strong> — Ask anything. Relevant context from your knowledge base is injected automatically. Watch the left panel update after each message.</div>
       </div>
     </div>
     <div class="chat-input-bar">
