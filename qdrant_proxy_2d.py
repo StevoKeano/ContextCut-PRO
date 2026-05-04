@@ -24,7 +24,6 @@ import uuid
 import json
 import html
 import time
-import socket
 import threading
 import urllib.request
 import urllib.error
@@ -72,7 +71,6 @@ _stats = {
     "max_tokens_seen": 0,
     "last_seen":       None,
     "start_time":      datetime.now().isoformat(),
-    "cache_hits":      0,
 }
 
 def record(entry: dict):
@@ -85,33 +83,6 @@ def record(entry: dict):
         if t > _stats["max_tokens_seen"]:
             _stats["max_tokens_seen"] = t
         _stats["last_seen"] = entry["ts"]
-
-# ── Cache for frequent queries ───────────────────────────────────────────────
-CACHE_MAX_SIZE = 100
-CACHE_TTL      = 300
-_response_cache: dict[str, dict] = {}
-
-def cache_key(query: str, model: str) -> str:
-    return f"{model}:{query.strip().lower()}"
-
-def cache_get(query: str, model: str) -> str | None:
-    with _lock:
-        key = cache_key(query, model)
-        entry = _response_cache.get(key)
-        if entry and (time.time() - entry["ts"]) < CACHE_TTL:
-            _stats["cache_hits"] += 1
-            return entry["response"]
-        if entry:
-            del _response_cache[key]
-        return None
-
-def cache_put(query: str, model: str, response: str):
-    with _lock:
-        if len(_response_cache) >= CACHE_MAX_SIZE:
-            oldest = min(_response_cache, key=lambda k: _response_cache[k]["ts"])
-            del _response_cache[oldest]
-        key = cache_key(query, model)
-        _response_cache[key] = {"response": response, "ts": time.time()}
 
 # ── 2b: Session Management ───────────────────────────────────────────────────
 MAX_HISTORY_MESSAGES = 50
@@ -173,197 +144,6 @@ def build_revision_prompt(last_user: str, last_assistant: str, revision_request:
         {"role": "assistant", "content": last_assistant},
         {"role": "user", "content": f"{revision_request}. Please revise your previous response accordingly."},
     ]
-
-SESSION_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), ".contextcut_sessions.json")
-
-def save_sessions():
-    try:
-        data = {}
-        with _lock:
-            for sid, sess in _sessions.items():
-                data[sid] = {"history": sess["history"], "created": sess["created"], "msg_count": sess["msg_count"]}
-        with open(SESSION_FILE, "w") as f:
-            json.dump(data, f)
-    except Exception as e:
-        print(f"[contextcut] Session save error: {e}")
-
-def load_sessions():
-    if not os.path.exists(SESSION_FILE):
-        return
-    try:
-        with open(SESSION_FILE) as f:
-            data = json.load(f)
-        with _lock:
-            for sid, sess in data.items():
-                _sessions[sid] = {"history": sess["history"], "created": sess["created"], "msg_count": sess["msg_count"]}
-        print(f"[contextcut] Loaded {len(data)} sessions from {SESSION_FILE}")
-    except Exception as e:
-        print(f"[contextcut] Session load error: {e}")
-def check_license_status() -> dict:
-    with _lock:
-        return dict(_license_state)
-
-def release_license():
-    if not LICENSE_KEY or not _license_state.get("valid"):
-        return
-    try:
-        payload = json.dumps({
-            "license_key": LICENSE_KEY,
-            "instance_id": _instance_id,
-        }).encode()
-        req = urllib.request.Request(
-            f"{LICENSE_SERVER}/v1/license/release",
-            data=payload,
-            headers={"Content-Type": "application/json", "User-Agent": "ContextCutPRO/1.0"},
-            method="POST",
-        )
-        with urllib.request.urlopen(req, timeout=5) as resp:
-            data = json.loads(resp.read().decode())
-        print(f"[contextcut] License seat released: {data.get('message','OK')}")
-    except Exception as e:
-        print(f"[contextcut] License release error (non-fatal): {e}")
-
-def shutdown_hook():
-    release_license()
-    save_sessions()
-import atexit
-atexit.register(shutdown_hook)
-
-# ── License Validation ────────────────────────────────────────────────────────
-LICENSE_SERVER  = os.getenv("CONTEXTCUT_LICENSE_SERVER", "https://api.contextcut.pro")
-LICENSE_KEY     = os.getenv("CONTEXTCUT_LICENSE_KEY", "")
-HEARTBEAT_INTERVAL = int(os.getenv("CONTEXTCUT_HEARTBEAT_SEC", "900"))
-GRACE_PERIOD    = int(os.getenv("CONTEXTCUT_GRACE_SEC", "3600"))
-
-_license_state = {
-    "valid":        False,
-    "activated_at": None,
-    "last_heartbeat": None,
-    "expires_at":   None,
-    "license_type": None,
-    "seats":        0,
-    "message":      "",
-    "grace_since":  None,
-}
-
-_instance_id = str(uuid.uuid4())
-
-def get_fingerprint() -> dict:
-    import platform
-    import hashlib
-    mac_addr = ""
-    try:
-        import uuid
-        mac_addr = str(uuid.getnode())
-    except Exception:
-        pass
-    return {
-        "hostname":    socket.gethostname(),
-        "platform":    platform.platform(),
-        "node":        mac_addr,
-    }
-
-def validate_license() -> bool:
-    global _license_state
-    if not LICENSE_KEY:
-        _license_state["message"] = "No license key provided. Set CONTEXTCUT_LICENSE_KEY."
-        return False
-    try:
-        fp = get_fingerprint()
-        payload = json.dumps({
-            "license_key": LICENSE_KEY,
-            "instance_id": _instance_id,
-            "fingerprint": fp,
-            "version":     "PRO-1.0",
-            "action":      "activate",
-        }).encode()
-        req = urllib.request.Request(
-            f"{LICENSE_SERVER}/v1/license/validate",
-            data=payload,
-            headers={"Content-Type": "application/json", "User-Agent": "ContextCutPRO/1.0"},
-            method="POST",
-        )
-        with urllib.request.urlopen(req, timeout=15) as resp:
-            data = json.loads(resp.read().decode())
-        if data.get("valid"):
-            _license_state.update({
-                "valid":        True,
-                "activated_at": data.get("activated_at"),
-                "license_type": data.get("license_type", "single"),
-                "seats":        data.get("seats", 1),
-                "expires_at":   data.get("expires_at"),
-                "message":      data.get("message", "License validated"),
-            })
-            return True
-        else:
-            _license_state["message"] = data.get("error", "License invalid")
-            return False
-    except urllib.error.HTTPError as e:
-        body = e.read().decode()
-        try:
-            err = json.loads(body)
-            _license_state["message"] = err.get("error", f"HTTP {e.code}")
-        except Exception:
-            _license_state["message"] = f"HTTP {e.code}: {body}"
-        return False
-    except urllib.error.URLError as e:
-        _license_state["message"] = f"Network error: {e.reason}"
-        return False
-    except Exception as e:
-        _license_state["message"] = f"Validation error: {e}"
-        return False
-
-def send_heartbeat() -> bool:
-    if not LICENSE_KEY:
-        return False
-    try:
-        payload = json.dumps({
-            "license_key":  LICENSE_KEY,
-            "instance_id":  _instance_id,
-            "uptime":       time.time(),
-            "fingerprint":  get_fingerprint(),
-        }).encode()
-        req = urllib.request.Request(
-            f"{LICENSE_SERVER}/v1/heartbeat",
-            data=payload,
-            headers={"Content-Type": "application/json", "User-Agent": "ContextCutPRO/1.0"},
-            method="POST",
-        )
-        with urllib.request.urlopen(req, timeout=10) as resp:
-            data = json.loads(resp.read().decode())
-        _license_state["last_heartbeat"] = datetime.now().isoformat()
-        if not data.get("valid", True):
-            _license_state["valid"] = False
-            _license_state["message"] = data.get("error", "Heartbeat rejected")
-            return False
-        return True
-    except Exception:
-        if _license_state["valid"] and not _license_state["grace_since"]:
-            _license_state["grace_since"] = time.time()
-        elif _license_state["grace_since"]:
-            elapsed = time.time() - _license_state["grace_since"]
-            if elapsed > GRACE_PERIOD:
-                _license_state["valid"] = False
-                _license_state["message"] = f"License grace period expired ({GRACE_PERIOD}s)"
-                return False
-        return True
-
-def heartbeat_loop():
-    time.sleep(HEARTBEAT_INTERVAL)
-    while True:
-        send_heartbeat()
-        time.sleep(HEARTBEAT_INTERVAL)
-
-
-
-import signal
-def _handle_signal(signum, frame):
-    print("\n[contextcut] Shutting down gracefully...")
-    shutdown_hook()
-    raise SystemExit(0)
-
-signal.signal(signal.SIGINT, _handle_signal)
-signal.signal(signal.SIGTERM, _handle_signal)
 
 # ── Lazy clients ──────────────────────────────────────────────────────────────
 _vc            = None
@@ -768,13 +548,12 @@ tr:hover td{{background:var(--surf2)}}
   <div class="left">
     <div class="left-scroll">
       <div class="cards">
-        <div class="card"><div class="card-label">License</div><div class="card-val" id="cardLicense" style="font-size:13px">—</div></div>
         <div class="card"><div class="card-label">Requests</div><div class="card-val" id="cardReq">{s['total_requests']}</div></div>
         <div class="card"><div class="card-label">Last CTX</div><div class="card-val {'green' if last_pct<60 else 'yellow' if last_pct<80 else 'red'}" id="cardCtx">{last_pct}%</div></div>
         <div class="card"><div class="card-label">Tokens Saved</div><div class="card-val green" id="cardSave">{s.get('total_saved',0):,}</div></div>
         <div class="card"><div class="card-label">Peak Tokens</div><div class="card-val {'red' if s['max_tokens_seen']>CTX_LIMIT*0.8 else ''}">{s['max_tokens_seen']:,}</div></div>
         <div class="card"><div class="card-label">CTX Limit</div><div class="card-val">{CTX_LIMIT:,}</div></div>
-        <div class="card"><div class="card-label">Cache Hits</div><div class="card-val" style="font-size:13px" id="cardCache">{s.get('cache_hits',0)}</div></div>
+        <div class="card"><div class="card-label">Last Request</div><div class="card-val" style="font-size:13px">{s['last_seen'] or '—'}</div></div>
       </div>
       <div class="ctx-wrap">
         <div class="ctx-label">Most Recent Context Usage</div>
@@ -797,7 +576,7 @@ tr:hover td{{background:var(--surf2)}}
       <span class="session-badge" id="sessionBadge">Session: new</span>
       <button class="clear-btn" id="clearBtn" onclick="clearConversation()" title="Clear conversation (/clear)">Clear</button>
     </div>
-    <div class="chat-messages" id="messages" role="log" aria-live="polite" aria-label="Chat messages">
+    <div class="chat-messages" id="messages">
       <div class="msg assistant">
         <div class="bubble">👋 <strong>ContextCut-PRO</strong> — Ask anything. Relevant context from your knowledge base is injected automatically. Conversation history is maintained automatically. Watch the left panel update after each message.</div>
       </div>
@@ -833,10 +612,10 @@ tr:hover td{{background:var(--surf2)}}
         </div>
       </div>
       <div class="input-row">
-        <textarea class="chat-input" id="chatInput" rows="2" role="textbox" aria-label="Message input"
+        <textarea class="chat-input" id="chatInput" rows="2"
           placeholder="Type a message… (Enter to send, Shift+Enter for newline). Try: /clear, /help"
           onkeydown="handleKey(event)"></textarea>
-        <button class="send-btn" id="sendBtn" onclick="sendMessage()" aria-label="Send message">Send ↑</button>
+        <button class="send-btn" id="sendBtn" onclick="sendMessage()">Send ↑</button>
       </div>
     </div>
   </div>
@@ -846,35 +625,13 @@ tr:hover td{{background:var(--surf2)}}
 <script>
 let sessionId = null;
 let conversationHistory = [];
-let inputHistory = [];
-let inputHistoryIdx = -1;
 
 function esc(s) {{
   return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/\\n/g,'<br>');
 }}
 
 function handleKey(e) {{
-  const input = document.getElementById('chatInput');
-  if (e.key === 'ArrowUp' && input.selectionStart === 0 && input.value === '') {{
-    e.preventDefault();
-    if (inputHistory.length > 0 && inputHistoryIdx < inputHistory.length - 1) {{
-      inputHistoryIdx++;
-      input.value = inputHistory[inputHistoryIdx];
-    }}
-    return;
-  }}
-  if (e.key === 'ArrowDown' && input.selectionStart === 0) {{
-    e.preventDefault();
-    if (inputHistoryIdx > 0) {{
-      inputHistoryIdx--;
-      input.value = inputHistory[inputHistoryIdx];
-    }} else {{
-      inputHistoryIdx = -1;
-      input.value = '';
-    }}
-    return;
-  }}
-  if (e.key === 'Enter' && !e.shiftKey) {{ e.preventDefault(); sendMessage(); }}
+  if (e.key==='Enter' && !e.shiftKey) {{ e.preventDefault(); sendMessage(); }}
 }}
 
 function updateSessionBadge() {{
@@ -1067,32 +824,8 @@ async function pollStats() {{
     }}).join('');
   }} catch(e) {{ console.error('poll/log error:', e); }}
 }}
-
-async function pollLicense() {{
-  try {{
-    const r = await fetch('/api/license');
-    if (!r.ok) return;
-    const d = await r.json();
-    const el = document.getElementById('cardLicense');
-    if (!el) return;
-    if (d.valid) {{
-      el.textContent = d.license_type || 'valid';
-      el.className = 'card-val green';
-      el.title = (d.message || '') + (d.last_heartbeat ? '\\nLast heartbeat: ' + d.last_heartbeat : '');
-    }} else if (d.license_type) {{
-      el.textContent = 'expired';
-      el.className = 'card-val red';
-    }} else {{
-      el.textContent = 'no key';
-      el.className = 'card-val yellow';
-    }}
-  }} catch(e) {{}}
-}}
-
 setInterval(pollStats, 3000);
-setInterval(pollLicense, 5000);
 pollStats();
-pollLicense();
 fetchModels();
 initSession();
 
@@ -1104,9 +837,6 @@ async function sendMessage() {{
   if (!text) return;
   if (!model) {{ alert('Enter a model name first.'); return; }}
   if (handleCommand(text)) {{ input.value = ''; return; }}
-  inputHistory.unshift(text);
-  if (inputHistory.length > 50) inputHistory.pop();
-  inputHistoryIdx = -1;
   input.value = '';
   sendBtn.disabled = true;
   appendMsg('user', text, '');
@@ -1259,14 +989,6 @@ class DashboardHandler(_SuppressBrokenPipe, BaseHTTPRequestHandler):
             self.end_headers()
             self.wfile.write(body)
             return
-        if self.path == "/api/license":
-            body = json.dumps(check_license_status()).encode()
-            self.send_response(200)
-            self.send_header("Content-Type", "application/json")
-            self.send_header("Content-Length", str(len(body)))
-            self.end_headers()
-            self.wfile.write(body)
-            return
         if self.path == "/stats":
             body = json.dumps(make_stats_json()).encode()
             self.send_response(200)
@@ -1331,19 +1053,6 @@ if __name__ == "__main__":
         print("ERROR: VOYAGE_API_KEY not set. Export it and retry.")
         raise SystemExit(1)
 
-    load_sessions()
-
-    if LICENSE_KEY:
-        print("[contextcut] Validating license key...")
-        if not validate_license():
-            print(f"ERROR: {_license_state['message']}")
-            raise SystemExit(1)
-        print(f"[contextcut] License: {_license_state.get('license_type','?')} | {_license_state['message']}")
-        threading.Thread(target=heartbeat_loop, daemon=True).start()
-        print(f"[contextcut] Heartbeat: every {HEARTBEAT_INTERVAL}s | grace: {GRACE_PERIOD}s")
-    else:
-        print("[contextcut] WARNING: No license key set. Set CONTEXTCUT_LICENSE_KEY.")
-
     dash = ReusableHTTPServer(("0.0.0.0", DASHBOARD_PORT), DashboardHandler)
     threading.Thread(target=dash.serve_forever, daemon=True).start()
 
@@ -1352,7 +1061,6 @@ if __name__ == "__main__":
     print(f"[contextcut] Qdrant     → {QDRANT_HOST}:{QDRANT_PORT} / {COLLECTION}")
     print(f"[contextcut] Min score  → {MIN_SCORE}  Top-K → {TOP_K}  CTX → {CTX_LIMIT}")
     print(f"[contextcut] Tokens     → {TOKEN_METHOD}")
-    print(f"[contextcut] Params     → temp={DEFAULT_TEMP} top_p={DEFAULT_TOP_P} max_tokens={DEFAULT_MAX_TK}")
     if DEFAULT_MODEL:
         print(f"[contextcut] Model      → {DEFAULT_MODEL}")
 
