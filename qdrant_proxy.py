@@ -161,7 +161,7 @@ class _SuppressBrokenPipe:
 class ProxyHandler(_SuppressBrokenPipe, BaseHTTPRequestHandler):
     def log_message(self, fmt, *args): pass
 
-    def _forward(self, method: str, raw_body: bytes):
+    def _forward(self, method: str, raw_body: bytes, streaming: bool = False):
         upstream_url = UPSTREAM + self.path
         req = urllib.request.Request(upstream_url, data=raw_body if method == "POST" else None, method=method)
         for k, v in self.headers.items():
@@ -171,17 +171,32 @@ class ProxyHandler(_SuppressBrokenPipe, BaseHTTPRequestHandler):
             req.add_header("Content-Length", str(len(raw_body)))
         try:
             with urllib.request.urlopen(req, timeout=120) as resp:
-                resp_body = resp.read()
                 self.send_response(resp.status)
                 for k, v in resp.getheaders():
-                    if k.lower() not in ("transfer-encoding",):
+                    if k.lower() not in ("transfer-encoding", "content-length"):
                         self.send_header(k, v)
-                self.end_headers()
-                self.wfile.write(resp_body)
+                if streaming:
+                    self.send_header("Transfer-Encoding", "chunked")
+                    self.send_header("Cache-Control", "no-cache")
+                    self.end_headers()
+                    while True:
+                        chunk = resp.read(4096)
+                        if not chunk:
+                            self.wfile.write(b"0\r\n\r\n")
+                            break
+                        size = f"{len(chunk):X}\r\n".encode()
+                        self.wfile.write(size + chunk + b"\r\n")
+                        self.wfile.flush()
+                else:
+                    resp_body = resp.read()
+                    self.send_header("Content-Length", str(len(resp_body)))
+                    self.end_headers()
+                    self.wfile.write(resp_body)
         except urllib.error.HTTPError as e:
             err_body = e.read()
             self.send_response(e.code)
             self.send_header("Content-Type", "text/plain")
+            self.send_header("Content-Length", str(len(err_body)))
             self.end_headers()
             self.wfile.write(err_body)
         except Exception as e:
@@ -222,7 +237,8 @@ class ProxyHandler(_SuppressBrokenPipe, BaseHTTPRequestHandler):
             record({"ts": ts, "query": query[:120], "tokens_before": tok_before,
                     "tokens_after": tok_after, "ctx_limit": CTX_LIMIT, "pct": pct, "hits": hits_meta})
 
-        self._forward("POST", raw_body)
+        is_streaming = isinstance(body, dict) and body.get("stream", False)
+        self._forward("POST", raw_body, streaming=is_streaming)
 
 # ── Dashboard ─────────────────────────────────────────────────────────────────
 def pct_color(p):
@@ -566,43 +582,92 @@ async function sendMessage() {{
   sendBtn.disabled = true;
   appendMsg('user', text, '');
   showTyping();
+
+  let assistantDiv = null;
+  let bubble = null;
+  let fullText = '';
+  let usage = {{}};
+
+  function ensureBubble() {{
+    if (assistantDiv) return;
+    removeTyping();
+    const box = document.getElementById('messages');
+    assistantDiv = document.createElement('div');
+    assistantDiv.className = 'msg assistant';
+    assistantDiv.innerHTML = '<div class="bubble"></div>';
+    box.appendChild(assistantDiv);
+    bubble = assistantDiv.querySelector('.bubble');
+    assistantDiv.scrollIntoView({{behavior:'smooth', block:'start'}});
+  }}
+
   try {{
     const resp = await fetch('/v1/chat/completions', {{
       method: 'POST',
       headers: {{'Content-Type':'application/json'}},
-      body: JSON.stringify({{model, messages:[{{role:'user',content:text}}], stream:false}})
+      body: JSON.stringify({{model, messages:[{{role:'user',content:text}}], stream:true}})
     }});
-    removeTyping();
+
     if (!resp.ok) {{
-      appendMsg('assistant', '❌ Error ' + resp.status + ': ' + await resp.text(), '');
+      removeTyping();
+      appendMsg('assistant', '\u274c Error ' + resp.status + ': ' + await resp.text(), '');
       return;
     }}
-    const data    = await resp.json();
-    const content = data.choices?.[0]?.message?.content || '(no response)';
-    const usage   = data.usage || {{}};
-    // fetch stats from proxy
-    let statHtml = '';
+
+    const reader  = resp.body.getReader();
+    const decoder = new TextDecoder();
+    let buf = '';
+
+    while (true) {{
+      const {{done, value}} = await reader.read();
+      if (done) break;
+      buf += decoder.decode(value, {{stream: true}});
+      const lines = buf.split('\\n');
+      buf = lines.pop();
+      for (const line of lines) {{
+        const trimmed = line.trim();
+        if (!trimmed || trimmed === 'data: [DONE]') continue;
+        if (!trimmed.startsWith('data: ')) continue;
+        try {{
+          const chunk = JSON.parse(trimmed.slice(6));
+          if (chunk.usage) usage = chunk.usage;
+          const delta = chunk.choices && chunk.choices[0] && chunk.choices[0].delta;
+          if (!delta) continue;
+          const token = delta.content || '';
+          if (!token) continue;
+          fullText += token;
+          ensureBubble();
+          bubble.innerHTML = esc(fullText);
+          assistantDiv.scrollIntoView({{behavior:'instant', block:'end'}});
+        }} catch(e) {{}}
+      }}
+    }}
+
+    ensureBubble();
+    if (!fullText) bubble.innerHTML = '<em>(no response)</em>';
+
     try {{
       const sr = await fetch('/stats');
       if (sr.ok) {{
         const d = await sr.json();
         updateStats(d);
-        const saved  = Math.max(0,(d.tokens_before||0)-(d.tokens_after||0));
-        const pct    = d.pct||0;
-        const col    = pct<60?'var(--green)':pct<80?'var(--yellow)':'var(--red)';
-        const hits   = (d.hits||[]).length;
-        statHtml =
-          `<span class="stat-pill ctx" style="color:${{col}}">${{pct}}% CTX</span>` +
-          `<span class="stat-pill">↑${{usage.prompt_tokens||'?'}} prompt</span>` +
-          `<span class="stat-pill">↓${{usage.completion_tokens||'?'}} completion</span>` +
-          (saved>0 ? `<span class="stat-pill save">-${{saved}} saved</span>` : '') +
-          (hits>0  ? `<span class="stat-pill hit">${{hits}} chunk${{hits>1?'s':''}} injected</span>` : '<span class="stat-pill">no injection</span>');
+        const saved = Math.max(0,(d.tokens_before||0)-(d.tokens_after||0));
+        const pct   = d.pct||0;
+        const col   = pct<60?'var(--green)':pct<80?'var(--yellow)':'var(--red)';
+        const hits  = (d.hits||[]).length;
+        const statHtml =
+          '<span class="stat-pill ctx" style="color:'+col+'">'+pct+'% CTX</span>' +
+          '<span class="stat-pill">\u2191'+(usage.prompt_tokens||'?')+' prompt</span>' +
+          '<span class="stat-pill">\u2193'+(usage.completion_tokens||'?')+' completion</span>' +
+          (saved>0 ? '<span class="stat-pill save">-'+saved+' saved</span>' : '') +
+          (hits>0  ? '<span class="stat-pill hit">'+hits+' chunk'+(hits>1?'s':'')+' injected</span>' : '<span class="stat-pill">no injection</span>');
+        assistantDiv.insertAdjacentHTML('beforeend',
+          '<div class="msg-meta"><div class="msg-stat">'+statHtml+'</div></div>');
       }}
     }} catch(e) {{}}
-    appendMsg('assistant', content, statHtml);
+
   }} catch(e) {{
     removeTyping();
-    appendMsg('assistant', '❌ Network error: ' + e.message, '');
+    appendMsg('assistant', '\u274c Network error: ' + e.message, '');
   }} finally {{
     sendBtn.disabled = false;
     input.focus();
@@ -662,6 +727,11 @@ class DashboardHandler(_SuppressBrokenPipe, BaseHTTPRequestHandler):
         # Forward from dashboard chat to proxy
         length   = int(self.headers.get("Content-Length",0))
         raw_body = self.rfile.read(length)
+        try:
+            parsed_body = json.loads(raw_body)
+        except Exception:
+            parsed_body = None
+        is_streaming = isinstance(parsed_body, dict) and parsed_body.get("stream", False)
         req = urllib.request.Request(
             f"http://127.0.0.1:{LISTEN_PORT}{self.path}",
             data=raw_body, method="POST"
@@ -671,13 +741,27 @@ class DashboardHandler(_SuppressBrokenPipe, BaseHTTPRequestHandler):
                 req.add_header(k,v)
         try:
             with urllib.request.urlopen(req, timeout=120) as resp:
-                rb = resp.read()
                 self.send_response(resp.status)
                 for k,v in resp.getheaders():
-                    if k.lower() not in ("transfer-encoding",):
+                    if k.lower() not in ("transfer-encoding", "content-length"):
                         self.send_header(k,v)
-                self.end_headers()
-                self.wfile.write(rb)
+                if is_streaming:
+                    self.send_header("Transfer-Encoding", "chunked")
+                    self.send_header("Cache-Control", "no-cache")
+                    self.end_headers()
+                    while True:
+                        chunk = resp.read(4096)
+                        if not chunk:
+                            self.wfile.write(b"0\r\n\r\n")
+                            break
+                        size = f"{len(chunk):X}\r\n".encode()
+                        self.wfile.write(size + chunk + b"\r\n")
+                        self.wfile.flush()
+                else:
+                    rb = resp.read()
+                    self.send_header("Content-Length", str(len(rb)))
+                    self.end_headers()
+                    self.wfile.write(rb)
         except Exception as e:
             self.send_response(502)
             self.end_headers()
