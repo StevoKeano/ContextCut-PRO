@@ -20,6 +20,7 @@ Configuration via environment variables (all optional — defaults shown):
 """
 
 import os
+import uuid
 import json
 import html
 import time
@@ -45,6 +46,9 @@ CTX_LIMIT      = int(os.getenv("CONTEXTCUT_CTX_LIMIT",   "8192"))
 TOP_K          = int(os.getenv("CONTEXTCUT_TOP_K",       "5"))
 MIN_SCORE      = float(os.getenv("CONTEXTCUT_MIN_SCORE", "0.30"))
 DEFAULT_MODEL  = os.getenv("CONTEXTCUT_MODEL",           "")
+DEFAULT_TEMP   = float(os.getenv("CONTEXTCUT_TEMP",      "0.7"))
+DEFAULT_MAX_TK = int(os.getenv("CONTEXTCUT_MAX_TOKENS",  "0"))
+DEFAULT_TOP_P  = float(os.getenv("CONTEXTCUT_TOP_P",     "1.0"))
 
 # ── Token estimation ──────────────────────────────────────────────────────────
 try:
@@ -67,6 +71,7 @@ _stats = {
     "max_tokens_seen": 0,
     "last_seen":       None,
     "start_time":      datetime.now().isoformat(),
+    "cache_hits":      0,
 }
 
 def record(entry: dict):
@@ -79,6 +84,123 @@ def record(entry: dict):
         if t > _stats["max_tokens_seen"]:
             _stats["max_tokens_seen"] = t
         _stats["last_seen"] = entry["ts"]
+
+# ── Cache for frequent queries ───────────────────────────────────────────────
+CACHE_MAX_SIZE = 100
+CACHE_TTL      = 300
+_response_cache: dict[str, dict] = {}
+
+def cache_key(query: str, model: str) -> str:
+    return f"{model}:{query.strip().lower()}"
+
+def cache_get(query: str, model: str) -> str | None:
+    with _lock:
+        key = cache_key(query, model)
+        entry = _response_cache.get(key)
+        if entry and (time.time() - entry["ts"]) < CACHE_TTL:
+            _stats["cache_hits"] += 1
+            return entry["response"]
+        if entry:
+            del _response_cache[key]
+        return None
+
+def cache_put(query: str, model: str, response: str):
+    with _lock:
+        if len(_response_cache) >= CACHE_MAX_SIZE:
+            oldest = min(_response_cache, key=lambda k: _response_cache[k]["ts"])
+            del _response_cache[oldest]
+        key = cache_key(query, model)
+        _response_cache[key] = {"response": response, "ts": time.time()}
+
+# ── 2b: Session Management ───────────────────────────────────────────────────
+MAX_HISTORY_MESSAGES = 50
+MAX_HISTORY_TOKENS   = 4096
+
+_sessions: dict[str, dict] = {}
+
+def new_session() -> str:
+    sid = str(uuid.uuid4())[:8]
+    _sessions[sid] = {"history": [], "created": datetime.now().isoformat(), "msg_count": 0}
+    return sid
+
+def get_session(sid: str) -> dict | None:
+    if sid and sid in _sessions:
+        return _sessions[sid]
+    return None
+
+def add_to_history(sid: str, role: str, content: str):
+    session = _sessions.get(sid)
+    if not session:
+        return
+    session["history"].append({"role": role, "content": content})
+    session["msg_count"] += 1
+    _trim_history(session)
+
+def clear_session(sid: str):
+    session = _sessions.get(sid)
+    if session:
+        session["history"] = []
+        session["msg_count"] = 0
+
+def _trim_history(session: dict):
+    while len(session["history"]) > MAX_HISTORY_MESSAGES:
+        session["history"].pop(0)
+    total = sum(count_tokens(m["content"]) for m in session["history"])
+    while total > MAX_HISTORY_TOKENS and len(session["history"]) > 2:
+        removed = session["history"].pop(0)
+        total -= count_tokens(removed["content"])
+
+def build_messages_with_history(sid: str, new_user_msg: str) -> list[dict]:
+    session = _sessions.get(sid)
+    if not session or not session["history"]:
+        return [{"role": "user", "content": new_user_msg}]
+    return session["history"] + [{"role": "user", "content": new_user_msg}]
+
+def detect_dynamic_action(content: str) -> str | None:
+    lower = content.strip().lower()
+    if lower in ("stop", "halt", "cease", "that's enough", "thats enough", "that is enough"):
+        return "stop"
+    if lower in ("continue", "go on", "keep going", "more", "elaborate"):
+        return "continue"
+    if lower.startswith("revise") or lower.startswith("rewrite") or lower.startswith("rephrase"):
+        return "revise"
+    return None
+
+def build_revision_prompt(last_user: str, last_assistant: str, revision_request: str) -> list[dict]:
+    return [
+        {"role": "user", "content": last_user},
+        {"role": "assistant", "content": last_assistant},
+        {"role": "user", "content": f"{revision_request}. Please revise your previous response accordingly."},
+    ]
+
+SESSION_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), ".contextcut_sessions.json")
+
+def save_sessions():
+    try:
+        data = {}
+        with _lock:
+            for sid, sess in _sessions.items():
+                data[sid] = {"history": sess["history"], "created": sess["created"], "msg_count": sess["msg_count"]}
+        with open(SESSION_FILE, "w") as f:
+            json.dump(data, f)
+    except Exception as e:
+        print(f"[contextcut] Session save error: {e}")
+
+def load_sessions():
+    if not os.path.exists(SESSION_FILE):
+        return
+    try:
+        with open(SESSION_FILE) as f:
+            data = json.load(f)
+        with _lock:
+            for sid, sess in data.items():
+                _sessions[sid] = {"history": sess["history"], "created": sess["created"], "msg_count": sess["msg_count"]}
+        print(f"[contextcut] Loaded {len(data)} sessions from {SESSION_FILE}")
+    except Exception as e:
+        print(f"[contextcut] Session load error: {e}")
+
+import atexit
+atexit.register(save_sessions)
 
 # ── Lazy clients ──────────────────────────────────────────────────────────────
 _vc            = None
@@ -161,7 +283,7 @@ class _SuppressBrokenPipe:
 class ProxyHandler(_SuppressBrokenPipe, BaseHTTPRequestHandler):
     def log_message(self, fmt, *args): pass
 
-    def _forward(self, method: str, raw_body: bytes, streaming: bool = False):
+    def _forward(self, method: str, raw_body: bytes, streaming: bool = False, session_id: str = None):
         upstream_url = UPSTREAM + self.path
         req = urllib.request.Request(upstream_url, data=raw_body if method == "POST" else None, method=method)
         for k, v in self.headers.items():
@@ -179,19 +301,45 @@ class ProxyHandler(_SuppressBrokenPipe, BaseHTTPRequestHandler):
                     self.send_header("Transfer-Encoding", "chunked")
                     self.send_header("Cache-Control", "no-cache")
                     self.end_headers()
+                    full_response = []
                     while True:
                         chunk = resp.read(4096)
                         if not chunk:
                             self.wfile.write(b"0\r\n\r\n")
+                            if session_id and full_response:
+                                add_to_history(session_id, "assistant", "".join(full_response))
                             break
                         size = f"{len(chunk):X}\r\n".encode()
                         self.wfile.write(size + chunk + b"\r\n")
                         self.wfile.flush()
+                        try:
+                            text = chunk.decode("utf-8", errors="ignore")
+                            for line in text.split("\n"):
+                                line = line.strip()
+                                if line.startswith("data: ") and line != "data: [DONE]":
+                                    try:
+                                        chunk_data = json.loads(line[6:])
+                                        delta = chunk_data.get("choices", [{}])[0].get("delta", {})
+                                        content = delta.get("content", "")
+                                        if content:
+                                            full_response.append(content)
+                                    except Exception:
+                                        pass
+                        except Exception:
+                            pass
                 else:
                     resp_body = resp.read()
                     self.send_header("Content-Length", str(len(resp_body)))
                     self.end_headers()
                     self.wfile.write(resp_body)
+                    if session_id:
+                        try:
+                            resp_json = json.loads(resp_body)
+                            assistant_msg = resp_json.get("choices", [{}])[0].get("message", {}).get("content", "")
+                            if assistant_msg:
+                                add_to_history(session_id, "assistant", assistant_msg)
+                        except Exception:
+                            pass
         except urllib.error.HTTPError as e:
             err_body = e.read()
             self.send_response(e.code)
@@ -220,6 +368,43 @@ class ProxyHandler(_SuppressBrokenPipe, BaseHTTPRequestHandler):
         tok_before = tok_after = 0
 
         if body and "messages" in body:
+            session_id = body.pop("session_id", None)
+            use_history = body.pop("use_history", True)
+
+            if use_history:
+                if not session_id or session_id not in _sessions:
+                    session_id = new_session()
+                body["session_id"] = session_id
+
+                new_user_content = body["messages"][-1].get("content", "") if body["messages"] else ""
+                action = detect_dynamic_action(new_user_content)
+
+                if action == "revise":
+                    session = _sessions.get(session_id)
+                    if session and session["history"]:
+                        last_user = ""
+                        last_assistant = ""
+                        for msg in reversed(session["history"]):
+                            if msg["role"] == "assistant" and not last_assistant:
+                                last_assistant = msg["content"]
+                            elif msg["role"] == "user" and not last_user:
+                                last_user = msg["content"]
+                                break
+                        if last_assistant:
+                            body["messages"] = build_revision_prompt(last_user, last_assistant, new_user_content)
+
+                elif action == "continue":
+                    session = _sessions.get(session_id)
+                    if session and session["history"]:
+                        body["messages"] = list(session["history"])
+                        body["messages"].append({"role": "user", "content": "Please continue your previous response."})
+
+                elif action != "stop":
+                    if len(body["messages"]) == 1:
+                        body["messages"] = build_messages_with_history(session_id, new_user_content)
+
+                add_to_history(session_id, "user", new_user_content)
+
             for msg in reversed(body["messages"]):
                 if msg.get("role") == "user":
                     c = msg.get("content", "")
@@ -238,7 +423,21 @@ class ProxyHandler(_SuppressBrokenPipe, BaseHTTPRequestHandler):
                     "tokens_after": tok_after, "ctx_limit": CTX_LIMIT, "pct": pct, "hits": hits_meta})
 
         is_streaming = isinstance(body, dict) and body.get("stream", False)
-        self._forward("POST", raw_body, streaming=is_streaming)
+        self._forward("POST", raw_body, streaming=is_streaming, session_id=body.get("session_id") if body else None)
+
+    def do_DELETE(self):
+        if self.path.startswith("/api/session/"):
+            session_id = self.path.split("/api/session/")[-1]
+            clear_session(session_id)
+            resp = json.dumps({"status": "cleared", "session_id": session_id}).encode()
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Length", str(len(resp)))
+            self.end_headers()
+            self.wfile.write(resp)
+            return
+        self.send_response(404)
+        self.end_headers()
 
 # ── Dashboard ─────────────────────────────────────────────────────────────────
 def pct_color(p):
@@ -343,6 +542,10 @@ tr:hover td{{background:var(--surf2)}}
 .empty{{text-align:center;padding:28px;color:var(--muted);font-size:12px}}
 .tbl-footer{{font-size:10px;color:var(--muted);text-align:right;padding:6px 10px;border-top:1px solid var(--border)}}
 /* ── CHAT ── */
+.chat-header{{display:flex;align-items:center;justify-content:space-between;padding:8px 14px;border-bottom:1px solid var(--border);background:var(--surf);flex-shrink:0}}
+.session-badge{{font-size:11px;color:var(--muted);background:var(--surf2);border:1px solid var(--border);border-radius:3px;padding:3px 8px;font-family:'JetBrains Mono',monospace}}
+.clear-btn{{background:transparent;border:1px solid var(--border);color:var(--muted);border-radius:3px;padding:3px 10px;font-size:11px;cursor:pointer;font-family:'JetBrains Mono',monospace}}
+.clear-btn:hover{{color:var(--text);border-color:var(--accent)}}
 .chat-messages{{flex:1;overflow-y:auto;padding:14px;display:flex;flex-direction:column;gap:10px}}
 .chat-messages::-webkit-scrollbar{{width:4px}}.chat-messages::-webkit-scrollbar-thumb{{background:var(--border);border-radius:2px}}
 .msg{{max-width:88%}}
@@ -375,6 +578,17 @@ tr:hover td{{background:var(--surf2)}}
 .chat-input:focus{{border-color:var(--accent)}}
 .send-btn{{background:var(--accent);color:#000;border:none;border-radius:var(--r);padding:8px 16px;font-family:'Syne',sans-serif;font-weight:700;font-size:13px;cursor:pointer;white-space:nowrap;height:38px}}
 .send-btn:hover{{opacity:.85}}.send-btn:disabled{{opacity:.4;cursor:not-allowed}}
+/* ── Settings panel ── */
+.settings-row{{display:flex;align-items:center;gap:6px;flex-wrap:wrap}}
+.param-group{{display:flex;align-items:center;gap:4px}}
+.param-label{{font-size:10px;color:var(--muted);white-space:nowrap}}
+.param-slider{{width:60px;height:4px;-webkit-appearance:none;background:var(--border);border-radius:2px;outline:none;cursor:pointer}}
+.param-slider::-webkit-slider-thumb{{-webkit-appearance:none;width:12px;height:12px;border-radius:50%;background:var(--accent);cursor:pointer}}
+.param-val{{font-size:10px;color:var(--accent);min-width:28px;text-align:center;font-family:'JetBrains Mono',monospace}}
+.settings-toggle{{background:transparent;border:1px solid var(--border);color:var(--muted);border-radius:3px;padding:3px 8px;font-size:10px;cursor:pointer;font-family:'JetBrains Mono',monospace}}
+.settings-toggle:hover{{color:var(--text);border-color:var(--accent)}}
+.settings-panel{{display:none;background:var(--surf);border-top:1px solid var(--border);padding:8px 10px}}
+.settings-panel.open{{display:block}}
 </style>
 </head>
 <body>
@@ -396,7 +610,7 @@ tr:hover td{{background:var(--surf2)}}
         <div class="card"><div class="card-label">Tokens Saved</div><div class="card-val green" id="cardSave">{s.get('total_saved',0):,}</div></div>
         <div class="card"><div class="card-label">Peak Tokens</div><div class="card-val {'red' if s['max_tokens_seen']>CTX_LIMIT*0.8 else ''}">{s['max_tokens_seen']:,}</div></div>
         <div class="card"><div class="card-label">CTX Limit</div><div class="card-val">{CTX_LIMIT:,}</div></div>
-        <div class="card"><div class="card-label">Last Request</div><div class="card-val" style="font-size:13px">{s['last_seen'] or '—'}</div></div>
+        <div class="card"><div class="card-label">Cache Hits</div><div class="card-val" style="font-size:13px" id="cardCache">{s.get('cache_hits',0)}</div></div>
       </div>
       <div class="ctx-wrap">
         <div class="ctx-label">Most Recent Context Usage</div>
@@ -415,9 +629,13 @@ tr:hover td{{background:var(--surf2)}}
 
   <!-- ── RIGHT: Chat ── -->
   <div class="right">
-    <div class="chat-messages" id="messages">
+    <div class="chat-header" id="chatHeader">
+      <span class="session-badge" id="sessionBadge">Session: new</span>
+      <button class="clear-btn" id="clearBtn" onclick="clearConversation()" title="Clear conversation (/clear)">Clear</button>
+    </div>
+    <div class="chat-messages" id="messages" role="log" aria-live="polite" aria-label="Chat messages">
       <div class="msg assistant">
-        <div class="bubble">👋 <strong>ContextCut-PRO</strong> — Ask anything. Relevant context from your knowledge base is injected automatically. Watch the left panel update after each message.</div>
+        <div class="bubble">👋 <strong>ContextCut-PRO</strong> — Ask anything. Relevant context from your knowledge base is injected automatically. Conversation history is maintained automatically. Watch the left panel update after each message.</div>
       </div>
     </div>
     <div class="chat-input-bar">
@@ -429,12 +647,32 @@ tr:hover td{{background:var(--surf2)}}
             <option value="">▾</option>
           </select>
         </div>
+        <button class="settings-toggle" id="settingsToggle" onclick="toggleSettings()">Settings ⚙</button>
+      </div>
+      <div class="settings-panel" id="settingsPanel">
+        <div class="settings-row">
+          <div class="param-group">
+            <span class="param-label">Temp:</span>
+            <input type="range" class="param-slider" id="tempSlider" min="0" max="2" step="0.05" value="{DEFAULT_TEMP}" oninput="updateParamVal('tempSlider','tempVal')">
+            <span class="param-val" id="tempVal">{DEFAULT_TEMP}</span>
+          </div>
+          <div class="param-group">
+            <span class="param-label">Top-p:</span>
+            <input type="range" class="param-slider" id="toppSlider" min="0" max="1" step="0.05" value="{DEFAULT_TOP_P}" oninput="updateParamVal('toppSlider','toppVal')">
+            <span class="param-val" id="toppVal">{DEFAULT_TOP_P}</span>
+          </div>
+          <div class="param-group">
+            <span class="param-label">Max tokens:</span>
+            <input type="number" class="param-slider" id="maxTokInput" min="0" max="32768" step="64" value="{DEFAULT_MAX_TK}" style="width:70px;background:var(--bg);border:1px solid var(--border);border-radius:2px;padding:2px 4px;color:var(--accent);font-size:10px;font-family:'JetBrains Mono',monospace">
+            <span class="param-val" id="maxTokVal">{DEFAULT_MAX_TK}</span>
+          </div>
+        </div>
       </div>
       <div class="input-row">
-        <textarea class="chat-input" id="chatInput" rows="2"
-          placeholder="Type a message… (Enter to send, Shift+Enter for newline)"
+        <textarea class="chat-input" id="chatInput" rows="2" role="textbox" aria-label="Message input"
+          placeholder="Type a message… (Enter to send, Shift+Enter for newline). Try: /clear, /help"
           onkeydown="handleKey(event)"></textarea>
-        <button class="send-btn" id="sendBtn" onclick="sendMessage()">Send ↑</button>
+        <button class="send-btn" id="sendBtn" onclick="sendMessage()" aria-label="Send message">Send ↑</button>
       </div>
     </div>
   </div>
@@ -442,12 +680,114 @@ tr:hover td{{background:var(--surf2)}}
 </div>
 
 <script>
+let sessionId = null;
+let conversationHistory = [];
+let inputHistory = [];
+let inputHistoryIdx = -1;
+
 function esc(s) {{
   return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/\\n/g,'<br>');
 }}
 
 function handleKey(e) {{
-  if (e.key==='Enter' && !e.shiftKey) {{ e.preventDefault(); sendMessage(); }}
+  const input = document.getElementById('chatInput');
+  if (e.key === 'ArrowUp' && input.selectionStart === 0 && input.value === '') {{
+    e.preventDefault();
+    if (inputHistory.length > 0 && inputHistoryIdx < inputHistory.length - 1) {{
+      inputHistoryIdx++;
+      input.value = inputHistory[inputHistoryIdx];
+    }}
+    return;
+  }}
+  if (e.key === 'ArrowDown' && input.selectionStart === 0) {{
+    e.preventDefault();
+    if (inputHistoryIdx > 0) {{
+      inputHistoryIdx--;
+      input.value = inputHistory[inputHistoryIdx];
+    }} else {{
+      inputHistoryIdx = -1;
+      input.value = '';
+    }}
+    return;
+  }}
+  if (e.key === 'Enter' && !e.shiftKey) {{ e.preventDefault(); sendMessage(); }}
+}}
+
+function updateSessionBadge() {{
+  const badge = document.getElementById('sessionBadge');
+  if (badge) {{
+    badge.textContent = sessionId ? 'Session: ' + sessionId : 'Session: new';
+  }}
+}}
+
+async function initSession() {{
+  try {{
+    const r = await fetch('/api/session/new');
+    if (r.ok) {{
+      const d = await r.json();
+      sessionId = d.session_id;
+      updateSessionBadge();
+    }}
+  }} catch(e) {{}}
+}}
+
+function toggleSettings() {{
+  const panel = document.getElementById('settingsPanel');
+  panel.classList.toggle('open');
+}}
+
+function updateParamVal(sliderId, valId) {{
+  const slider = document.getElementById(sliderId);
+  const val = document.getElementById(valId);
+  if (slider && val) {{
+    val.textContent = slider.value;
+  }}
+}}
+
+function getGenerationParams() {{
+  const temp = parseFloat(document.getElementById('tempSlider').value);
+  const topP = parseFloat(document.getElementById('toppSlider').value);
+  const maxTok = parseInt(document.getElementById('maxTokInput').value);
+  document.getElementById('maxTokVal').textContent = maxTok || '0';
+  const params = {{temperature: temp, top_p: topP}};
+  if (maxTok > 0) params.max_tokens = maxTok;
+  return params;
+}}
+
+async function clearConversation() {{
+  if (!sessionId) return;
+  try {{
+    await fetch('/api/session/' + sessionId, {{method: 'DELETE'}});
+    conversationHistory = [];
+    const msgs = document.getElementById('messages');
+    msgs.innerHTML = '<div class="msg assistant"><div class="bubble">Conversation cleared. Starting fresh.</div></div>';
+    const r = await fetch('/api/session/new');
+    if (r.ok) {{
+      const d = await r.json();
+      sessionId = d.session_id;
+      updateSessionBadge();
+    }}
+  }} catch(e) {{}}
+}}
+
+function handleCommand(text) {{
+  if (text === '/clear') {{
+    clearConversation();
+    return true;
+  }}
+  if (text === '/help') {{
+    appendMsg('assistant',
+      'Commands:\\n' +
+      '/clear — Clear conversation history\\n' +
+      '/help — Show this help\\n\\n' +
+      'Natural commands:\\n' +
+      '"stop" / "that\\'s enough" — Stop current response\\n' +
+      '"continue" / "go on" — Continue previous response\\n' +
+      '"revise..." / "rewrite..." — Ask for revision',
+      '');
+    return true;
+  }}
+  return false;
 }}
 
 function appendMsg(role, text, statHtml) {{
@@ -458,7 +798,6 @@ function appendMsg(role, text, statHtml) {{
     `<div class="bubble">${{esc(text)}}</div>` +
     (statHtml ? `<div class="msg-meta"><div class="msg-stat">${{statHtml}}</div></div>` : '');
   box.appendChild(div);
-  // scroll so TOP of new answer is visible
   div.scrollIntoView({{behavior:'smooth', block:'start'}});
 }}
 
@@ -486,7 +825,6 @@ function updateStats(d) {{
   if (cp) {{ cp.textContent = pct+'%'; cp.style.color = col; }}
   const ct = document.getElementById('ctxTok');
   if (ct) ct.textContent = (d.tokens_after||0).toLocaleString() + ' / {CTX_LIMIT:,} tokens';
-  // refresh table row
   const tb = document.getElementById('tblBody');
   if (tb && d.ts) {{
     const hits = (d.hits||[]).map(h=>`<span class="hit">${{esc(h.source.replace('.md',''))}} <em>${{h.score}}</em></span>`).join(' ') || '<span style="color:#4b5563">—</span>';
@@ -503,8 +841,6 @@ function updateStats(d) {{
   }}
 }}
 
-
-// ── Left panel live polling (every 3s) ───────────────────────────────────────
 async function fetchModels() {{
   try {{
     const r = await fetch('/api/tags');
@@ -570,6 +906,7 @@ async function pollStats() {{
 setInterval(pollStats, 3000);
 pollStats();
 fetchModels();
+initSession();
 
 async function sendMessage() {{
   const input   = document.getElementById('chatInput');
@@ -578,9 +915,14 @@ async function sendMessage() {{
   const text    = input.value.trim();
   if (!text) return;
   if (!model) {{ alert('Enter a model name first.'); return; }}
+  if (handleCommand(text)) {{ input.value = ''; return; }}
+  inputHistory.unshift(text);
+  if (inputHistory.length > 50) inputHistory.pop();
+  inputHistoryIdx = -1;
   input.value = '';
   sendBtn.disabled = true;
   appendMsg('user', text, '');
+  conversationHistory.push({{role:'user', content:text}});
   showTyping();
 
   let assistantDiv = null;
@@ -601,10 +943,11 @@ async function sendMessage() {{
   }}
 
   try {{
+    const genParams = getGenerationParams();
     const resp = await fetch('/v1/chat/completions', {{
       method: 'POST',
       headers: {{'Content-Type':'application/json'}},
-      body: JSON.stringify({{model, messages:[{{role:'user',content:text}}], stream:true}})
+      body: JSON.stringify({{model, messages: conversationHistory, stream:true, session_id: sessionId, ...genParams}})
     }});
 
     if (!resp.ok) {{
@@ -644,6 +987,7 @@ async function sendMessage() {{
 
     ensureBubble();
     if (!fullText) bubble.innerHTML = '<em>(no response)</em>';
+    conversationHistory.push({{role:'assistant', content:fullText}});
 
     try {{
       const sr = await fetch('/stats');
@@ -708,6 +1052,25 @@ class DashboardHandler(_SuppressBrokenPipe, BaseHTTPRequestHandler):
                 self.end_headers()
                 self.wfile.write(err_body)
             return
+        if self.path == "/api/session/new":
+            sid = new_session()
+            body = json.dumps({"session_id": sid}).encode()
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+            return
+        if self.path == "/api/session/history":
+            with _lock:
+                sessions = {sid: {"msg_count": s["msg_count"], "created": s["created"]} for sid, s in _sessions.items()}
+            body = json.dumps({"sessions": sessions}).encode()
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+            return
         if self.path == "/stats":
             body = json.dumps(make_stats_json()).encode()
             self.send_response(200)
@@ -724,7 +1087,6 @@ class DashboardHandler(_SuppressBrokenPipe, BaseHTTPRequestHandler):
             self.wfile.write(page)
 
     def do_POST(self):
-        # Forward from dashboard chat to proxy
         length   = int(self.headers.get("Content-Length",0))
         raw_body = self.rfile.read(length)
         try:
@@ -773,6 +1135,8 @@ if __name__ == "__main__":
         print("ERROR: VOYAGE_API_KEY not set. Export it and retry.")
         raise SystemExit(1)
 
+    load_sessions()
+
     dash = ReusableHTTPServer(("0.0.0.0", DASHBOARD_PORT), DashboardHandler)
     threading.Thread(target=dash.serve_forever, daemon=True).start()
 
@@ -781,6 +1145,7 @@ if __name__ == "__main__":
     print(f"[contextcut] Qdrant     → {QDRANT_HOST}:{QDRANT_PORT} / {COLLECTION}")
     print(f"[contextcut] Min score  → {MIN_SCORE}  Top-K → {TOP_K}  CTX → {CTX_LIMIT}")
     print(f"[contextcut] Tokens     → {TOKEN_METHOD}")
+    print(f"[contextcut] Params     → temp={DEFAULT_TEMP} top_p={DEFAULT_TOP_P} max_tokens={DEFAULT_MAX_TK}")
     if DEFAULT_MODEL:
         print(f"[contextcut] Model      → {DEFAULT_MODEL}")
 
