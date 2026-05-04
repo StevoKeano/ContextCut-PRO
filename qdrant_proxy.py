@@ -148,8 +148,17 @@ class ReusableHTTPServer(ThreadingMixIn, HTTPServer):
     allow_reuse_address = True
     daemon_threads      = True
 
+# ── Broken-pipe suppression mixin ────────────────────────────────────────────
+class _SuppressBrokenPipe:
+    """Silently swallow BrokenPipeError / ConnectionResetError from client disconnects."""
+    def handle(self):
+        try:
+            super().handle()
+        except (BrokenPipeError, ConnectionResetError):
+            pass
+
 # ── Proxy ─────────────────────────────────────────────────────────────────────
-class ProxyHandler(BaseHTTPRequestHandler):
+class ProxyHandler(_SuppressBrokenPipe, BaseHTTPRequestHandler):
     def log_message(self, fmt, *args): pass
 
     def _forward(self, method: str, raw_body: bytes):
@@ -355,7 +364,7 @@ tr:hover td{{background:var(--surf2)}}
 <body>
 
 <div class="header">
-  <div class="logo">Context<span>Cut</span></div>
+  <div class="logo">ContextCut<span>-PRO</span></div>
   <div class="hinfo">{UPSTREAM} · Qdrant {QDRANT_HOST}:{QDRANT_PORT} · min_score={MIN_SCORE} · top_k={TOP_K}</div>
   <div class="live"><span class="dot"></span>live</div>
 </div>
@@ -603,7 +612,7 @@ async function sendMessage() {{
 </body></html>"""
 
 # ── Dashboard handler ─────────────────────────────────────────────────────────
-class DashboardHandler(BaseHTTPRequestHandler):
+class DashboardHandler(_SuppressBrokenPipe, BaseHTTPRequestHandler):
     def log_message(self, fmt, *args): pass
 
     def do_GET(self):
@@ -627,9 +636,12 @@ class DashboardHandler(BaseHTTPRequestHandler):
                 self.end_headers()
                 self.wfile.write(body)
             except Exception as e:
+                err_body = str(e).encode()
                 self.send_response(502)
+                self.send_header("Content-Type", "text/plain")
+                self.send_header("Content-Length", str(len(err_body)))
                 self.end_headers()
-                self.wfile.write(str(e).encode())
+                self.wfile.write(err_body)
             return
         if self.path == "/stats":
             body = json.dumps(make_stats_json()).encode()
