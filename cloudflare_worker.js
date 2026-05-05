@@ -48,9 +48,9 @@ async function handleWebhook(request, env) {
           <p>Thank you for your purchase. Here is your license information:</p>
           <p><strong>License Key:</strong> <code>${licenseKey}</code></p>
           <p><strong>Concurrent Seats:</strong> ${maxSeats}</p>
-          <h3>Quick Install (Recommended)</h3>
-          <p>Run this single command in your terminal:</p>
-          <pre><code>curl -fsSL "${installUrl}" | bash</code></pre>
+           <p><strong>Quick Install (Recommended)</strong></p>
+           <p>Run this command in your terminal:</p>
+           <pre><code>curl -fsSL "${installUrl}" | bash</code></pre>
           <h3>Manual Install</h3>
           <pre><code>curl -fsSL https://raw.githubusercontent.com/StevoKeano/ContextCut-PRO/main/install.sh | bash</code></pre>
           <p>When prompted, paste your license key: <code>${licenseKey}</code></p>
@@ -80,7 +80,7 @@ echo "  Downloading ContextCut PRO installer..."
 curl -fsSL "$SCRIPT_URL" -o /tmp/contextcut-install.sh
 chmod +x /tmp/contextcut-install.sh
 echo "  Running installer with your license key pre-loaded..."
-bash /tmp/contextcut-install.sh
+bash /tmp/contextcut-install.sh < /dev/tty
 rm -f /tmp/contextcut-install.sh
 `;
 
@@ -205,6 +205,15 @@ function json(status, data) {
 export default {
   async fetch(request, env, ctx) {
     const url = new URL(request.url);
+
+    if (url.pathname === "/health") {
+      try {
+        await env.LICENSE_KV.get("health_check");
+        return json(200, { status: "healthy", kv: "ok", uptime: "ok" });
+      } catch (e) {
+        return json(500, { status: "unhealthy", error: e.message });
+      }
+    }
 
     if (url.pathname === "/webhook/gumroad" && request.method === "POST") {
       return await handleWebhook(request, env);
