@@ -10,7 +10,22 @@ PLIST_PROXY="$HOME/Library/LaunchAgents/ai.contextcut.proxy.plist"
 PLIST_INGEST="$HOME/Library/LaunchAgents/ai.contextcut.ingest.plist"
 IS_MAC=false
 [ "$(uname)" = "Darwin" ] && IS_MAC=true
+# Print the big ASCII art
+echo "________/\\\\\\\\\\\\\\\\\\_____________________________________________________________________________________________/\\\\\\\\\\\\\\\\\\_____________________________"
+echo " _____/\\\\\\////////___________________________________________________________________________________________/\\\\\\////////______________________________"
+echo "  ___/\\\\\\/___________________________________________/\\\\\\_______________________________________/\\\\\\________/\\\\\\/_____________________________/\\\\\\______"
+echo "   __/\\\\\\_________________/\\\\\\\\\\_____/\\\\/\\\\\\\\\\\\____/\\\\\\\\\\\\\\\\\\\\\\_____/\\\\\\\\\\\\\\\\___/\\\\\\____/\\\\\\__/\\\\\\\\\\\\\\\\\\\\\\__/\\\\\\______________/\\\\\\____/\\\\\\__/\\\\\\\\\\\\\\\\\\\\\\_"
+echo "    _\\/\\\\\\_______________/\\\\\\///\\\\\\__\\/\\\\\\////\\\\\\__\\////\\\\\\////____/\\\\\\/////\\\\\\_\\///\\\\\\/\\\\\\/__\\////\\\\\\////__\\/\\\\\\_____________\\/\\\\\\___\\/\\\\\\_\\////\\\\\\////__"
+echo "     _\\//\\\\\\_____________/\\\\\\__\\//\\\\\\_\\/\\\\\\__\\//\\\\\\____\\/\\\\\\_______/\\\\\\\\\\\\\\\\\\\\\\____\\///\\\\\\/_______\\/\\\\\\______\\//\\\\\\____________\\/\\\\\\___\\/\\\\\\____\\/\\\\\\______"
+echo "      __\\///\\\\\\__________\\//\\\\\\__/\\\\\\__\\/\\\\\\___\\/\\\\\\____\\/\\\\\\_/\\\\__\\//\\\\///////______/\\\\\\/\\\\\\______\\/\\\\\\_/\\\\___\\///\\\\\\__________\\/\\\\\\___\\/\\\\\\____\\/\\\\\\_/\\\\__"
+echo "       ____\\////\\\\\\\\\\\\\\\\\\__\\///\\\\\\\\\\/___\\/\\\\\\___\\/\\\\\\____\\//\\\\\\\\\\____\\//\\\\\\\\\\\\\\\\\\\\__/\\\\\\/\\///\\\\\\____\\//\\\\\\\\\\______\\////\\\\\\\\\\\\\\\\\\_\\//\\\\\\\\\\\\\\\\\\_____\\//\\\\\\\\\\___"
+echo "        _______\\/////////_____\\/////_____\\///____\\///______\\/////______\\//////////__\\///____\\///______\\/////__________\\/////////___\\/////////_______\\/////____"
+# Wait 3 seconds
+sleep 2
 
+# Move cursor up and clear all the lines (11 lines total)
+printf '\033[11A'          # Move cursor up 11 lines
+printf '\033[0J'           # Clear from cursor to end of screen (removes the art)
 echo ""
 echo "  ContextCut installer"
 echo "  Stop wasting tokens. Inject only what matters."
@@ -31,7 +46,19 @@ fi
 if $AUTO_INSTALL; then
   # Auto-install: use defaults for everything, just ask for Voyage key
   echo ""
-  read -p "Voyage AI API key (from dash.voyageai.com): " VOYAGE_KEY
+  echo "  ── Configuration ──"
+  echo "  (Defaults applied for Ollama, Qdrant, ports. Only need your Voyage key.)"
+  echo ""
+  read -p "  Voyage AI API key (from dash.voyageai.com): " VOYAGE_KEY
+  if [ -z "$VOYAGE_KEY" ]; then
+    echo ""
+    echo "  ERROR: Voyage API key is required."
+    echo "  Run again and enter your key, or export VOYAGE_API_KEY first."
+    echo ""
+    echo "  Cleaning up partial install..."
+    rm -rf "$INSTALL_DIR"
+    exit 1
+  fi
   OLLAMA_HOST="localhost"
   OLLAMA_PORT="11434"
   QDRANT_HOST="localhost"
@@ -267,9 +294,10 @@ else
   # Linux — write systemd units or simple launch script
   cat > "$INSTALL_DIR/start.sh" << EOF
 #!/bin/bash
-source $INSTALL_DIR/.env
-export \$(cat $INSTALL_DIR/.env | xargs)
-$INSTALL_DIR/venv/bin/python $INSTALL_DIR/qdrant_proxy_final.py &
+set -a
+source "$INSTALL_DIR/.env"
+set +a
+"$INSTALL_DIR/venv/bin/python" "$INSTALL_DIR/qdrant_proxy_final.py" &
 echo "ContextCut started. Dashboard: http://localhost:$DASH_PORT"
 EOF
   chmod +x "$INSTALL_DIR/start.sh"
