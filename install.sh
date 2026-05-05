@@ -1,7 +1,6 @@
 #!/bin/bash
 # ContextCut installer — macOS / Linux
 # https://github.com/StevoKeano/ContextCut
-set -e
 
 REPO="https://raw.githubusercontent.com/StevoKeano/ContextCut-PRO/main"
 INSTALL_DIR="$HOME/contextcut"
@@ -29,73 +28,104 @@ fi
 
 # ── Collect config ────────────────────────────────────────────────────────────
 if $AUTO_INSTALL; then
-  # Auto-install: use defaults for everything, just ask for Voyage key
   echo ""
   echo "  ── Configuration ──"
-  echo "  (Defaults applied for Ollama, Qdrant, ports. Only need your Voyage key.)"
+  echo "  Defaults shown in [brackets]. Press Enter to accept, or type a new value."
   echo ""
+
   read -p "  Voyage AI API key (from dash.voyageai.com): " VOYAGE_KEY
   if [ -z "$VOYAGE_KEY" ]; then
-    echo ""
-    echo "  ERROR: Voyage API key is required."
-    echo "  Run again and enter your key, or export VOYAGE_API_KEY first."
-    echo ""
-    echo "  Cleaning up partial install..."
-    rm -rf "$INSTALL_DIR"
+    echo "ERROR: Voyage API key is required."
     exit 1
   fi
-  OLLAMA_HOST="localhost"
-  OLLAMA_PORT="11434"
-  QDRANT_HOST="localhost"
-  QDRANT_PORT="6333"
-  KB_DIR="$INSTALL_DIR/knowledge"
-  PROXY_PORT="18788"
-  DASH_PORT="18787"
-  CTX_LIMIT="8192"
-  MIN_SCORE="0.30"
+
+  read -p "  Ollama host [localhost]: " OLLAMA_HOST
+  OLLAMA_HOST="${OLLAMA_HOST:-localhost}"
+
+  read -p "  Ollama port [11434]: " OLLAMA_PORT
+  OLLAMA_PORT="${OLLAMA_PORT:-11434}"
+
+  read -p "  Qdrant host [localhost]: " QDRANT_HOST
+  QDRANT_HOST="${QDRANT_HOST:-localhost}"
+
+  read -p "  Qdrant port [6333]: " QDRANT_PORT
+  QDRANT_PORT="${QDRANT_PORT:-6333}"
+
+  read -p "  Knowledge base dir [$INSTALL_DIR/knowledge]: " KB_DIR
+  KB_DIR="${KB_DIR:-$INSTALL_DIR/knowledge}"
+
+  read -p "  Proxy port [18788]: " PROXY_PORT
+  PROXY_PORT="${PROXY_PORT:-18788}"
+
+  read -p "  Dashboard port [18787]: " DASH_PORT
+  DASH_PORT="${DASH_PORT:-18787}"
+
+  read -p "  Model context limit [8192]: " CTX_LIMIT
+  CTX_LIMIT="${CTX_LIMIT:-8192}"
+
+  read -p "  Minimum relevance score 0.0-1.0 [0.30]: " MIN_SCORE
+  MIN_SCORE="${MIN_SCORE:-0.30}"
+
+  echo ""
+  echo "  ── Confirm Your Settings ──"
+  echo "  License key : ${LICENSE_KEY:0:16}..."
+  echo "  Voyage API  : ${VOYAGE_KEY:0:8}..."
+  echo "  Ollama      : $OLLAMA_HOST:$OLLAMA_PORT"
+  echo "  Qdrant      : $QDRANT_HOST:$QDRANT_PORT"
+  echo "  KB dir      : $KB_DIR"
+  echo "  Proxy port  : $PROXY_PORT"
+  echo "  Dashboard   : $DASH_PORT"
+  echo "  CTX limit   : $CTX_LIMIT"
+  echo "  Min score   : $MIN_SCORE"
+  echo ""
+  read -p "  Proceed with these settings? [Y/n]: " CONFIRM
+  if [ "$CONFIRM" = "n" ] || [ "$CONFIRM" = "N" ]; then
+    echo "  Installation cancelled."
+    exit 1
+  fi
 else
   echo ""
   echo "  ── ContextCut PRO License ──"
   echo "  Your license key was sent to your email after purchase on Gumroad."
   echo "  It looks like: CC-PRO-xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx"
   echo ""
-  read -p "PRO License key: " LICENSE_KEY
+  read -p "  PRO License key: " LICENSE_KEY
   if [ -z "$LICENSE_KEY" ]; then
     echo "ERROR: License key is required. Purchase at https://5984630877416.gumroad.com/l/ContextCut-Pro"
     exit 1
   fi
 
-  read -p "Voyage AI API key (from dash.voyageai.com): " VOYAGE_KEY
+  read -p "  Voyage AI API key (from dash.voyageai.com): " VOYAGE_KEY
   if [ -z "$VOYAGE_KEY" ]; then
     echo "ERROR: Voyage API key is required."
     exit 1
   fi
 
-  read -p "Ollama host [localhost]: " OLLAMA_HOST
+  read -p "  Ollama host [localhost]: " OLLAMA_HOST
   OLLAMA_HOST="${OLLAMA_HOST:-localhost}"
 
-  read -p "Ollama port [11434]: " OLLAMA_PORT
+  read -p "  Ollama port [11434]: " OLLAMA_PORT
   OLLAMA_PORT="${OLLAMA_PORT:-11434}"
 
-  read -p "Qdrant host [localhost]: " QDRANT_HOST
+  read -p "  Qdrant host [localhost]: " QDRANT_HOST
   QDRANT_HOST="${QDRANT_HOST:-localhost}"
 
-  read -p "Qdrant port [6333]: " QDRANT_PORT
+  read -p "  Qdrant port [6333]: " QDRANT_PORT
   QDRANT_PORT="${QDRANT_PORT:-6333}"
 
-  read -p "Path to your markdown knowledge base [$INSTALL_DIR/knowledge]: " KB_DIR
+  read -p "  Knowledge base dir [$INSTALL_DIR/knowledge]: " KB_DIR
   KB_DIR="${KB_DIR:-$INSTALL_DIR/knowledge}"
 
-  read -p "Proxy port [18788]: " PROXY_PORT
+  read -p "  Proxy port [18788]: " PROXY_PORT
   PROXY_PORT="${PROXY_PORT:-18788}"
 
-  read -p "Dashboard port [18787]: " DASH_PORT
+  read -p "  Dashboard port [18787]: " DASH_PORT
   DASH_PORT="${DASH_PORT:-18787}"
 
-  read -p "Model context limit [8192]: " CTX_LIMIT
+  read -p "  Model context limit [8192]: " CTX_LIMIT
   CTX_LIMIT="${CTX_LIMIT:-8192}"
 
-  read -p "Minimum relevance score 0.0-1.0 [0.30]: " MIN_SCORE
+  read -p "  Minimum relevance score 0.0-1.0 [0.30]: " MIN_SCORE
   MIN_SCORE="${MIN_SCORE:-0.30}"
 fi
 
@@ -124,39 +154,8 @@ else
     fi
   else
     echo "  Docker not found. Install Qdrant manually:"
-    echo "  Docker not found. Install Qdrant manually:"
-    echo "  Docker not found. Install Qdrant manually:"
     echo "    https://qdrant.tech/documentation/quick-start/"
     echo "  Or install Docker Desktop: https://docker.com"
-    echo "  ....."    
-    echo "  after startup of docker desktop open a terminal and run"
-    echo "  docker run -d --name qdrant --restart always -p 6333:6333 -v $HOME/contextcut/qdrant_storage:/qdrant/storage  qdrant/qdrant "
-    echo "  ..... expected output below....."    
-    echo "    Unable to find image 'qdrant/qdrant:latest' locally"
-    echo "    latest: Pulling from qdrant/qdrant"
-    echo "    4f4fb700ef54: Pull complete ......"
-    echo "    .... 6c998556d346: Download complete"
-    echo "    Digest: sha256:94728574965d17c6485dd361aa3c0818b325b9016dac5ea6afec7b4b2700865f"
-    echo "    Status: Downloaded newer image for qdrant/qdrant:latest a0e3245612b372b9c387205491c2242773379d6689e9e0b04fef6fe2da924971"
-    echo "  ......... after install.... "
-    echo "  docker ps "
-    echo "        Expected output... "
-    echo "        CONTAINER ID   IMAGE           COMMAND             CREATED          STATUS          PORTS                                         NAMES"
-    echo "        a0e3245612b3   qdrant/qdrant   ./entrypoint.sh   27 minutes ago   Up 27 minutes   0.0.0.0:6333->6333/tcp, [::]:6333->6333/tcp   qdrant "
-    echo " . test endpoints ..."
-    echo "   curl http://localhost:6333/collections "
-    echo "       Expected output... "
-    echo "        {result:{collections:[]},status:ok,time:0.000010051} "
-    echo "   ...................."
-    echo "  mkdir  /home/steve/qdrant_storage "
-    echo "  docker stop qdrant   # or whatever your container name is"
-    echo "  docker rm -f qdrant " 
-    echo "  ..."
-    echo " docker run -d --name qdrant -p 6333:6333 -p 6334:6334 -v /home/steve/qdrant_storage:/qdrant/storage:z --restart unless-stopped  qdrant/qdrant:latest"
-    echo " Expected outpue:  b0a483b80871e128110ff48d87a0ae33f76244467850149b50b409062c88371b "
-    echo "  ..."
-    echo "  NOW RE-RUN /tmp/start.sh  using  [localhost] and port [6333]  for qdrant "
-
     exit 1
   fi
 fi
@@ -178,18 +177,18 @@ curl -sf "$REPO/ingest.py"       -o "$INSTALL_DIR/ingest.py"
 
 # ── Write env file ────────────────────────────────────────────────────────────
 cat > "$INSTALL_DIR/.env" << EOF
-CONTEXTCUT_LICENSE_KEY=$LICENSE_KEY
-CONTEXTCUT_LICENSE_SERVER=https://contextcut-license.ppsel03.workers.dev
-VOYAGE_API_KEY=$VOYAGE_KEY
-CONTEXTCUT_UPSTREAM=http://$OLLAMA_HOST:$OLLAMA_PORT
-CONTEXTCUT_QDRANT_HOST=$QDRANT_HOST
-CONTEXTCUT_QDRANT_PORT=$QDRANT_PORT
-CONTEXTCUT_KB_DIR=$KB_DIR
-CONTEXTCUT_PROXY_PORT=$PROXY_PORT
-CONTEXTCUT_DASHBOARD_PORT=$DASH_PORT
-CONTEXTCUT_CTX_LIMIT=$CTX_LIMIT
-CONTEXTCUT_MIN_SCORE=$MIN_SCORE
-CONTEXTCUT_COLLECTION=contextcut
+CONTEXTCUT_LICENSE_KEY="$LICENSE_KEY"
+CONTEXTCUT_LICENSE_SERVER="https://contextcut-license.ppsel03.workers.dev"
+VOYAGE_API_KEY="$VOYAGE_KEY"
+CONTEXTCUT_UPSTREAM="http://$OLLAMA_HOST:$OLLAMA_PORT"
+CONTEXTCUT_QDRANT_HOST="$QDRANT_HOST"
+CONTEXTCUT_QDRANT_PORT="$QDRANT_PORT"
+CONTEXTCUT_KB_DIR="$KB_DIR"
+CONTEXTCUT_PROXY_PORT="$PROXY_PORT"
+CONTEXTCUT_DASHBOARD_PORT="$DASH_PORT"
+CONTEXTCUT_CTX_LIMIT="$CTX_LIMIT"
+CONTEXTCUT_MIN_SCORE="$MIN_SCORE"
+CONTEXTCUT_COLLECTION="contextcut"
 EOF
 chmod 600 "$INSTALL_DIR/.env"
 
