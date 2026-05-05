@@ -308,38 +308,64 @@ else
 set -a
 source "$(dirname "$0")/.env"
 set +a
-PIDFILE="$(dirname "$0")/.proxy.pid"
-if [ -f "$PIDFILE" ] && kill -0 $(cat "$PIDFILE") 2>/dev/null; then
-  echo "Proxy already running (PID $(cat "$PIDFILE")). Stop it first with ./stop.sh"
+
+INST="$(dirname "$0")"
+
+# ── Start watcher ──
+WATCHER_PIDFILE="$INST/.ingest.pid"
+if [ -f "$WATCHER_PIDFILE" ] && kill -0 $(cat "$WATCHER_PIDFILE") 2>/dev/null; then
+  echo "Watcher already running (PID $(cat "$WATCHER_PIDFILE"))."
+else
+  "$INST/venv/bin/python" "$INST/ingest.py" --watch &
+  echo $! > "$WATCHER_PIDFILE"
+  echo "Watcher started. PID: $(cat "$WATCHER_PIDFILE")"
+fi
+
+# ── Start proxy ──
+PROXY_PIDFILE="$INST/.proxy.pid"
+if [ -f "$PROXY_PIDFILE" ] && kill -0 $(cat "$PROXY_PIDFILE") 2>/dev/null; then
+  echo "Proxy already running (PID $(cat "$PROXY_PIDFILE")). Stop it first with ./stop.sh"
   exit 1
 fi
-source "$(dirname "$0")/.env"
-"$(dirname "$0")/venv/bin/python" "$(dirname "$0")/qdrant_proxy_final.py" &
-echo $! > "$PIDFILE"
+source "$INST/.env"
+"$INST/venv/bin/python" "$INST/qdrant_proxy_final.py" &
+echo $! > "$PROXY_PIDFILE"
 echo "ContextCut started. Dashboard: http://localhost:${CONTEXTCUT_DASHBOARD_PORT}"
-echo "PID: $(cat "$PIDFILE")"
 STARTEOF
   chmod +x "$INSTALL_DIR/start.sh"
 
   cat > "$INSTALL_DIR/stop.sh" << 'STOPEOF'
 #!/bin/bash
-PIDFILE="$(dirname "$0")/.proxy.pid"
-if [ -f "$PIDFILE" ]; then
-  PID=$(cat "$PIDFILE")
+INST="$(dirname "$0")"
+
+# Stop watcher
+WATCHER_PIDFILE="$INST/.ingest.pid"
+if [ -f "$WATCHER_PIDFILE" ]; then
+  PID=$(cat "$WATCHER_PIDFILE")
+  if kill -0 "$PID" 2>/dev/null; then
+    echo "Stopping watcher (PID $PID)..."
+    kill "$PID"
+    echo "Watcher stopped."
+  fi
+  rm -f "$WATCHER_PIDFILE"
+fi
+
+# Stop proxy
+PROXY_PIDFILE="$INST/.proxy.pid"
+if [ -f "$PROXY_PIDFILE" ]; then
+  PID=$(cat "$PROXY_PIDFILE")
   if kill -0 "$PID" 2>/dev/null; then
     echo "Stopping proxy (PID $PID)..."
     kill "$PID"
-    rm -f "$PIDFILE"
     echo "Proxy stopped."
-  else
-    echo "Process $PID not running. Cleaning up."
-    rm -f "$PIDFILE"
   fi
+  rm -f "$PROXY_PIDFILE"
 else
-  echo "No PID file found. Stopping any proxy processes..."
+  echo "No PID files found. Attempting pkill..."
+  pkill -f ingest.py 2>/dev/null
   pkill -f qdrant_proxy_final.py 2>/dev/null
-  echo "Done."
 fi
+echo "Done."
 STOPEOF
   chmod +x "$INSTALL_DIR/stop.sh"
 
