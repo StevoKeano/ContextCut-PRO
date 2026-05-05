@@ -76,11 +76,12 @@ async function handleInstallLink(request, env, licenseKey) {
 set -e
 export CONTEXTCUT_LICENSE_KEY="${licenseKey}"
 SCRIPT_URL="https://raw.githubusercontent.com/StevoKeano/ContextCut-PRO/main/install.sh"
-SCRIPT_FILE="/tmp/contextcut-install.sh"
-curl -fsSL "$SCRIPT_URL" -o "$SCRIPT_FILE"
-chmod +x "$SCRIPT_FILE"
-bash "$SCRIPT_FILE"
-rm -f "$SCRIPT_FILE"
+echo "  Downloading ContextCut PRO installer..."
+curl -fsSL "$SCRIPT_URL" -o /tmp/contextcut-install.sh
+chmod +x /tmp/contextcut-install.sh
+echo "  Running installer with your license key pre-loaded..."
+bash /tmp/contextcut-install.sh
+rm -f /tmp/contextcut-install.sh
 `;
 
   return new Response(installScript, {
