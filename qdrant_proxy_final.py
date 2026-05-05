@@ -25,6 +25,7 @@ import json
 import html
 import time
 import socket
+import random
 import threading
 import urllib.request
 import urllib.error
@@ -373,21 +374,43 @@ _last_embed_ts = 0.0
 def get_clients():
     global _vc, _qclient
     if _vc is None:
-        _vc = voyageai.Client()
+        _vc = voyageai.Client(api_key=os.getenv("VOYAGE_API_KEY"))
     if _qclient is None:
         _qclient = QdrantClient(host=QDRANT_HOST, port=QDRANT_PORT)
     return _vc, _qclient
 
 # ── Qdrant lookup ─────────────────────────────────────────────────────────────
-def qdrant_context(query: str) -> tuple[str, list[dict]]:
+def _safe_embed(query: str, input_type: str) -> list[float] | None:
+    """Embed with retry on rate limit (matches ingest.py safe_embed)."""
     global _last_embed_ts
-    try:
-        vc, qclient = get_clients()
+    max_retries = 3
+    for attempt in range(max_retries):
         elapsed = time.time() - _last_embed_ts
-        if elapsed < 21.0:
-            time.sleep(21.0 - elapsed)
-        emb = vc.embed([query], model="voyage-3", input_type="query").embeddings[0]
-        _last_embed_ts = time.time()
+        if elapsed < 22.0:
+            time.sleep(22.0 - elapsed)
+        try:
+            vc, _ = get_clients()
+            result = vc.embed([query], model="voyage-3", input_type=input_type)
+            _last_embed_ts = time.time()
+            return result.embeddings[0]
+        except Exception as e:
+            err_msg = str(e).lower()
+            if "rate" in err_msg or "429" in err_msg:
+                wait = 60 + random.uniform(5, 15)
+                print(f"[contextcut] Voyage rate-limited, backing off {wait:.0f}s (attempt {attempt+1}/{max_retries})")
+                time.sleep(wait)
+            else:
+                print(f"[contextcut] Voyage embed error: {e}")
+                return None
+    print(f"[contextcut] Voyage embed failed after {max_retries} retries")
+    return None
+
+def qdrant_context(query: str) -> tuple[str, list[dict]]:
+    try:
+        emb = _safe_embed(query, input_type="query")
+        if emb is None:
+            return "", []
+        vc, qclient = get_clients()
         response = qclient.query_points(
             collection_name=COLLECTION, query=emb,
             limit=TOP_K, with_payload=True, with_vectors=False,
@@ -405,7 +428,6 @@ def qdrant_context(query: str) -> tuple[str, list[dict]]:
         return "\n\n---\n\n".join(chunks), meta
     except Exception as e:
         print(f"[contextcut] Qdrant error: {e}")
-        _last_embed_ts = time.time()
         return "", []
 
 # ── Context injection ─────────────────────────────────────────────────────────
