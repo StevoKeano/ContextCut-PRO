@@ -11,12 +11,19 @@ PLIST_INGEST="$HOME/Library/LaunchAgents/ai.contextcut.ingest.plist"
 IS_MAC=false
 [ "$(uname)" = "Darwin" ] && IS_MAC=true
 
+
+
 echo ""
 echo "  ContextCut installer"
 echo "  Stop wasting tokens. Inject only what matters."
 echo "  ──────────────────────────────────────────────"
 echo ""
 
+
+# If stdin is a pipe (piped install), use /dev/tty for interactive prompts
+if [ ! -t 0 ]; then
+  exec < /dev/tty
+fi
 
 # ── Collect config ────────────────────────────────────────────────────────────
 
