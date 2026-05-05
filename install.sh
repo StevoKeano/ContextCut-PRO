@@ -63,8 +63,8 @@ if $AUTO_INSTALL; then
   read -p "  Model context limit [8192]: " CTX_LIMIT
   CTX_LIMIT="${CTX_LIMIT:-8192}"
 
-  read -p "  Minimum relevance score 0.0-1.0 [0.30]: " MIN_SCORE
-  MIN_SCORE="${MIN_SCORE:-0.30}"
+  read -p "  Minimum relevance score 0.0-1.0 [0.20]: " MIN_SCORE
+  MIN_SCORE="${MIN_SCORE:-0.20}"
 
   echo ""
   echo "  ── Confirm Your Settings ──"
@@ -125,8 +125,8 @@ else
   read -p "  Model context limit [8192]: " CTX_LIMIT
   CTX_LIMIT="${CTX_LIMIT:-8192}"
 
-  read -p "  Minimum relevance score 0.0-1.0 [0.30]: " MIN_SCORE
-  MIN_SCORE="${MIN_SCORE:-0.30}"
+  read -p "  Minimum relevance score 0.0-1.0 [0.20]: " MIN_SCORE
+  MIN_SCORE="${MIN_SCORE:-0.20}"
 fi
 
 echo ""
@@ -177,18 +177,18 @@ curl -sf "$REPO/ingest.py"       -o "$INSTALL_DIR/ingest.py"
 
 # ── Write env file ────────────────────────────────────────────────────────────
 cat > "$INSTALL_DIR/.env" << EOF
-CONTEXTCUT_LICENSE_KEY="$LICENSE_KEY"
-CONTEXTCUT_LICENSE_SERVER="https://contextcut-license.ppsel03.workers.dev"
-VOYAGE_API_KEY="$VOYAGE_KEY"
-CONTEXTCUT_UPSTREAM="http://$OLLAMA_HOST:$OLLAMA_PORT"
-CONTEXTCUT_QDRANT_HOST="$QDRANT_HOST"
-CONTEXTCUT_QDRANT_PORT="$QDRANT_PORT"
-CONTEXTCUT_KB_DIR="$KB_DIR"
-CONTEXTCUT_PROXY_PORT="$PROXY_PORT"
-CONTEXTCUT_DASHBOARD_PORT="$DASH_PORT"
-CONTEXTCUT_CTX_LIMIT="$CTX_LIMIT"
-CONTEXTCUT_MIN_SCORE="$MIN_SCORE"
-CONTEXTCUT_COLLECTION="contextcut"
+CONTEXTCUT_LICENSE_KEY=$LICENSE_KEY
+CONTEXTCUT_LICENSE_SERVER=https://contextcut-license.ppsel03.workers.dev
+VOYAGE_API_KEY=$VOYAGE_KEY
+CONTEXTCUT_UPSTREAM=http://$OLLAMA_HOST:$OLLAMA_PORT
+CONTEXTCUT_QDRANT_HOST=$QDRANT_HOST
+CONTEXTCUT_QDRANT_PORT=$QDRANT_PORT
+CONTEXTCUT_KB_DIR=$KB_DIR
+CONTEXTCUT_PROXY_PORT=$PROXY_PORT
+CONTEXTCUT_DASHBOARD_PORT=$DASH_PORT
+CONTEXTCUT_CTX_LIMIT=$CTX_LIMIT
+CONTEXTCUT_MIN_SCORE=$MIN_SCORE
+CONTEXTCUT_COLLECTION=contextcut
 EOF
 chmod 600 "$INSTALL_DIR/.env"
 
@@ -275,16 +275,47 @@ EOF
   echo "  launchd agents started."
 
 else
-  # Linux — write systemd units or simple launch script
-  cat > "$INSTALL_DIR/start.sh" << EOF
+  # Linux — write start/stop scripts
+  cat > "$INSTALL_DIR/start.sh" << 'STARTEOF'
 #!/bin/bash
 set -a
-source "$INSTALL_DIR/.env"
+source "$(dirname "$0")/.env"
 set +a
-"$INSTALL_DIR/venv/bin/python" "$INSTALL_DIR/qdrant_proxy_final.py" &
-echo "ContextCut started. Dashboard: http://localhost:$DASH_PORT"
-EOF
+PIDFILE="$(dirname "$0")/.proxy.pid"
+if [ -f "$PIDFILE" ] && kill -0 $(cat "$PIDFILE") 2>/dev/null; then
+  echo "Proxy already running (PID $(cat "$PIDFILE")). Stop it first with ./stop.sh"
+  exit 1
+fi
+source "$(dirname "$0")/.env"
+"$(dirname "$0")/venv/bin/python" "$(dirname "$0")/qdrant_proxy_final.py" &
+echo $! > "$PIDFILE"
+echo "ContextCut started. Dashboard: http://localhost:${CONTEXTCUT_DASHBOARD_PORT}"
+echo "PID: $(cat "$PIDFILE")"
+STARTEOF
   chmod +x "$INSTALL_DIR/start.sh"
+
+  cat > "$INSTALL_DIR/stop.sh" << 'STOPEOF'
+#!/bin/bash
+PIDFILE="$(dirname "$0")/.proxy.pid"
+if [ -f "$PIDFILE" ]; then
+  PID=$(cat "$PIDFILE")
+  if kill -0 "$PID" 2>/dev/null; then
+    echo "Stopping proxy (PID $PID)..."
+    kill "$PID"
+    rm -f "$PIDFILE"
+    echo "Proxy stopped."
+  else
+    echo "Process $PID not running. Cleaning up."
+    rm -f "$PIDFILE"
+  fi
+else
+  echo "No PID file found. Stopping any proxy processes..."
+  pkill -f qdrant_proxy_final.py 2>/dev/null
+  echo "Done."
+fi
+STOPEOF
+  chmod +x "$INSTALL_DIR/stop.sh"
+
   echo "  Linux: starting services now..."
   bash "$INSTALL_DIR/start.sh"
 fi

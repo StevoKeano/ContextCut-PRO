@@ -46,7 +46,7 @@ LISTEN_PORT    = int(os.getenv("CONTEXTCUT_PROXY_PORT",     "18788"))
 DASHBOARD_PORT = int(os.getenv("CONTEXTCUT_DASHBOARD_PORT", "18787"))
 CTX_LIMIT      = int(os.getenv("CONTEXTCUT_CTX_LIMIT",   "8192"))
 TOP_K          = int(os.getenv("CONTEXTCUT_TOP_K",       "5"))
-MIN_SCORE      = float(os.getenv("CONTEXTCUT_MIN_SCORE", "0.30"))
+MIN_SCORE      = float(os.getenv("CONTEXTCUT_MIN_SCORE", "0.20"))
 DEFAULT_MODEL  = os.getenv("CONTEXTCUT_MODEL",           "")
 DEFAULT_TEMP   = float(os.getenv("CONTEXTCUT_TEMP",      "0.7"))
 DEFAULT_MAX_TK = int(os.getenv("CONTEXTCUT_MAX_TOKENS",  "0"))
@@ -864,6 +864,11 @@ tr:hover td{{background:var(--surf2)}}
             <input type="number" class="param-slider" id="maxTokInput" min="0" max="32768" step="64" value="{DEFAULT_MAX_TK}" style="width:70px;background:var(--bg);border:1px solid var(--border);border-radius:2px;padding:2px 4px;color:var(--accent);font-size:10px;font-family:'JetBrains Mono',monospace">
             <span class="param-val" id="maxTokVal">{DEFAULT_MAX_TK}</span>
           </div>
+          <div class="param-group">
+            <span class="param-label">Min score:</span>
+            <input type="range" class="param-slider" id="minscoreSlider" min="0.0" max="0.6" step="0.05" value="{MIN_SCORE}" oninput="updateMinScore()">
+            <span class="param-val" id="minscoreVal">{MIN_SCORE}</span>
+          </div>
         </div>
       </div>
       <div class="input-row">
@@ -939,6 +944,19 @@ function updateParamVal(sliderId, valId) {{
   const val = document.getElementById(valId);
   if (slider && val) {{
     val.textContent = slider.value;
+  }}
+}}
+
+function updateMinScore() {{
+  const slider = document.getElementById('minscoreSlider');
+  const val = document.getElementById('minscoreVal');
+  if (slider && val) {{
+    val.textContent = parseFloat(slider.value).toFixed(2);
+    fetch('/api/settings', {{
+      method: 'POST',
+      headers: {{'Content-Type': 'application/json'}},
+      body: JSON.stringify({{min_score: parseFloat(slider.value)}})
+    }}).catch(e => console.warn('min_score sync failed', e));
   }}
 }}
 
@@ -1319,6 +1337,32 @@ class DashboardHandler(_SuppressBrokenPipe, BaseHTTPRequestHandler):
     def do_POST(self):
         length   = int(self.headers.get("Content-Length",0))
         raw_body = self.rfile.read(length)
+
+        # ── Settings endpoint: update global MIN_SCORE live ──
+        if self.path == "/api/settings":
+            try:
+                body = json.loads(raw_body)
+                if "min_score" in body:
+                    global MIN_SCORE
+                    with _lock:
+                        MIN_SCORE = float(body["min_score"])
+                    print(f"[contextcut] Min score updated live: {MIN_SCORE}")
+                    resp = json.dumps({"ok": True, "min_score": MIN_SCORE}).encode()
+                    self.send_response(200)
+                    self.send_header("Content-Type", "application/json")
+                    self.send_header("Content-Length", str(len(resp)))
+                    self.end_headers()
+                    self.wfile.write(resp)
+                    return
+            except Exception as e:
+                err = json.dumps({"error": str(e)}).encode()
+                self.send_response(400)
+                self.send_header("Content-Type", "application/json")
+                self.send_header("Content-Length", str(len(err)))
+                self.end_headers()
+                self.wfile.write(err)
+                return
+
         try:
             parsed_body = json.loads(raw_body)
         except Exception:
