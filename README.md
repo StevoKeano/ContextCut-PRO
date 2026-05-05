@@ -55,7 +55,7 @@ Most RAG implementations stuff your entire knowledge base into every prompt. Con
 - [Voyage AI API key](https://dash.voyageai.com) (free tier works)
 - [Qdrant](https://qdrant.tech) running locally or on your LAN
 - Ollama or any OpenAI-compatible LLM endpoint
-- Valid PRO license key
+- See [LICENSE-PRO.md](LICENSE-PRO.md) for full terms
 
 ---
 
@@ -132,11 +132,13 @@ Start at `0.30` and adjust for your domain.
 
 **Pro License – $29.88 one-time per seat**
 
+ContextCut PRO is proprietary software. Purchase grants a single-seat commercial license.
+
 - Lifetime commercial usage rights
 - Priority support
 - Advanced context-cutting rules & presets
 - Pro dashboard features
-- License key activation
+- See [LICENSE-PRO.md](LICENSE-PRO.md) for full terms
 
 [Buy Pro License →](https://5984630877416.gumroad.com/l/ContextCut-Pro)
 

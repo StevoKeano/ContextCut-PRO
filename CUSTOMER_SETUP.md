@@ -4,7 +4,27 @@ Welcome to ContextCut PRO. Follow the steps below to get started.
 
 ## Quick Start
 
-### 1. Requirements
+### 1. Get Your License Key
+
+After purchasing on Gumroad, you'll receive an email with your license key and a **one-click install link**.
+
+**One-command install (recommended):**
+
+```bash
+curl -fsSL "https://contextcut-license.ppsel03.workers.dev/install/CC-PRO-YOUR-UUID" | bash
+```
+
+This auto-fills your license key. No manual entry needed.
+
+**Manual install:**
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/StevoKeano/ContextCut-PRO/main/install.sh | bash
+```
+
+You'll be prompted for your license key during setup.
+
+### 2. Requirements
 
 - Python 3.10+
 - [Voyage AI API key](https://dash.voyageai.com)
@@ -49,6 +69,7 @@ python3 qdrant_proxy_final.py
 ```
 
 Expected output:
+
 ```
 [contextcut] Validating license key...
 [contextcut] License: single | License activated
@@ -71,11 +92,11 @@ Your license supports **concurrent instances** (check your purchase for seat cou
 
 ### Common Issues
 
-| Problem | Solution |
-|---|---|
+| Problem                 | Solution                                                                                                      |
+| ----------------------- | ------------------------------------------------------------------------------------------------------------- |
 | `License limit reached` | You exceeded your concurrent seat limit. Stop an existing instance, or wait 30 min for a stale seat to expire |
-| `Invalid license key` | Double-check your key. If it still fails, contact support |
-| `HTTP 403 / 1010` | Network or firewall issue. Ensure you can reach `https://contextcut-license.ppsel03.workers.dev` |
+| `Invalid license key`   | Double-check your key. If it still fails, contact support                                                     |
+| `HTTP 403 / 1010`       | Network or firewall issue. Ensure you can reach `https://contextcut-license.ppsel03.workers.dev`              |
 
 ### Reset Your Seats
 
@@ -88,29 +109,31 @@ python3 license_tool.py reset --key YOUR-LICENSE-KEY
 ## Dashboard
 
 Open `http://localhost:18787` for the PRO split-panel dashboard:
+
 - **Left panel** — live stats, context usage bar, per-request token table
 - **Right panel** — integrated chat with model selector and parameter controls
 
 ## Commands
 
-| Command | Description |
-|---|---|
+| Command  | Description                |
+| -------- | -------------------------- |
 | `/clear` | Clear conversation history |
-| `/help` | Show available commands |
+| `/help`  | Show available commands    |
 
 Natural commands the model responds to:
+
 - `"stop"` / `"that's enough"` — stop current response
 - `"continue"` / `"go on"` — continue previous response
 - `"revise..."` / `"rewrite..."` — revise previous response
 
 ## Keyboard Shortcuts
 
-| Key | Action |
-|---|---|
-| Enter | Send message |
-| Shift+Enter | New line |
+| Key             | Action           |
+| --------------- | ---------------- |
+| Enter           | Send message     |
+| Shift+Enter     | New line         |
 | ↑ (empty input) | Previous message |
-| ↓ | Next message |
+| ↓               | Next message     |
 
 ## Support
 

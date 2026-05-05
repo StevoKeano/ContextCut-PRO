@@ -3,7 +3,7 @@
 # https://github.com/StevoKeano/ContextCut
 set -e
 
-REPO="https://raw.githubusercontent.com/StevoKeano/ContextCut/main"
+REPO="https://raw.githubusercontent.com/StevoKeano/ContextCut-PRO/main"
 INSTALL_DIR="$HOME/contextcut"
 LOG_DIR="$HOME/.contextcut/logs"
 PLIST_PROXY="$HOME/Library/LaunchAgents/ai.contextcut.proxy.plist"
@@ -34,6 +34,27 @@ echo ""
 
 
 # ── Collect config ────────────────────────────────────────────────────────────
+
+# License key from piped install URL?
+if [ -n "$CONTEXTCUT_LICENSE_KEY" ]; then
+  LICENSE_KEY="$CONTEXTCUT_LICENSE_KEY"
+  echo ""
+  echo "  ── ContextCut PRO License ──"
+  echo "  License key detected automatically."
+  echo "  Key: ${LICENSE_KEY:0:16}..."
+else
+  echo ""
+  echo "  ── ContextCut PRO License ──"
+  echo "  Your license key was sent to your email after purchase on Gumroad."
+  echo "  It looks like: CC-PRO-xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx"
+  echo ""
+  read -p "PRO License key: " LICENSE_KEY
+  if [ -z "$LICENSE_KEY" ]; then
+    echo "ERROR: License key is required. Purchase at https://5984630877416.gumroad.com/l/ContextCut-Pro"
+    exit 1
+  fi
+fi
+
 read -p "Voyage AI API key (from dash.voyageai.com): " VOYAGE_KEY
 if [ -z "$VOYAGE_KEY" ]; then
   echo "ERROR: Voyage API key is required."
@@ -141,11 +162,13 @@ pip install tiktoken -q && echo "  tiktoken installed (exact token counts)" || e
 
 # ── Download scripts ──────────────────────────────────────────────────────────
 echo "  Downloading ContextCut scripts..."
-curl -sf "$REPO/qdrant_proxy.py" -o "$INSTALL_DIR/qdrant_proxy.py"
+curl -sf "$REPO/qdrant_proxy_final.py" -o "$INSTALL_DIR/qdrant_proxy_final.py"
 curl -sf "$REPO/ingest.py"       -o "$INSTALL_DIR/ingest.py"
 
 # ── Write env file ────────────────────────────────────────────────────────────
 cat > "$INSTALL_DIR/.env" << EOF
+CONTEXTCUT_LICENSE_KEY=$LICENSE_KEY
+CONTEXTCUT_LICENSE_SERVER=https://contextcut-license.ppsel03.workers.dev
 VOYAGE_API_KEY=$VOYAGE_KEY
 CONTEXTCUT_UPSTREAM=http://$OLLAMA_HOST:$OLLAMA_PORT
 CONTEXTCUT_QDRANT_HOST=$QDRANT_HOST
@@ -176,7 +199,7 @@ if $IS_MAC; then
   <key>ProgramArguments</key>
   <array>
     <string>$INSTALL_DIR/venv/bin/python</string>
-    <string>$INSTALL_DIR/qdrant_proxy.py</string>
+    <string>$INSTALL_DIR/qdrant_proxy_final.py</string>
   </array>
   <key>StandardOutPath</key><string>$LOG_DIR/proxy.log</string>
   <key>StandardErrorPath</key><string>$LOG_DIR/proxy.err.log</string>
@@ -185,6 +208,8 @@ if $IS_MAC; then
   <dict>
     <key>HOME</key><string>$HOME</string>
     <key>PATH</key><string>$INSTALL_DIR/venv/bin:/usr/local/bin:/usr/bin:/bin</string>
+    <key>CONTEXTCUT_LICENSE_KEY</key><string>$LICENSE_KEY</string>
+    <key>CONTEXTCUT_LICENSE_SERVER</key><string>https://contextcut-license.ppsel03.workers.dev</string>
     <key>VOYAGE_API_KEY</key><string>$VOYAGE_KEY</string>
     <key>CONTEXTCUT_UPSTREAM</key><string>http://$OLLAMA_HOST:$OLLAMA_PORT</string>
     <key>CONTEXTCUT_QDRANT_HOST</key><string>$QDRANT_HOST</string>
@@ -245,7 +270,7 @@ else
 #!/bin/bash
 source $INSTALL_DIR/.env
 export \$(cat $INSTALL_DIR/.env | xargs)
-$INSTALL_DIR/venv/bin/python $INSTALL_DIR/qdrant_proxy.py &
+$INSTALL_DIR/venv/bin/python $INSTALL_DIR/qdrant_proxy_final.py &
 echo "ContextCut started. Dashboard: http://localhost:$DASH_PORT"
 EOF
   chmod +x "$INSTALL_DIR/start.sh"
