@@ -75,9 +75,12 @@ async function handleInstallLink(request, env, licenseKey) {
   const installScript = `#!/bin/bash
 set -e
 export CONTEXTCUT_LICENSE_KEY="${licenseKey}"
-export LICENSE_FROM_URL=1
 SCRIPT_URL="https://raw.githubusercontent.com/StevoKeano/ContextCut-PRO/main/install.sh"
-curl -fsSL "$SCRIPT_URL" | bash
+SCRIPT_FILE="/tmp/contextcut-install.sh"
+curl -fsSL "$SCRIPT_URL" -o "$SCRIPT_FILE"
+chmod +x "$SCRIPT_FILE"
+bash "$SCRIPT_FILE"
+rm -f "$SCRIPT_FILE"
 `;
 
   return new Response(installScript, {
