@@ -370,11 +370,16 @@ signal.signal(signal.SIGTERM, _handle_signal)
 _vc            = None
 _qclient       = None
 _last_embed_ts = 0.0
+_VK            = os.environ.get("VOYAGE_API_KEY", "").strip().strip('"').strip("'")  # strip accidental quotes
 
 def get_clients():
     global _vc, _qclient
     if _vc is None:
-        _vc = voyageai.Client(api_key=os.getenv("VOYAGE_API_KEY"))
+        if not _VK:
+            print("[contextcut] WARNING: VOYAGE_API_KEY is empty at get_clients()")
+        else:
+            print(f"[contextcut] Voyage API key loaded: {_VK[:8]}...")
+        _vc = voyageai.Client(api_key=_VK)
     if _qclient is None:
         _qclient = QdrantClient(host=QDRANT_HOST, port=QDRANT_PORT)
     return _vc, _qclient
@@ -401,6 +406,7 @@ def _safe_embed(query: str, input_type: str) -> list[float] | None:
                 time.sleep(wait)
             else:
                 print(f"[contextcut] Voyage embed error: {e}")
+                print(f"[contextcut] API key present: {bool(_VK)}, first 4 chars: {_VK[:4] if _VK else 'NONE'}")
                 return None
     print(f"[contextcut] Voyage embed failed after {max_retries} retries")
     return None
@@ -409,6 +415,7 @@ def qdrant_context(query: str) -> tuple[str, list[dict]]:
     try:
         emb = _safe_embed(query, input_type="query")
         if emb is None:
+            print(f"[contextcut] qdrant_context: embed returned None for query={query[:60]!r}")
             return "", []
         vc, qclient = get_clients()
         response = qclient.query_points(
@@ -417,17 +424,22 @@ def qdrant_context(query: str) -> tuple[str, list[dict]]:
         )
         chunks, meta = [], []
         for h in response.points:
-            if h.score < MIN_SCORE:
-                print(f"[contextcut] skip {round(h.score,3)} < {MIN_SCORE}")
+            score = round(h.score, 3)
+            if score < MIN_SCORE:
+                print(f"[contextcut] skip score={score} < {MIN_SCORE} for {h.payload.get('filename','?')}")
                 continue
             src   = h.payload.get("filename", h.payload.get("source", "?"))
             text  = h.payload.get("text", "")
-            score = round(h.score, 3)
             chunks.append(f"[{src} | relevance={score}]\n{text}")
             meta.append({"source": src, "score": score, "chars": len(text)})
+        if meta:
+            print(f"[contextcut] qdrant_context: {len(meta)} hits for query={query[:60]!r}")
+        else:
+            print(f"[contextcut] qdrant_context: 0 hits for query={query[:60]!r}")
         return "\n\n---\n\n".join(chunks), meta
     except Exception as e:
         print(f"[contextcut] Qdrant error: {e}")
+        import traceback; traceback.print_exc()
         return "", []
 
 # ── Context injection ─────────────────────────────────────────────────────────
