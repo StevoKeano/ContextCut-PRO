@@ -1605,6 +1605,7 @@ class DashboardHandler(_SuppressBrokenPipe, BaseHTTPRequestHandler):
             self.wfile.write(body)
             return
         if self.path == "/api/tags":
+            # Used by dashboard to populate model dropdown
             try:
                 upstream = get_current_upstream()
                 api_key = get_current_api_key()
@@ -1616,7 +1617,6 @@ class DashboardHandler(_SuppressBrokenPipe, BaseHTTPRequestHandler):
                         models = [{"name": m["name"]} for m in data.get("models", [])]
                         body = json.dumps({"models": models}).encode()
                 else:
-                    # Cloud providers: {base}/v1/models
                     url = f"{upstream}/v1/models"
                     req = urllib.request.Request(url, method="GET")
                     if api_key:
@@ -1630,20 +1630,35 @@ class DashboardHandler(_SuppressBrokenPipe, BaseHTTPRequestHandler):
                         data = json.loads(raw.decode("utf-8"))
                         models = [{"name": m.get("id", str(m))} for m in data.get("data", [])]
                         models.sort(key=lambda x: x["name"])
-                        body = json.dumps({"models": models}).encode()
+                        body = json.dumps({"models": models}, ensure_ascii=True).encode("utf-8")
                 
                 self.send_response(200)
                 self.send_header("Content-Type", "application/json")
                 self.send_header("Content-Length", str(len(body)))
                 self.end_headers()
                 self.wfile.write(body)
+            except (ConnectionRefusedError, OSError) as e:
+                # Ollama not running — return empty list silently
+                body = json.dumps({"models": []}, ensure_ascii=True).encode("utf-8")
+                self.send_response(200)
+                self.send_header("Content-Type", "application/json")
+                self.send_header("Content-Length", str(len(body)))
+                self.end_headers()
+                self.wfile.write(body)
             except Exception as e:
-                err_body = str(e).encode()
-                self.send_response(502)
-                self.send_header("Content-Type", "text/plain")
+                err_body = json.dumps({"models": [], "error": str(e)[:100]}, ensure_ascii=True).encode("utf-8")
+                self.send_response(200)
+                self.send_header("Content-Type", "application/json")
                 self.send_header("Content-Length", str(len(err_body)))
                 self.end_headers()
                 self.wfile.write(err_body)
+            return
+
+        if self.path == "/api/settings/models":
+            # POST only — handled below in do_POST
+            self.send_response(405)
+            self.end_headers()
+            self.wfile.write(b"Method Not Allowed")
             return
         if self.path == "/api/session/new":
             sid = new_session()
@@ -1740,37 +1755,61 @@ class DashboardHandler(_SuppressBrokenPipe, BaseHTTPRequestHandler):
                 custom_url = body.get("custom_url", "").strip()
                 
                 if provider == "Ollama":
-                    base = "http://localhost:11434"
+                    # Ollama uses /api/tags, NOT /v1/models
+                    req = urllib.request.Request("http://localhost:11434/api/tags", method="GET")
+                    with urllib.request.urlopen(req, timeout=5) as r:
+                        data = json.loads(r.read().decode())
+                        models = sorted([m["name"] for m in data.get("models", [])])
                 elif provider == "Custom" and custom_url:
                     base = custom_url.rstrip("/")
+                    req = urllib.request.Request(f"{base}/v1/models", method="GET")
+                    if api_key: req.add_header("Authorization", f"Bearer {api_key}")
+                    req.add_header("Accept", "application/json")
+                    with urllib.request.urlopen(req, timeout=15) as r:
+                        raw = r.read()
+                        if r.headers.get("Content-Encoding") == "gzip":
+                            import gzip
+                            raw = gzip.decompress(raw)
+                        data = json.loads(raw.decode("utf-8"))
+                        models = sorted([m.get("id", str(m)) for m in data.get("data", [])])
                 else:
+                    # OpenRouter has /api/v1/models, others use /v1/models
                     base = PROVIDERS.get(provider, {}).get("url", "")
+                    if provider == "OpenRouter":
+                        url = f"{base}/api/v1/models"
+                    else:
+                        url = f"{base}/v1/models"
+                    req = urllib.request.Request(url, method="GET")
+                    if api_key: req.add_header("Authorization", f"Bearer {api_key}")
+                    req.add_header("Accept", "application/json")
+                    with urllib.request.urlopen(req, timeout=15) as r:
+                        raw = r.read()
+                        if r.headers.get("Content-Encoding") == "gzip":
+                            import gzip
+                            raw = gzip.decompress(raw)
+                        data = json.loads(raw.decode("utf-8"))
+                        models = sorted([m.get("id", str(m)) for m in data.get("data", [])])
                 
-                req = urllib.request.Request(f"{base}/v1/models", method="GET")
-                req.add_header("User-Agent", "ContextCutPRO/1.0")
-                req.add_header("Accept", "application/json")
-                if api_key and PROVIDERS.get(provider, {}).get("key_required"):
-                    req.add_header("Authorization", f"Bearer {api_key}")
-                
-                with urllib.request.urlopen(req, timeout=15) as r:
-                    raw = r.read()
-                    if r.headers.get("Content-Encoding") == "gzip":
-                        import gzip
-                        raw = gzip.decompress(raw)
-                    data = json.loads(raw.decode("utf-8"))
-                    
-                    models_raw = data.get("data", [])
-                    models = []
-                    for m in models_raw:
-                        mid = m.get("id", str(m))
-                        try:
-                            mid.encode("ascii")
-                            models.append(mid)
-                        except UnicodeEncodeError:
-                            models.append(mid.encode("ascii", errors="replace").decode("ascii"))
-                    
-                    models.sort()
-                    resp = json.dumps({"models": models}, ensure_ascii=True).encode("utf-8")
+                # Ensure ASCII-safe response
+                resp = json.dumps({"models": models}, ensure_ascii=True).encode("utf-8")
+                self.send_response(200)
+                self.send_header("Content-Type", "application/json; charset=utf-8")
+                self.send_header("Content-Length", str(len(resp)))
+                self.end_headers()
+                self.wfile.write(resp)
+                return
+            except (ConnectionRefusedError, OSError) as e:
+                err_msg = "Connection refused — is the service running?"
+                resp = json.dumps({"models": [], "error": err_msg}, ensure_ascii=True).encode("utf-8")
+                self.send_response(200)
+                self.send_header("Content-Type", "application/json; charset=utf-8")
+                self.send_header("Content-Length", str(len(resp)))
+                self.end_headers()
+                self.wfile.write(resp)
+                return
+            except urllib.error.HTTPError as e:
+                err_msg = f"HTTP {e.code}: {e.read().decode(errors='replace')[:200]}"
+                resp = json.dumps({"models": [], "error": err_msg}, ensure_ascii=True).encode("utf-8")
                 self.send_response(200)
                 self.send_header("Content-Type", "application/json; charset=utf-8")
                 self.send_header("Content-Length", str(len(resp)))
@@ -1778,13 +1817,13 @@ class DashboardHandler(_SuppressBrokenPipe, BaseHTTPRequestHandler):
                 self.wfile.write(resp)
                 return
             except Exception as e:
-                err_msg = str(e)[:200].encode("ascii", errors="replace").decode("ascii")
-                err = json.dumps({"error": err_msg, "models": []}, ensure_ascii=True).encode("utf-8")
+                err_msg = str(e)[:200]
+                resp = json.dumps({"models": [], "error": err_msg}, ensure_ascii=True).encode("utf-8")
                 self.send_response(200)
                 self.send_header("Content-Type", "application/json; charset=utf-8")
-                self.send_header("Content-Length", str(len(err)))
+                self.send_header("Content-Length", str(len(resp)))
                 self.end_headers()
-                self.wfile.write(err)
+                self.wfile.write(resp)
                 return
 
         # ── Settings endpoint: update global MIN_SCORE live ──
