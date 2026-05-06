@@ -1766,8 +1766,6 @@ class DashboardHandler(_SuppressBrokenPipe, BaseHTTPRequestHandler):
                 if _provider_name == "Ollama" and ollama_url:
                     _ollama_url = ollama_url
 
-                UPSTREAM = get_current_upstream()
-
                 # Save securely to disk
                 CredentialManager.save("provider", _provider_name)
                 CredentialManager.save("custom_url", _custom_base_url)
