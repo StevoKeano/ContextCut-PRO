@@ -996,9 +996,12 @@ async function saveSettings() {{
     }});
     const data = await resp.json();
     if (data.ok) {{
-      status.textContent = 'Saved! Provider switched to ' + provider;
+      if (sessionId) localStorage.setItem('contextcut_session', sessionId);
+      const msgs = document.getElementById('messages');
+      if (msgs) localStorage.setItem('contextcut_msgs', msgs.innerHTML);
+      status.textContent = 'Saved! Switching to dashboard...';
       status.className = 'status ok';
-      setTimeout(() => {{ status.textContent = ''; }}, 3000);
+      setTimeout(() => {{ window.location.href = '/'; }}, 500);
     }} else {{
       status.textContent = 'Error saving';
       status.className = 'status err';
@@ -1287,6 +1290,14 @@ function updateSessionBadge() {{
 }}
 
 async function initSession() {{
+  const saved = localStorage.getItem('contextcut_session');
+  if (saved) {{
+    sessionId = saved;
+    localStorage.removeItem('contextcut_session');
+    updateSessionBadge();
+    restoreMessages();
+    return;
+  }}
   try {{
     const r = await fetch('/api/session/new');
     if (r.ok) {{
@@ -1295,6 +1306,17 @@ async function initSession() {{
       updateSessionBadge();
     }}
   }} catch(e) {{}}
+}}
+
+function restoreMessages() {{
+  const saved = localStorage.getItem('contextcut_msgs');
+  if (!saved) return;
+  localStorage.removeItem('contextcut_msgs');
+  const msgs = document.getElementById('messages');
+  if (msgs) {{
+    msgs.innerHTML = saved;
+    msgs.querySelector('.bubble:last-of-type')?.scrollIntoView({{behavior:'instant', block:'end'}});
+  }}
 }}
 
 function toggleSettings() {{
