@@ -1175,9 +1175,12 @@ tr:hover td{{background:var(--surf2)}}
         <div class="card"><div class="card-label">Peak Tokens</div><div class="card-val {'red' if s['max_tokens_seen']>CTX_LIMIT*0.8 else ''}">{s['max_tokens_seen']:,}</div></div>
         <div class="card"><div class="card-label">CTX Limit</div><div class="card-val">{CTX_LIMIT:,}</div></div>
         <div class="card"><div class="card-label">Cache Hits</div><div class="card-val" style="font-size:13px" id="cardCache">{s.get('cache_hits',0)}</div></div>
-      </div>
+        </div>
       <div class="ctx-wrap">
-        <div class="ctx-label">Most Recent Context Usage</div>
+        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:7px">
+          <div class="ctx-label" style="margin-bottom:0">Most Recent Context Usage</div>
+          <button class="clear-btn" onclick="clearContext()" title="Clear response cache">Clear Cache</button>
+        </div>
         <div class="ctx-track"><div class="ctx-fill" id="ctxBar"></div></div>
         <div class="ctx-info"><span id="ctxTok">{last_tok:,} / {CTX_LIMIT:,} tokens</span><strong style="color:{bc}" id="ctxPct">{last_pct}%</strong></div>
       </div>
@@ -1367,6 +1370,17 @@ async function clearConversation() {{
       const d = await r.json();
       sessionId = d.session_id;
       updateSessionBadge();
+    }}
+  }} catch(e) {{}}
+}}
+
+async function clearContext() {{
+  try {{
+    const r = await fetch('/api/context/clear');
+    if (r.ok) {{
+      const tb = document.getElementById('tblBody');
+      if (tb) tb.innerHTML = '<tr><td colspan="6" class="empty">Cache cleared — send a message to see new results</td></tr>';
+      if (document.getElementById('cardCache')) document.getElementById('cardCache').textContent = '0';
     }}
   }} catch(e) {{}}
 }}
@@ -1733,6 +1747,19 @@ class DashboardHandler(_SuppressBrokenPipe, BaseHTTPRequestHandler):
             self.send_header("Content-Length", str(len(body)))
             self.end_headers()
             self.wfile.write(body)
+            return
+        if self.path == "/api/context/clear":
+            global _response_cache, _stats
+            with _lock:
+                _response_cache.clear()
+                _stats["cache_hits"] = 0
+            print("[contextcut] Context cache cleared")
+            resp = json.dumps({"ok": True}).encode()
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Length", str(len(resp)))
+            self.end_headers()
+            self.wfile.write(resp)
             return
         if self.path == "/api/license":
             body = json.dumps(check_license_status()).encode()
