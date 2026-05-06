@@ -798,8 +798,7 @@ def make_dashboard() -> str:
 def make_settings_page():
     current_provider = _provider_name
     current_url = _custom_base_url if current_provider == "Custom" else PROVIDERS.get(current_provider, {}).get("url", "")
-    if current_provider == "Ollama":
-        current_url = _ollama_url if _ollama_url else UPSTREAM
+    ollama_input_url = _ollama_url if _ollama_url else UPSTREAM
     has_key = bool(_api_key)
     masked_key = "••••••••••••••••" if has_key else ""
     provider_opts = "".join(f'<option value="{k}" {"selected" if k==current_provider else ""}>{k}</option>' for k in PROVIDERS.keys())
@@ -863,7 +862,7 @@ body{{background:var(--bg);color:var(--text);font-family:'JetBrains Mono',monosp
 
     <div class="form-group hidden" id="ollamaUrlGroup">
       <label>Ollama URL</label>
-      <input type="text" id="ollamaUrl" value="{current_url}" placeholder="http://localhost:11434">
+      <input type="text" id="ollamaUrl" value="{ollama_input_url}" placeholder="http://localhost:11434">
     </div>
 
     <div class="form-group hidden" id="customUrlGroup">
