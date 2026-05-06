@@ -108,7 +108,7 @@ DEFAULT_MODEL  = os.getenv("CONTEXTCUT_MODEL",           "")
 PROVIDERS = {
     "Ollama":     {"url": "http://localhost:11434", "key_required": False},
     "OpenAI":     {"url": "https://api.openai.com", "key_required": True},
-    "OpenRouter": {"url": "https://openrouter.ai/api", "key_required": True},
+    "OpenRouter": {"url": "https://openrouter.ai", "key_required": True},
     "Anthropic":  {"url": "https://api.anthropic.com", "key_required": True},
     "xAI":        {"url": "https://api.x.ai", "key_required": True},
     "Custom":     {"url": "", "key_required": True},
@@ -118,19 +118,22 @@ _custom_base_url = ""
 _api_key = ""  # Stored in memory, loaded from encrypted file on startup
 
 def load_saved_credentials():
-    global _provider_name, _custom_base_url, _api_key
+    global _provider_name, _custom_base_url, _api_key, UPSTREAM
     creds = CredentialManager.load_all()
     _provider_name = creds.get("provider", "Ollama")
     _custom_base_url = creds.get("custom_url", "")
     _api_key = creds.get("api_key", "")
+    saved_ollama_url = creds.get("ollama_url", "")
+    if _provider_name == "Ollama" and saved_ollama_url:
+        UPSTREAM = saved_ollama_url
 
 def get_current_upstream():
     global _provider_name, _custom_base_url
     if _provider_name == "Custom":
         return _custom_base_url
-    base = PROVIDERS.get(_provider_name, {}).get("url", "http://localhost:11434")
     if _provider_name == "Ollama":
-        return base
+        return UPSTREAM
+    base = PROVIDERS.get(_provider_name, {}).get("url", "")
     return base + "/v1"
 
 def get_current_api_key():
@@ -788,6 +791,8 @@ def make_dashboard() -> str:
 def make_settings_page():
     current_provider = _provider_name
     current_url = _custom_base_url if current_provider == "Custom" else PROVIDERS.get(current_provider, {}).get("url", "")
+    if current_provider == "Ollama":
+        current_url = UPSTREAM
     has_key = bool(_api_key)
     masked_key = "••••••••••••••••" if has_key else ""
     provider_opts = "".join(f'<option value="{k}" {"selected" if k==current_provider else ""}>{k}</option>' for k in PROVIDERS.keys())
@@ -849,6 +854,11 @@ body{{background:var(--bg);color:var(--text);font-family:'JetBrains Mono',monosp
       </select>
     </div>
 
+    <div class="form-group hidden" id="ollamaUrlGroup">
+      <label>Ollama URL</label>
+      <input type="text" id="ollamaUrl" value="{current_url}" placeholder="http://localhost:11434">
+    </div>
+
     <div class="form-group hidden" id="customUrlGroup">
       <label>Base URL</label>
       <input type="text" id="customUrl" placeholder="https://api.example.com/v1">
@@ -882,13 +892,16 @@ let selectedModelName = null;
 
 function onProviderChange() {{
   const p = document.getElementById('providerSelect').value;
+  const o = document.getElementById('ollamaUrlGroup');
   const c = document.getElementById('customUrlGroup');
   const k = document.getElementById('apiKey');
   if (p === 'Ollama') {{
+    o.classList.remove('hidden');
     c.classList.add('hidden');
     k.value = '';
     k.placeholder = 'Not required for local Ollama';
   }} else {{
+    o.classList.add('hidden');
     if (p === 'Custom') c.classList.remove('hidden');
     else c.classList.add('hidden');
     k.placeholder = 'Enter your API key';
@@ -912,10 +925,11 @@ async function fetchModels() {{
     const provider = document.getElementById('providerSelect').value;
     const apiKey = document.getElementById('apiKey').value;
     const customUrl = document.getElementById('customUrl').value;
+    const ollamaUrl = document.getElementById('ollamaUrl').value;
     const resp = await fetch('/api/settings/models', {{
       method: 'POST',
       headers: {{'Content-Type': 'application/json'}},
-      body: JSON.stringify({{provider, api_key: apiKey, custom_url: customUrl}})
+      body: JSON.stringify({{provider, api_key: apiKey, custom_url: customUrl, ollama_url: ollamaUrl}})
     }});
     const data = await resp.json();
     if (data.error) {{
@@ -955,10 +969,11 @@ async function saveSettings() {{
     const provider = document.getElementById('providerSelect').value;
     const apiKey = document.getElementById('apiKey').value;
     const customUrl = document.getElementById('customUrl').value;
+    const ollamaUrl = document.getElementById('ollamaUrl').value;
     const resp = await fetch('/api/settings/provider', {{
       method: 'POST',
       headers: {{'Content-Type': 'application/json'}},
-      body: JSON.stringify({{provider, api_key: apiKey, custom_url: customUrl, model: selectedModelName}})
+      body: JSON.stringify({{provider, api_key: apiKey, custom_url: customUrl, ollama_url: ollamaUrl, model: selectedModelName}})
     }});
     const data = await resp.json();
     if (data.ok) {{
@@ -1715,11 +1730,17 @@ class DashboardHandler(_SuppressBrokenPipe, BaseHTTPRequestHandler):
                 _provider_name = body.get("provider", "Ollama")
                 _custom_base_url = body.get("custom_url", "").strip()
                 _api_key = body.get("api_key", "").strip()
+                ollama_url = body.get("ollama_url", "").strip()
+                
+                if _provider_name == "Ollama" and ollama_url:
+                    UPSTREAM = ollama_url
+                
                 UPSTREAM = get_current_upstream()
 
                 # Save securely to disk
                 CredentialManager.save("provider", _provider_name)
                 CredentialManager.save("custom_url", _custom_base_url)
+                CredentialManager.save("ollama_url", ollama_url)
                 if _api_key: CredentialManager.save("api_key", _api_key)
 
                 print(f"[contextcut] Provider switched to {_provider_name} | upstream: {UPSTREAM}")
@@ -1745,10 +1766,12 @@ class DashboardHandler(_SuppressBrokenPipe, BaseHTTPRequestHandler):
                 provider = body.get("provider", "Ollama")
                 api_key = body.get("api_key", "").strip()
                 custom_url = body.get("custom_url", "").strip()
+                ollama_url = body.get("ollama_url", "").strip()
                 
                 if provider == "Ollama":
                     # Ollama uses /api/tags, NOT /v1/models
-                    req = urllib.request.Request("http://localhost:11434/api/tags", method="GET")
+                    base = ollama_url if ollama_url else (UPSTREAM or "http://localhost:11434")
+                    req = urllib.request.Request(f"{base}/api/tags", method="GET")
                     with urllib.request.urlopen(req, timeout=5) as r:
                         data = json.loads(r.read().decode("utf-8"))
                         models = sorted([m["name"] for m in data.get("models", [])])
@@ -1765,10 +1788,10 @@ class DashboardHandler(_SuppressBrokenPipe, BaseHTTPRequestHandler):
                         data = json.loads(raw.decode("utf-8"))
                         models = sorted([m.get("id", str(m)) for m in data.get("data", [])])
                 else:
-                    # OpenRouter has /api/v1/models, others use /v1/models
+                    # OpenRouter uses /api/v1/models, others use /v1/models
                     base = PROVIDERS.get(provider, {}).get("url", "")
                     if provider == "OpenRouter":
-                        url = f"{base}/api/v1/models"
+                        url = f"{base}/v1/models"
                     else:
                         url = f"{base}/v1/models"
                     req = urllib.request.Request(url, method="GET")
