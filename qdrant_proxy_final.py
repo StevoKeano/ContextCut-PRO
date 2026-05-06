@@ -107,7 +107,7 @@ DEFAULT_MODEL  = os.getenv("CONTEXTCUT_MODEL",           "")
 PROVIDERS = {
     "Ollama":     {"url": "http://localhost:11434", "key_required": False},
     "OpenAI":     {"url": "https://api.openai.com", "key_required": True},
-    "OpenRouter": {"url": "https://openrouter.ai", "key_required": True},
+    "OpenRouter": {"url": "https://openrouter.ai/api", "key_required": True},
     "Anthropic":  {"url": "https://api.anthropic.com", "key_required": True},
     "xAI":        {"url": "https://api.x.ai", "key_required": True},
     "Custom":     {"url": "", "key_required": True},
