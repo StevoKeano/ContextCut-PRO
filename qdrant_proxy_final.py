@@ -132,8 +132,7 @@ def get_current_upstream():
         return _custom_base_url
     if _provider_name == "Ollama":
         return _ollama_url if _ollama_url else UPSTREAM
-    base = PROVIDERS.get(_provider_name, {}).get("url", "")
-    return base + "/v1"
+    return PROVIDERS.get(_provider_name, {}).get("url", "")
 
 def get_current_api_key():
     return _api_key if PROVIDERS.get(_provider_name, {}).get("key_required") else None
