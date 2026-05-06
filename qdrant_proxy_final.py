@@ -108,7 +108,7 @@ DEFAULT_MODEL  = os.getenv("CONTEXTCUT_MODEL",           "")
 PROVIDERS = {
     "Ollama":     {"url": "http://localhost:11434", "key_required": False},
     "OpenAI":     {"url": "https://api.openai.com", "key_required": True},
-    "OpenRouter": {"url": "https://openrouter.ai", "key_required": True},
+    "OpenRouter": {"url": "https://openrouter.ai/api", "key_required": True},
     "Anthropic":  {"url": "https://api.anthropic.com", "key_required": True},
     "xAI":        {"url": "https://api.x.ai", "key_required": True},
     "Custom":     {"url": "", "key_required": True},
@@ -1788,12 +1788,8 @@ class DashboardHandler(_SuppressBrokenPipe, BaseHTTPRequestHandler):
                         data = json.loads(raw.decode("utf-8"))
                         models = sorted([m.get("id", str(m)) for m in data.get("data", [])])
                 else:
-                    # OpenRouter uses /api/v1/models, others use /v1/models
                     base = PROVIDERS.get(provider, {}).get("url", "")
-                    if provider == "OpenRouter":
-                        url = f"{base}/v1/models"
-                    else:
-                        url = f"{base}/v1/models"
+                    url = f"{base}/v1/models"
                     req = urllib.request.Request(url, method="GET")
                     if api_key: req.add_header("Authorization", f"Bearer {api_key}")
                     req.add_header("Accept", "application/json")
