@@ -1599,7 +1599,9 @@ class DashboardHandler(_SuppressBrokenPipe, BaseHTTPRequestHandler):
             return
         if self.path == "/api/tags":
             try:
-                with urllib.request.urlopen(f"{UPSTREAM}/api/tags", timeout=5) as r:
+                upstream = get_current_upstream()
+                req = urllib.request.Request(f"{upstream}/api/tags", method="GET")
+                with urllib.request.urlopen(req, timeout=5) as r:
                     body = r.read()
                 self.send_response(200)
                 self.send_header("Content-Type", "application/json")
@@ -1723,13 +1725,27 @@ class DashboardHandler(_SuppressBrokenPipe, BaseHTTPRequestHandler):
                 
                 with urllib.request.urlopen(req, timeout=15) as r:
                     raw = r.read()
-                    try:
-                        data = json.loads(raw.decode("utf-8"))
-                    except UnicodeDecodeError:
-                        data = json.loads(raw.decode("latin-1"))
+                    # Handle gzip
+                    if r.headers.get("Content-Encoding") == "gzip":
+                        import gzip
+                        raw = gzip.decompress(raw)
+                    data = json.loads(raw.decode("utf-8"))
                     
-                    models = sorted([m.get("id", m) for m in data.get("data", [])])
-                    resp = json.dumps({"models": models}).encode("utf-8")
+                    # Extract model IDs safely
+                    models_raw = data.get("data", [])
+                    models = []
+                    for m in models_raw:
+                        mid = m.get("id", str(m))
+                        # Strip non-ascii for safety
+                        try:
+                            mid.encode("ascii")
+                            models.append(mid)
+                        except UnicodeEncodeError:
+                            # Replace non-ascii chars
+                            models.append(mid.encode("ascii", errors="replace").decode("ascii"))
+                    
+                    models.sort()
+                    resp = json.dumps({"models": models}, ensure_ascii=True).encode("utf-8")
                 self.send_response(200)
                 self.send_header("Content-Type", "application/json; charset=utf-8")
                 self.send_header("Content-Length", str(len(resp)))
@@ -1737,8 +1753,8 @@ class DashboardHandler(_SuppressBrokenPipe, BaseHTTPRequestHandler):
                 self.wfile.write(resp)
                 return
             except Exception as e:
-                err_msg = str(e).encode("ascii", errors="replace").decode()
-                err = json.dumps({"error": err_msg, "models": []}).encode("utf-8")
+                err_msg = str(e)[:200].encode("ascii", errors="replace").decode("ascii")
+                err = json.dumps({"error": err_msg, "models": []}, ensure_ascii=True).encode("utf-8")
                 self.send_response(200)
                 self.send_header("Content-Type", "application/json; charset=utf-8")
                 self.send_header("Content-Length", str(len(err)))
