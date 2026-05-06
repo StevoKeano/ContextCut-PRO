@@ -82,21 +82,85 @@
         color: #facc15;
         font-size: 1.8rem;
       }
+      .steps {
+        display: grid;
+        grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+        gap: 1.5rem;
+        margin: 2rem 0;
+      }
+      .step {
+        background: #1e2937;
+        border-radius: 16px;
+        padding: 2rem;
+        text-align: center;
+        border: 1px solid #334155;
+        transition: border-color 0.2s;
+      }
+      .step:hover {
+        border-color: #3b82f6;
+      }
+      .step-num {
+        font-size: 2rem;
+        font-weight: 800;
+        color: #3b82f6;
+        margin-bottom: 0.5rem;
+      }
+      .step h3 {
+        margin: 0.5rem 0;
+        font-size: 1.2rem;
+      }
+      .step p {
+        color: #94a3b8;
+        margin: 0;
+      }
+      .features {
+        background: #1e2937;
+        border-radius: 16px;
+        padding: 2rem;
+        margin: 2rem 0;
+      }
+      .features ul {
+        list-style: none;
+        padding: 0;
+        margin: 0;
+      }
+      .features li {
+        padding: 0.8rem 0;
+        border-bottom: 1px solid #334155;
+        display: flex;
+        align-items: center;
+        gap: 0.8rem;
+      }
+      .features li:last-child {
+        border-bottom: none;
+      }
+      .features .icon {
+        font-size: 1.4rem;
+        flex-shrink: 0;
+      }
+      .features .label {
+        font-weight: 600;
+        color: #e2e8f0;
+      }
+      .features .desc {
+        color: #94a3b8;
+        font-size: 0.9rem;
+      }
     </style>
   </head>
   <body>
     <div class="container">
       <header>
-        <h1>ContextCut</h1>
+        <h1>ContextCut-PRO</h1>
         <p style="font-size: 1.5rem; margin: 1rem 0">
-          Stop wasting tokens.<br />Inject only what matters.
+          Stop wasting tokens on AI.<br />Inject only what matters.
         </p>
-        <p>Smart semantic RAG proxy for OpenClaw, Ollama, and any local LLM</p>
+        <p>Smart context management for your local LLM — Ollama, OpenClaw, and any OpenAI-compatible endpoint.</p>
       </header>
 
       <div class="hero">
         <p style="font-size: 2rem; margin: 1rem 0">
-          Cut context costs by <strong>50-90%</strong>
+          Give your local LLM a <strong>perfect memory</strong> without the context window bloat.
         </p>
         <button
           class="cta"
@@ -110,7 +174,7 @@
         </button>
         <div style="text-align: center; margin: 3rem 0">
           <a
-            href="https://github.com/StevoKeano/ContextCut#quick-install"
+            href="https://github.com/StevoKeano/ContextCut-PRO#quick-install"
             class="cta"
             style="
               display: inline-block;
@@ -119,8 +183,28 @@
               text-decoration: none;
             "
           >
-            github</a
+            View on GitHub</a
           >
+        </div>
+      </div>
+
+      <!-- How It Works -->
+      <h2 style="text-align: center; margin: 3rem 0 1rem">How It Works</h2>
+      <div class="steps">
+        <div class="step">
+          <div class="step-num">1</div>
+          <h3>Drop Your Docs In</h3>
+          <p>Add .md files to the knowledge folder. That's it.</p>
+        </div>
+        <div class="step">
+          <div class="step-num">2</div>
+          <h3>Semantic Search</h3>
+          <p>ContextCut finds the exact chunks relevant to your query.</p>
+        </div>
+        <div class="step">
+          <div class="step-num">3</div>
+          <h3>Smart Injection</h3>
+          <p>Only the important parts get injected — no token bloat.</p>
         </div>
       </div>
 
@@ -177,6 +261,7 @@
         </div>
       </div>
 
+      <!-- Comparison Table -->
       <h2 style="text-align: center; margin: 3rem 0 1.5rem">
         Why ContextCut Works
       </h2>
@@ -198,6 +283,41 @@
         </tr>
       </table>
 
+      <!-- Why PRO -->
+      <div class="features">
+        <h2 style="margin: 0 0 1.5rem; text-align: center;">Why ContextCut PRO</h2>
+        <ul>
+          <li>
+            <span class="icon">🖥️</span>
+            <div>
+              <div class="label">Multi-Device</div>
+              <div class="desc">Works on desktop, laptop, and server — 3 seats included</div>
+            </div>
+          </li>
+          <li>
+            <span class="icon">⚡</span>
+            <div>
+              <div class="label">Zero Config</div>
+              <div class="desc">Files auto-index in the background. No manual re-indexing.</div>
+            </div>
+          </li>
+          <li>
+            <span class="icon">📊</span>
+            <div>
+              <div class="label">Token Savings Dashboard</div>
+              <div class="desc">See exactly what you saved on every query</div>
+            </div>
+          </li>
+          <li>
+            <span class="icon">🔧</span>
+            <div>
+              <div class="label">One-Command Install</div>
+              <div class="desc"><code style="background:#0f172a;padding:2px 8px;border-radius:4px;">curl | bash</code> and you're done</div>
+            </div>
+          </li>
+        </ul>
+      </div>
+
       <h2 style="text-align: center; margin: 3rem 0">Ready to Install?</h2>
       <p style="text-align: center; font-size: 1.2rem">
         One command on Mac/Windows/Linux → Proxy on :18788 + beautiful dashboard
@@ -206,7 +326,7 @@
 
       <div style="text-align: center; margin: 3rem 0">
         <a
-          href="https://github.com/StevoKeano/ContextCut#quick-install"
+          href="https://github.com/StevoKeano/ContextCut-PRO#quick-install"
           class="cta"
           style="
             display: inline-block;
@@ -215,11 +335,11 @@
             text-decoration: none;
           "
         >
-          Download Free Personal Version</a
+          Download ContextCut PRO</a
         >
       </div>
       <footer style="text-align: center; margin-top: 4rem; color: #64748b">
-        © 2026 ContextCut • MIT Licensed • Built for homelab power users
+        © 2026 ContextCut • Built for homelab power users
       </footer>
     </div>
 
