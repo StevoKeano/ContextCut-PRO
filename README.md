@@ -138,7 +138,7 @@ ContextCut PRO is proprietary software. Purchase grants a single-seat commercial
 - Priority support
 - Advanced context-cutting rules & presets
 - Pro dashboard features
-- See [LICENSE-PRO.md](LICENSE-PRO.md) for full terms
+- See [LICENSE-PRO.md](LICENSE.md) for full terms
 
 [Buy Pro License →](https://5984630877416.gumroad.com/l/ContextCut-Pro)
 
