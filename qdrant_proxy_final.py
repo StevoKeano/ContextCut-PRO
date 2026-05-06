@@ -723,7 +723,8 @@ class ProxyHandler(_SuppressBrokenPipe, BaseHTTPRequestHandler):
             tok_after = count_body_tokens(body)
             pct = round(tok_after / CTX_LIMIT * 100, 1)
             ts  = datetime.now().strftime("%H:%M:%S")
-            print(f"[contextcut] {ts} | {tok_before}→{tok_after}/{CTX_LIMIT} ({pct}%) | hits:{len(hits_meta)} | {query[:60]}")
+            model_name = body.get("model", "?")
+            print(f"[contextcut] {ts} | model={model_name} | {tok_before}→{tok_after}/{CTX_LIMIT} ({pct}%) | hits:{len(hits_meta)} | {query[:60]}")
             record({"ts": ts, "query": query[:120], "tokens_before": tok_before,
                     "tokens_after": tok_after, "ctx_limit": CTX_LIMIT, "pct": pct, "hits": hits_meta})
 
@@ -1432,7 +1433,7 @@ async function fetchModels() {{
     sel.innerHTML = '<option value="">▾</option>' +
       models.map(m=>`<option value="${{m}}">${{m}}</option>`).join('');
     const inp = document.getElementById('modelInput');
-    if (inp && !inp.value && models.length) inp.value = models[0];
+    if (inp && models.length) inp.value = models[0];
   }} catch(e) {{}}
 }}
 
