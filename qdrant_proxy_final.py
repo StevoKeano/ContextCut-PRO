@@ -998,7 +998,7 @@ async function saveSettings() {{
     if (data.ok) {{
       status.textContent = 'Saved! Provider switched to ' + provider;
       status.className = 'status ok';
-      setTimeout(() => {{ window.location.href = '/'; }}, 1000);
+      setTimeout(() => {{ status.textContent = ''; }}, 3000);
     }} else {{
       status.textContent = 'Error saving';
       status.className = 'status err';
