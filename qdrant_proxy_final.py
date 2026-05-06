@@ -106,10 +106,10 @@ DEFAULT_MODEL  = os.getenv("CONTEXTCUT_MODEL",           "")
 # ── Dynamic Provider Settings ────────────────────────────────────────────────
 PROVIDERS = {
     "Ollama":     {"url": "http://localhost:11434", "key_required": False},
-    "OpenAI":     {"url": "https://api.openai.com/v1", "key_required": True},
-    "OpenRouter": {"url": "https://openrouter.ai/api/v1", "key_required": True},
-    "Anthropic":  {"url": "https://api.anthropic.com/v1", "key_required": True},
-    "xAI":        {"url": "https://api.x.ai/v1", "key_required": True},
+    "OpenAI":     {"url": "https://api.openai.com", "key_required": True},
+    "OpenRouter": {"url": "https://openrouter.ai", "key_required": True},
+    "Anthropic":  {"url": "https://api.anthropic.com", "key_required": True},
+    "xAI":        {"url": "https://api.x.ai", "key_required": True},
     "Custom":     {"url": "", "key_required": True},
 }
 _provider_name = "Ollama"
@@ -127,7 +127,10 @@ def get_current_upstream():
     global _provider_name, _custom_base_url
     if _provider_name == "Custom":
         return _custom_base_url
-    return PROVIDERS.get(_provider_name, {}).get("url", UPSTREAM)
+    base = PROVIDERS.get(_provider_name, {}).get("url", "http://localhost:11434")
+    if _provider_name == "Ollama":
+        return base
+    return base + "/v1"
 
 def get_current_api_key():
     return _api_key if PROVIDERS.get(_provider_name, {}).get("key_required") else None
@@ -567,7 +570,10 @@ class ProxyHandler(_SuppressBrokenPipe, BaseHTTPRequestHandler):
 
     def _forward(self, method: str, raw_body: bytes, streaming: bool = False, session_id: str = None):
         upstream = get_current_upstream()
+        
+        # Cloud providers use {base}/v1/chat/completions, Ollama uses {base}/v1/chat/completions too
         upstream_url = upstream + self.path
+        
         req = urllib.request.Request(upstream_url, data=raw_body if method == "POST" else None, method=method)
         
         # Inject API key header for cloud providers
@@ -1602,17 +1608,18 @@ class DashboardHandler(_SuppressBrokenPipe, BaseHTTPRequestHandler):
                 upstream = get_current_upstream()
                 api_key = get_current_api_key()
                 
-                # Ollama uses /api/tags, cloud providers use /v1/models
                 if _provider_name == "Ollama":
                     req = urllib.request.Request(f"{upstream}/api/tags", method="GET")
                     with urllib.request.urlopen(req, timeout=5) as r:
                         data = json.loads(r.read().decode())
-                        # Transform to match frontend expectation
                         models = [{"name": m["name"]} for m in data.get("models", [])]
                         body = json.dumps({"models": models}).encode()
                 else:
-                    req = urllib.request.Request(f"{upstream}/v1/models", method="GET")
-                    req.add_header("Authorization", f"Bearer {api_key}")
+                    # Cloud providers: {base}/v1/models
+                    url = f"{upstream}/v1/models"
+                    req = urllib.request.Request(url, method="GET")
+                    if api_key:
+                        req.add_header("Authorization", f"Bearer {api_key}")
                     req.add_header("Accept", "application/json")
                     with urllib.request.urlopen(req, timeout=10) as r:
                         raw = r.read()
@@ -1620,7 +1627,6 @@ class DashboardHandler(_SuppressBrokenPipe, BaseHTTPRequestHandler):
                             import gzip
                             raw = gzip.decompress(raw)
                         data = json.loads(raw.decode("utf-8"))
-                        # Transform OpenAI format to frontend expectation
                         models = [{"name": m.get("id", str(m))} for m in data.get("data", [])]
                         models.sort(key=lambda x: x["name"])
                         body = json.dumps({"models": models}).encode()
@@ -1701,10 +1707,7 @@ class DashboardHandler(_SuppressBrokenPipe, BaseHTTPRequestHandler):
                 _provider_name = body.get("provider", "Ollama")
                 _custom_base_url = body.get("custom_url", "").strip()
                 _api_key = body.get("api_key", "").strip()
-                if _provider_name != "Custom":
-                    UPSTREAM = PROVIDERS.get(_provider_name, {}).get("url", "http://localhost:11434")
-                else:
-                    UPSTREAM = _custom_base_url
+                UPSTREAM = get_current_upstream()
 
                 # Save securely to disk
                 CredentialManager.save("provider", _provider_name)
@@ -1735,9 +1738,12 @@ class DashboardHandler(_SuppressBrokenPipe, BaseHTTPRequestHandler):
                 api_key = body.get("api_key", "").strip()
                 custom_url = body.get("custom_url", "").strip()
                 
-                base = PROVIDERS.get(provider, {}).get("url", "http://localhost:11434")
-                if provider == "Custom" and custom_url:
+                if provider == "Ollama":
+                    base = "http://localhost:11434"
+                elif provider == "Custom" and custom_url:
                     base = custom_url.rstrip("/")
+                else:
+                    base = PROVIDERS.get(provider, {}).get("url", "")
                 
                 req = urllib.request.Request(f"{base}/v1/models", method="GET")
                 req.add_header("User-Agent", "ContextCutPRO/1.0")
@@ -1747,23 +1753,19 @@ class DashboardHandler(_SuppressBrokenPipe, BaseHTTPRequestHandler):
                 
                 with urllib.request.urlopen(req, timeout=15) as r:
                     raw = r.read()
-                    # Handle gzip
                     if r.headers.get("Content-Encoding") == "gzip":
                         import gzip
                         raw = gzip.decompress(raw)
                     data = json.loads(raw.decode("utf-8"))
                     
-                    # Extract model IDs safely
                     models_raw = data.get("data", [])
                     models = []
                     for m in models_raw:
                         mid = m.get("id", str(m))
-                        # Strip non-ascii for safety
                         try:
                             mid.encode("ascii")
                             models.append(mid)
                         except UnicodeEncodeError:
-                            # Replace non-ascii chars
                             models.append(mid.encode("ascii", errors="replace").decode("ascii"))
                     
                     models.sort()
