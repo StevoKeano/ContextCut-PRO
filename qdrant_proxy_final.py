@@ -868,6 +868,13 @@ body{{background:var(--bg);color:var(--text);font-family:'JetBrains Mono',monosp
       <div style="font-size:10px;color:var(--muted);margin-top:4px">Stored encrypted on disk. Only your machine can decrypt it.</div>
     </div>
 
+    <div class="form-group hidden" id="freeOnlyGroup">
+      <label style="cursor:pointer;display:flex;align-items:center;gap:8px">
+        <input type="checkbox" id="freeOnly" style="width:auto;accent-color:var(--accent)">
+        Only free models (OpenRouter)
+      </label>
+    </div>
+
     <div class="form-group">
       <label>Available Models</label>
       <div class="btn-row">
@@ -892,16 +899,20 @@ function onProviderChange() {{
   const p = document.getElementById('providerSelect').value;
   const o = document.getElementById('ollamaUrlGroup');
   const c = document.getElementById('customUrlGroup');
+  const f = document.getElementById('freeOnlyGroup');
   const k = document.getElementById('apiKey');
   if (p === 'Ollama') {{
     o.classList.remove('hidden');
     c.classList.add('hidden');
+    f.classList.add('hidden');
     k.value = '';
     k.placeholder = 'Not required for local Ollama';
   }} else {{
     o.classList.add('hidden');
     if (p === 'Custom') c.classList.remove('hidden');
     else c.classList.add('hidden');
+    if (p === 'OpenRouter') f.classList.remove('hidden');
+    else f.classList.add('hidden');
     k.placeholder = 'Enter your API key';
   }}
   hideModelList();
@@ -924,10 +935,11 @@ async function fetchModels() {{
     const apiKey = document.getElementById('apiKey').value;
     const customUrl = document.getElementById('customUrl').value;
     const ollamaUrl = document.getElementById('ollamaUrl').value;
+    const freeOnly = document.getElementById('freeOnly').checked;
     const resp = await fetch('/api/settings/models', {{
       method: 'POST',
       headers: {{'Content-Type': 'application/json'}},
-      body: JSON.stringify({{provider, api_key: apiKey, custom_url: customUrl, ollama_url: ollamaUrl}})
+      body: JSON.stringify({{provider, api_key: apiKey, custom_url: customUrl, ollama_url: ollamaUrl, free_only: freeOnly}})
     }});
     const data = await resp.json();
     if (data.error) {{
@@ -1765,6 +1777,7 @@ class DashboardHandler(_SuppressBrokenPipe, BaseHTTPRequestHandler):
                 api_key = body.get("api_key", "").strip()
                 custom_url = body.get("custom_url", "").strip()
                 ollama_url = body.get("ollama_url", "").strip()
+                free_only = body.get("free_only", False)
                 
                 if provider == "Ollama":
                     # Ollama uses /api/tags, NOT /v1/models
@@ -1797,7 +1810,15 @@ class DashboardHandler(_SuppressBrokenPipe, BaseHTTPRequestHandler):
                             import gzip
                             raw = gzip.decompress(raw)
                         data = json.loads(raw.decode("utf-8"))
-                        models = sorted([m.get("id", str(m)) for m in data.get("data", [])])
+                        if free_only:
+                            def is_free(m):
+                                p = m.get("pricing", {})
+                                return p.get("prompt", "0") == "0" and p.get("completion", "0") == "0"
+                            models = sorted([
+                                m.get("id", str(m)) for m in data.get("data", []) if is_free(m)
+                            ])
+                        else:
+                            models = sorted([m.get("id", str(m)) for m in data.get("data", [])])
                 
                 # Ensure ASCII-safe response
                 resp = json.dumps({"models": models}, ensure_ascii=True).encode("utf-8")
