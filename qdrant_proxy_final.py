@@ -116,15 +116,17 @@ PROVIDERS = {
 _provider_name = "Ollama"
 _custom_base_url = ""
 _ollama_url = ""
-_api_key = ""  # Stored in memory, loaded from encrypted file on startup
+_api_key = ""
+_free_only = False
 
 def load_saved_credentials():
-    global _provider_name, _custom_base_url, _ollama_url, _api_key
+    global _provider_name, _custom_base_url, _ollama_url, _api_key, _free_only
     creds = CredentialManager.load_all()
     _provider_name = creds.get("provider", "Ollama")
     _custom_base_url = creds.get("custom_url", "")
     _ollama_url = creds.get("ollama_url", "")
     _api_key = creds.get("api_key", "")
+    _free_only = creds.get("free_only", False)
 
 def get_current_upstream():
     global _provider_name, _custom_base_url, _ollama_url
@@ -870,7 +872,7 @@ body{{background:var(--bg);color:var(--text);font-family:'JetBrains Mono',monosp
 
     <div class="form-group hidden" id="freeOnlyGroup">
       <label style="cursor:pointer;display:flex;align-items:center;gap:8px">
-        <input type="checkbox" id="freeOnly" style="width:auto;accent-color:var(--accent)">
+        <input type="checkbox" id="freeOnly" style="width:auto;accent-color:var(--accent)"{" checked" if _free_only else ""}>
         Only free models (OpenRouter)
       </label>
     </div>
@@ -980,10 +982,11 @@ async function saveSettings() {{
     const apiKey = document.getElementById('apiKey').value;
     const customUrl = document.getElementById('customUrl').value;
     const ollamaUrl = document.getElementById('ollamaUrl').value;
+    const freeOnly = document.getElementById('freeOnly').checked;
     const resp = await fetch('/api/settings/provider', {{
       method: 'POST',
       headers: {{'Content-Type': 'application/json'}},
-      body: JSON.stringify({{provider, api_key: apiKey, custom_url: customUrl, ollama_url: ollamaUrl, model: selectedModelName}})
+      body: JSON.stringify({{provider, api_key: apiKey, custom_url: customUrl, ollama_url: ollamaUrl, free_only: freeOnly, model: selectedModelName}})
     }});
     const data = await resp.json();
     if (data.ok) {{
@@ -1652,7 +1655,14 @@ class DashboardHandler(_SuppressBrokenPipe, BaseHTTPRequestHandler):
                             import gzip
                             raw = gzip.decompress(raw)
                         data = json.loads(raw.decode("utf-8"))
-                        models = [{"name": m.get("id", str(m))} for m in data.get("data", [])]
+                        raw_models = data.get("data", [])
+                        if _free_only:
+                            def _is_free(m):
+                                p = m.get("pricing", {})
+                                return p.get("prompt", "0") == "0" and p.get("completion", "0") == "0"
+                            models = [{"name": m.get("id", str(m))} for m in raw_models if _is_free(m)]
+                        else:
+                            models = [{"name": m.get("id", str(m))} for m in raw_models]
                         models.sort(key=lambda x: x["name"])
                         body = json.dumps({"models": models}, ensure_ascii=True).encode("utf-8")
                 
@@ -1736,11 +1746,12 @@ class DashboardHandler(_SuppressBrokenPipe, BaseHTTPRequestHandler):
         if self.path == "/api/settings/provider":
             try:
                 body = json.loads(raw_body)
-                global _provider_name, _custom_base_url, _ollama_url, _api_key, UPSTREAM
+                global _provider_name, _custom_base_url, _ollama_url, _api_key, _free_only, UPSTREAM
                 _provider_name = body.get("provider", "Ollama")
                 _custom_base_url = body.get("custom_url", "").strip()
                 _api_key = body.get("api_key", "").strip()
                 ollama_url = body.get("ollama_url", "").strip()
+                _free_only = body.get("free_only", False)
 
                 if _provider_name == "Ollama" and ollama_url:
                     _ollama_url = ollama_url
@@ -1751,6 +1762,7 @@ class DashboardHandler(_SuppressBrokenPipe, BaseHTTPRequestHandler):
                 CredentialManager.save("provider", _provider_name)
                 CredentialManager.save("custom_url", _custom_base_url)
                 CredentialManager.save("ollama_url", ollama_url)
+                CredentialManager.save("free_only", _free_only)
                 if _api_key: CredentialManager.save("api_key", _api_key)
 
                 print(f"[contextcut] Provider switched to {_provider_name} | upstream: {UPSTREAM}")
