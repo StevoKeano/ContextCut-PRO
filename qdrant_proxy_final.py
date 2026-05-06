@@ -310,13 +310,19 @@ def release_license():
             headers={"Content-Type": "application/json", "User-Agent": "ContextCutPRO/1.0"},
             method="POST",
         )
-        with urllib.request.urlopen(req, timeout=5) as resp:
+        with urllib.request.urlopen(req, timeout=3) as resp:
             data = json.loads(resp.read().decode())
         print(f"[contextcut] License seat released: {data.get('message','OK')}")
     except Exception as e:
         print(f"[contextcut] License release error (non-fatal): {e}")
 
+_shutdown_done = False
+
 def shutdown_hook():
+    global _shutdown_done
+    if _shutdown_done:
+        return
+    _shutdown_done = True
     release_license()
     save_sessions()
 import atexit
@@ -1749,9 +1755,13 @@ class DashboardHandler(_SuppressBrokenPipe, BaseHTTPRequestHandler):
                 global _provider_name, _custom_base_url, _ollama_url, _api_key, _free_only, UPSTREAM
                 _provider_name = body.get("provider", "Ollama")
                 _custom_base_url = body.get("custom_url", "").strip()
-                _api_key = body.get("api_key", "").strip()
+                incoming_key = body.get("api_key", "").strip()
                 ollama_url = body.get("ollama_url", "").strip()
                 _free_only = body.get("free_only", False)
+
+                # If frontend sent masked value, keep server-side key
+                if incoming_key and incoming_key != "••••••••••••••••":
+                    _api_key = incoming_key
 
                 if _provider_name == "Ollama" and ollama_url:
                     _ollama_url = ollama_url
@@ -1790,6 +1800,10 @@ class DashboardHandler(_SuppressBrokenPipe, BaseHTTPRequestHandler):
                 custom_url = body.get("custom_url", "").strip()
                 ollama_url = body.get("ollama_url", "").strip()
                 free_only = body.get("free_only", False)
+                
+                # If frontend sent masked value, use server-side stored key
+                if not api_key or api_key == "••••••••••••••••":
+                    api_key = _api_key
                 
                 if provider == "Ollama":
                     # Ollama uses /api/tags, NOT /v1/models
