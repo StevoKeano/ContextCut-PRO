@@ -27,6 +27,9 @@ import time
 import socket
 import random
 import threading
+import platform
+import hashlib
+import base64
 import urllib.request
 import urllib.error
 from collections import deque
@@ -36,6 +39,57 @@ from socketserver import ThreadingMixIn
 
 import voyageai
 from qdrant_client import QdrantClient
+
+# ── Secure Credential Manager (Machine-bound encryption) ─────────────────────
+class CredentialManager:
+    """Stores API keys encrypted with a machine-derived key.
+    If copied to another machine, the file is useless."""
+
+    _cred_file = os.path.join(os.path.dirname(os.path.abspath(__file__)), ".contextcut_creds.enc")
+
+    @staticmethod
+    def _machine_key():
+        raw = ""
+        try:
+            if platform.system() == "Linux":
+                with open("/etc/machine-id") as f: raw = f.read().strip()
+            elif platform.system() == "Darwin":
+                import subprocess
+                raw = subprocess.check_output(["ioreg", "-rd1", "-c", "IOPlatformExpertDevice"]).decode().strip()
+            else:
+                raw = platform.node()
+        except Exception:
+            raw = "fallback-constant-key"
+        return hashlib.sha256(raw.encode()).digest()
+
+    @classmethod
+    def _get_fernet(cls):
+        from cryptography.fernet import Fernet
+        key = base64.urlsafe_b64encode(cls._machine_key())
+        return Fernet(key)
+
+    @classmethod
+    def save(cls, key_name, value):
+        creds = cls.load_all()
+        creds[key_name] = value
+        f = cls._get_fernet()
+        encrypted = f.encrypt(json.dumps(creds).encode())
+        with open(cls._cred_file, "wb") as fh: fh.write(encrypted)
+        os.chmod(cls._cred_file, 0o600)
+
+    @classmethod
+    def get(cls, key_name):
+        return cls.load_all().get(key_name)
+
+    @classmethod
+    def load_all(cls):
+        if not os.path.exists(cls._cred_file): return {}
+        try:
+            f = cls._get_fernet()
+            with open(cls._cred_file, "rb") as fh: encrypted = fh.read()
+            return json.loads(f.decrypt(encrypted).decode())
+        except Exception:
+            return {}
 
 # ── Config ────────────────────────────────────────────────────────────────────
 UPSTREAM       = os.getenv("CONTEXTCUT_UPSTREAM",        "http://localhost:11434")
@@ -48,6 +102,37 @@ CTX_LIMIT      = int(os.getenv("CONTEXTCUT_CTX_LIMIT",   "8192"))
 TOP_K          = int(os.getenv("CONTEXTCUT_TOP_K",       "5"))
 MIN_SCORE      = float(os.getenv("CONTEXTCUT_MIN_SCORE", "0.20"))
 DEFAULT_MODEL  = os.getenv("CONTEXTCUT_MODEL",           "")
+
+# ── Dynamic Provider Settings ────────────────────────────────────────────────
+PROVIDERS = {
+    "Ollama":     {"url": "http://localhost:11434", "key_required": False},
+    "OpenAI":     {"url": "https://api.openai.com/v1", "key_required": True},
+    "OpenRouter": {"url": "https://openrouter.ai/api/v1", "key_required": True},
+    "Anthropic":  {"url": "https://api.anthropic.com/v1", "key_required": True},
+    "xAI":        {"url": "https://api.x.ai/v1", "key_required": True},
+    "Custom":     {"url": "", "key_required": True},
+}
+_provider_name = "Ollama"
+_custom_base_url = ""
+_api_key = ""  # Stored in memory, loaded from encrypted file on startup
+
+def load_saved_credentials():
+    global _provider_name, _custom_base_url, _api_key
+    creds = CredentialManager.load_all()
+    _provider_name = creds.get("provider", "Ollama")
+    _custom_base_url = creds.get("custom_url", "")
+    _api_key = creds.get("api_key", "")
+
+def get_current_upstream():
+    global _provider_name, _custom_base_url
+    if _provider_name == "Custom":
+        return _custom_base_url
+    return PROVIDERS.get(_provider_name, {}).get("url", UPSTREAM)
+
+def get_current_api_key():
+    return _api_key if PROVIDERS.get(_provider_name, {}).get("key_required") else None
+
+load_saved_credentials()
 DEFAULT_TEMP   = float(os.getenv("CONTEXTCUT_TEMP",      "0.7"))
 DEFAULT_MAX_TK = int(os.getenv("CONTEXTCUT_MAX_TOKENS",  "0"))
 DEFAULT_TOP_P  = float(os.getenv("CONTEXTCUT_TOP_P",     "1.0"))
@@ -481,8 +566,15 @@ class ProxyHandler(_SuppressBrokenPipe, BaseHTTPRequestHandler):
     def log_message(self, fmt, *args): pass
 
     def _forward(self, method: str, raw_body: bytes, streaming: bool = False, session_id: str = None):
-        upstream_url = UPSTREAM + self.path
+        upstream = get_current_upstream()
+        upstream_url = upstream + self.path
         req = urllib.request.Request(upstream_url, data=raw_body if method == "POST" else None, method=method)
+        
+        # Inject API key header for cloud providers
+        api_key = get_current_api_key()
+        if api_key:
+            req.add_header("Authorization", f"Bearer {api_key}")
+
         for k, v in self.headers.items():
             if k.lower() not in ("host", "content-length"):
                 req.add_header(k, v)
@@ -684,6 +776,235 @@ def make_dashboard() -> str:
     no_rows = '<tr><td colspan="6" class="empty">No requests yet — send a message below</td></tr>'
 
     return f"""<!DOCTYPE html>
+"""
+
+def make_settings_page():
+    current_provider = _provider_name
+    current_url = _custom_base_url if current_provider == "Custom" else PROVIDERS.get(current_provider, {}).get("url", "")
+    has_key = bool(_api_key)
+    masked_key = "••••••••••••••••" if has_key else ""
+    provider_opts = "".join(f'<option value="{k}" {"selected" if k==current_provider else ""}>{k}</option>' for k in PROVIDERS.keys())
+    
+    return f"""<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>ContextCut-PRO — Settings</title>
+<link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;600&family=Syne:wght@400;700;800&display=swap" rel="stylesheet">
+<style>
+:root{{--bg:#080c14;--surf:#0d1420;--surf2:#111927;--border:#1e2d42;--text:#c9d8f0;--muted:#4a6080;--accent:#00d4ff;--green:#22c55e;--yellow:#f59e0b;--red:#ef4444;--r:6px}}
+*{{box-sizing:border-box;margin:0;padding:0}}
+body{{background:var(--bg);color:var(--text);font-family:'JetBrains Mono',monospace;font-size:13px;display:flex;flex-direction:column;height:100vh}}
+.header{{background:var(--surf);border-bottom:1px solid var(--border);padding:0 20px;display:flex;align-items:center;gap:14px;height:48px;flex-shrink:0}}
+.logo{{font-family:'Syne',sans-serif;font-size:20px;font-weight:800;color:var(--accent);letter-spacing:-.5px}}
+.logo span{{color:var(--text)}}
+.back-btn{{background:transparent;border:1px solid var(--border);color:var(--muted);border-radius:3px;padding:3px 10px;font-size:11px;cursor:pointer;font-family:'JetBrains Mono',monospace;margin-left:auto;text-decoration:none}}
+.back-btn:hover{{color:var(--text);border-color:var(--accent)}}
+.container{{flex:1;overflow-y:auto;padding:20px;display:flex;justify-content:center}}
+.card{{background:var(--surf);border:1px solid var(--border);border-radius:var(--r);padding:20px;width:100%;max-width:500px}}
+.card h2{{font-family:'Syne',sans-serif;font-size:18px;margin-bottom:16px;color:var(--accent)}}
+.form-group{{margin-bottom:16px}}
+.form-group label{{display:block;font-size:10px;color:var(--muted);text-transform:uppercase;letter-spacing:.1em;margin-bottom:6px}}
+.form-group select,.form-group input{{width:100%;background:var(--bg);border:1px solid var(--border);border-radius:var(--r);padding:8px 12px;color:var(--text);font-family:'JetBrains Mono',monospace;font-size:13px;outline:none}}
+.form-group select:focus,.form-group input:focus{{border-color:var(--accent)}}
+.form-group select{{cursor:pointer}}
+.form-group select option{{background:var(--surf);color:var(--text)}}
+.btn{{background:var(--accent);color:#000;border:none;border-radius:var(--r);padding:8px 16px;font-family:'Syne',sans-serif;font-weight:700;font-size:13px;cursor:pointer}}
+.btn:hover{{opacity:.85}}
+.btn:disabled{{opacity:.4;cursor:not-allowed}}
+.btn-secondary{{background:transparent;border:1px solid var(--border);color:var(--muted)}}
+.btn-secondary:hover{{color:var(--text);border-color:var(--accent)}}
+.btn-row{{display:flex;gap:8px;margin-top:8px}}
+#modelList{{max-height:200px;overflow-y:auto;background:var(--bg);border:1px solid var(--border);border-radius:var(--r);padding:8px;margin-top:8px;display:none}}
+#modelList.show{{display:block}}
+#modelList div{{padding:6px 8px;cursor:pointer;border-radius:3px;font-size:12px}}
+#modelList div:hover{{background:var(--surf2);color:var(--accent)}}
+.status{{font-size:11px;margin-top:8px;min-height:16px}}
+.status.ok{{color:var(--green)}}
+.status.err{{color:var(--red)}}
+.hidden{{display:none}}
+</style>
+</head>
+<body>
+<div class="header">
+  <div class="logo">ContextCut<span>-PRO</span></div>
+  <a href="/" class="back-btn">← Back to Dashboard</a>
+</div>
+<div class="container">
+  <div class="card">
+    <h2>LLM Provider Settings</h2>
+    
+    <div class="form-group">
+      <label>Provider</label>
+      <select id="providerSelect" onchange="onProviderChange()">
+        {provider_opts}
+      </select>
+    </div>
+
+    <div class="form-group hidden" id="customUrlGroup">
+      <label>Base URL</label>
+      <input type="text" id="customUrl" placeholder="https://api.example.com/v1">
+    </div>
+
+    <div class="form-group">
+      <label>API Key</label>
+      <input type="password" id="apiKey" value="{masked_key}" placeholder="Enter your API key">
+      <div style="font-size:10px;color:var(--muted);margin-top:4px">Stored encrypted on disk. Only your machine can decrypt it.</div>
+    </div>
+
+    <div class="form-group">
+      <label>Available Models</label>
+      <div class="btn-row">
+        <button class="btn" id="fetchBtn" onclick="fetchModels()">Fetch Models</button>
+        <span class="status" id="fetchStatus"></span>
+      </div>
+      <div id="modelList"></div>
+      <div id="selectedModel" style="font-size:12px;color:var(--accent);margin-top:6px"></div>
+    </div>
+
+    <div class="btn-row">
+      <button class="btn" id="saveBtn" onclick="saveSettings()">Save & Switch</button>
+      <span class="status" id="saveStatus"></span>
+    </div>
+  </div>
+</div>
+
+<script>
+let selectedModelName = null;
+
+function onProviderChange() {{
+  const p = document.getElementById('providerSelect').value;
+  const c = document.getElementById('customUrlGroup');
+  const k = document.getElementById('apiKey');
+  if (p === 'Ollama') {{
+    c.classList.add('hidden');
+    k.value = '';
+    k.placeholder = 'Not required for local Ollama';
+  }} else {{
+    if (p === 'Custom') c.classList.remove('hidden');
+    else c.classList.add('hidden');
+    k.placeholder = 'Enter your API key';
+  }}
+  hideModelList();
+}}
+
+function hideModelList() {{
+  document.getElementById('modelList').classList.remove('show');
+  document.getElementById('modelList').innerHTML = '';
+  document.getElementById('fetchStatus').textContent = '';
+  document.getElementById('selectedModel').textContent = '';
+  selectedModelName = null;
+}}
+
+async function fetchModels() {{
+  const status = document.getElementById('fetchStatus');
+  status.textContent = 'Fetching...';
+  status.className = 'status';
+  try {{
+    const provider = document.getElementById('providerSelect').value;
+    const apiKey = document.getElementById('apiKey').value;
+    const customUrl = document.getElementById('customUrl').value;
+    const resp = await fetch('/api/settings/models', {{
+      method: 'POST',
+      headers: {{'Content-Type': 'application/json'}},
+      body: JSON.stringify({{provider, api_key: apiKey, custom_url: customUrl}})
+    }});
+    const data = await resp.json();
+    if (data.error) {{
+      status.textContent = 'Error: ' + data.error;
+      status.className = 'status err';
+      return;
+    }}
+    const list = document.getElementById('modelList');
+    if (data.models && data.models.length) {{
+      list.innerHTML = data.models.map(m => `<div onclick="selectModel('${{m}}')">${{m}}</div>`).join('');
+      list.classList.add('show');
+      status.textContent = `${{data.models.length}} models found`;
+      status.className = 'status ok';
+    }} else {{
+      list.innerHTML = '<div style="color:var(--muted)">No models found</div>';
+      list.classList.add('show');
+    }}
+  }} catch(e) {{
+    status.textContent = 'Failed: ' + e.message;
+    status.className = 'status err';
+  }}
+}}
+
+function selectModel(name) {{
+  selectedModelName = name;
+  document.getElementById('modelList').classList.remove('show');
+  document.getElementById('selectedModel').textContent = 'Selected: ' + name;
+}}
+
+async function saveSettings() {{
+  const btn = document.getElementById('saveBtn');
+  const status = document.getElementById('saveStatus');
+  btn.disabled = true;
+  status.textContent = 'Saving...';
+  status.className = 'status';
+  try {{
+    const provider = document.getElementById('providerSelect').value;
+    const apiKey = document.getElementById('apiKey').value;
+    const customUrl = document.getElementById('customUrl').value;
+    const resp = await fetch('/api/settings/provider', {{
+      method: 'POST',
+      headers: {{'Content-Type': 'application/json'}},
+      body: JSON.stringify({{provider, api_key: apiKey, custom_url: customUrl, model: selectedModelName}})
+    }});
+    const data = await resp.json();
+    if (data.ok) {{
+      status.textContent = 'Saved! Provider switched to ' + provider;
+      status.className = 'status ok';
+      setTimeout(() => {{ window.location.href = '/'; }}, 1000);
+    }} else {{
+      status.textContent = 'Error saving';
+      status.className = 'status err';
+    }}
+  }} catch(e) {{
+    status.textContent = 'Failed: ' + e.message;
+    status.className = 'status err';
+  }} finally {{
+    btn.disabled = false;
+  }}
+}}
+
+onProviderChange();
+</script>
+</body>
+</html>"""
+
+def make_dashboard():
+    with _lock:
+        rows = list(_log)
+        s    = dict(_stats)
+
+    last_pct = rows[0]["pct"] if rows else 0
+    last_tok = rows[0]["tokens_after"] if rows else 0
+    bc       = pct_color(last_pct)
+
+    rows_html = ""
+    for r in rows:
+        p   = r["pct"]
+        col = pct_color(p)
+        hits_str = " ".join(
+            f'<span class="hit">{html.escape(h["source"].replace(".md",""))} <em>{h["score"]}</em></span>'
+            for h in r.get("hits", [])
+        ) or '<span style="color:#4b5563">—</span>'
+        bar = f'<div class="mini-bar"><div class="mini-fill" style="width:{min(p,100)}%;background:{col}"></div></div>'
+        rows_html += f"""<tr>
+          <td class="ts">{r['ts']}</td>
+          <td class="qcell">{html.escape(r['query'])}</td>
+          <td class="num">{r['tokens_before']}</td>
+          <td class="num">{r['tokens_after']}</td>
+          <td class="num" style="color:{col}">{p}%{bar}</td>
+          <td class="hitcell">{hits_str}</td>
+        </tr>"""
+
+    no_rows = '<tr><td colspan="6" class="empty">No requests yet — send a message below</td></tr>'
+
+    return f"""<!DOCTYPE html>
 <html lang="en">
 <head>
 <meta charset="UTF-8">
@@ -793,6 +1114,7 @@ tr:hover td{{background:var(--surf2)}}
 <div class="header">
   <div class="logo">ContextCut<span>-PRO</span></div>
   <div class="hinfo">{UPSTREAM} · Qdrant {QDRANT_HOST}:{QDRANT_PORT} · min_score={MIN_SCORE} · top_k={TOP_K}</div>
+  <a href="/settings" style="background:transparent;border:1px solid var(--border);color:var(--muted);border-radius:3px;padding:3px 10px;font-size:11px;cursor:pointer;font-family:'JetBrains Mono',monospace;text-decoration:none">Settings ⚙</a>
   <div class="live"><span class="dot"></span>live</div>
 </div>
 
@@ -1326,6 +1648,15 @@ class DashboardHandler(_SuppressBrokenPipe, BaseHTTPRequestHandler):
             self.send_header("Content-Length",str(len(body)))
             self.end_headers()
             self.wfile.write(body)
+            return
+        if self.path == "/settings":
+            page = make_settings_page().encode()
+            self.send_response(200)
+            self.send_header("Content-Type","text/html; charset=utf-8")
+            self.send_header("Content-Length",str(len(page)))
+            self.end_headers()
+            self.wfile.write(page)
+            return
         else:
             page = make_dashboard().encode()
             self.send_response(200)
@@ -1337,6 +1668,74 @@ class DashboardHandler(_SuppressBrokenPipe, BaseHTTPRequestHandler):
     def do_POST(self):
         length   = int(self.headers.get("Content-Length",0))
         raw_body = self.rfile.read(length)
+
+        # ── Settings endpoints ──
+        if self.path == "/api/settings/provider":
+            try:
+                body = json.loads(raw_body)
+                global _provider_name, _custom_base_url, _api_key, UPSTREAM
+                _provider_name = body.get("provider", "Ollama")
+                _custom_base_url = body.get("custom_url", "").strip()
+                _api_key = body.get("api_key", "").strip()
+                if _provider_name != "Custom":
+                    UPSTREAM = PROVIDERS.get(_provider_name, {}).get("url", "http://localhost:11434")
+                else:
+                    UPSTREAM = _custom_base_url
+
+                # Save securely to disk
+                CredentialManager.save("provider", _provider_name)
+                CredentialManager.save("custom_url", _custom_base_url)
+                if _api_key: CredentialManager.save("api_key", _api_key)
+
+                print(f"[contextcut] Provider switched to {_provider_name} | upstream: {UPSTREAM}")
+                resp = json.dumps({"ok": True, "upstream": UPSTREAM, "has_key": bool(_api_key)}).encode()
+                self.send_response(200)
+                self.send_header("Content-Type", "application/json")
+                self.send_header("Content-Length", str(len(resp)))
+                self.end_headers()
+                self.wfile.write(resp)
+                return
+            except Exception as e:
+                err = json.dumps({"error": str(e)}).encode()
+                self.send_response(400)
+                self.send_header("Content-Type", "application/json")
+                self.send_header("Content-Length", str(len(err)))
+                self.end_headers()
+                self.wfile.write(err)
+                return
+
+        if self.path == "/api/settings/models":
+            try:
+                body = json.loads(raw_body)
+                provider = body.get("provider", "Ollama")
+                api_key = body.get("api_key", "").strip()
+                custom_url = body.get("custom_url", "").strip()
+                
+                base = PROVIDERS.get(provider, {}).get("url", "http://localhost:11434")
+                if provider == "Custom" and custom_url:
+                    base = custom_url
+                
+                req = urllib.request.Request(f"{base}/v1/models", method="GET")
+                if api_key and PROVIDERS.get(provider, {}).get("key_required"):
+                    req.add_header("Authorization", f"Bearer {api_key}")
+                with urllib.request.urlopen(req, timeout=10) as r:
+                    data = json.loads(r.read().decode())
+                    models = sorted([m.get("id", m) for m in data.get("data", [])])
+                    resp = json.dumps({"models": models}).encode()
+                self.send_response(200)
+                self.send_header("Content-Type", "application/json")
+                self.send_header("Content-Length", str(len(resp)))
+                self.end_headers()
+                self.wfile.write(resp)
+                return
+            except Exception as e:
+                err = json.dumps({"error": str(e), "models": []}).encode()
+                self.send_response(200)
+                self.send_header("Content-Type", "application/json")
+                self.send_header("Content-Length", str(len(err)))
+                self.end_headers()
+                self.wfile.write(err)
+                return
 
         # ── Settings endpoint: update global MIN_SCORE live ──
         if self.path == "/api/settings":

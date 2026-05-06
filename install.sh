@@ -167,7 +167,7 @@ source "$INSTALL_DIR/venv/bin/activate"
 
 echo "  Installing Python dependencies..."
 pip install --upgrade pip -q
-pip install voyageai qdrant-client watchdog -q
+pip install voyageai qdrant-client watchdog cryptography -q
 pip install tiktoken -q && echo "  tiktoken installed (exact token counts)" || echo "  tiktoken skipped (estimate mode)"
 
 # ── Download scripts ──────────────────────────────────────────────────────────
