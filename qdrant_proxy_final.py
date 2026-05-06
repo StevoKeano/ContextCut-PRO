@@ -1650,10 +1650,10 @@ class DashboardHandler(_SuppressBrokenPipe, BaseHTTPRequestHandler):
             self.wfile.write(body)
             return
         if self.path == "/settings":
-            page = make_settings_page().encode()
+            page = make_settings_page().encode("utf-8")
             self.send_response(200)
-            self.send_header("Content-Type","text/html; charset=utf-8")
-            self.send_header("Content-Length",str(len(page)))
+            self.send_header("Content-Type", "text/html; charset=utf-8")
+            self.send_header("Content-Length", str(len(page)))
             self.end_headers()
             self.wfile.write(page)
             return
@@ -1713,25 +1713,34 @@ class DashboardHandler(_SuppressBrokenPipe, BaseHTTPRequestHandler):
                 
                 base = PROVIDERS.get(provider, {}).get("url", "http://localhost:11434")
                 if provider == "Custom" and custom_url:
-                    base = custom_url
+                    base = custom_url.rstrip("/")
                 
                 req = urllib.request.Request(f"{base}/v1/models", method="GET")
+                req.add_header("User-Agent", "ContextCutPRO/1.0")
+                req.add_header("Accept", "application/json")
                 if api_key and PROVIDERS.get(provider, {}).get("key_required"):
                     req.add_header("Authorization", f"Bearer {api_key}")
-                with urllib.request.urlopen(req, timeout=10) as r:
-                    data = json.loads(r.read().decode())
+                
+                with urllib.request.urlopen(req, timeout=15) as r:
+                    raw = r.read()
+                    try:
+                        data = json.loads(raw.decode("utf-8"))
+                    except UnicodeDecodeError:
+                        data = json.loads(raw.decode("latin-1"))
+                    
                     models = sorted([m.get("id", m) for m in data.get("data", [])])
-                    resp = json.dumps({"models": models}).encode()
+                    resp = json.dumps({"models": models}).encode("utf-8")
                 self.send_response(200)
-                self.send_header("Content-Type", "application/json")
+                self.send_header("Content-Type", "application/json; charset=utf-8")
                 self.send_header("Content-Length", str(len(resp)))
                 self.end_headers()
                 self.wfile.write(resp)
                 return
             except Exception as e:
-                err = json.dumps({"error": str(e), "models": []}).encode()
+                err_msg = str(e).encode("ascii", errors="replace").decode()
+                err = json.dumps({"error": err_msg, "models": []}).encode("utf-8")
                 self.send_response(200)
-                self.send_header("Content-Type", "application/json")
+                self.send_header("Content-Type", "application/json; charset=utf-8")
                 self.send_header("Content-Length", str(len(err)))
                 self.end_headers()
                 self.wfile.write(err)
