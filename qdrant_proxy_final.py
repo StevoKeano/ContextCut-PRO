@@ -1605,7 +1605,6 @@ class DashboardHandler(_SuppressBrokenPipe, BaseHTTPRequestHandler):
             self.wfile.write(body)
             return
         if self.path == "/api/tags":
-            # Used by dashboard to populate model dropdown
             try:
                 upstream = get_current_upstream()
                 api_key = get_current_api_key()
@@ -1613,9 +1612,9 @@ class DashboardHandler(_SuppressBrokenPipe, BaseHTTPRequestHandler):
                 if _provider_name == "Ollama":
                     req = urllib.request.Request(f"{upstream}/api/tags", method="GET")
                     with urllib.request.urlopen(req, timeout=5) as r:
-                        data = json.loads(r.read().decode())
+                        data = json.loads(r.read().decode("utf-8"))
                         models = [{"name": m["name"]} for m in data.get("models", [])]
-                        body = json.dumps({"models": models}).encode()
+                        body = json.dumps({"models": models}, ensure_ascii=True).encode("utf-8")
                 else:
                     url = f"{upstream}/v1/models"
                     req = urllib.request.Request(url, method="GET")
@@ -1637,16 +1636,9 @@ class DashboardHandler(_SuppressBrokenPipe, BaseHTTPRequestHandler):
                 self.send_header("Content-Length", str(len(body)))
                 self.end_headers()
                 self.wfile.write(body)
-            except (ConnectionRefusedError, OSError) as e:
-                # Ollama not running — return empty list silently
-                body = json.dumps({"models": []}, ensure_ascii=True).encode("utf-8")
-                self.send_response(200)
-                self.send_header("Content-Type", "application/json")
-                self.send_header("Content-Length", str(len(body)))
-                self.end_headers()
-                self.wfile.write(body)
             except Exception as e:
-                err_body = json.dumps({"models": [], "error": str(e)[:100]}, ensure_ascii=True).encode("utf-8")
+                safe_msg = str(e)[:100].encode("ascii", errors="replace").decode("ascii")
+                err_body = json.dumps({"models": [], "error": safe_msg}, ensure_ascii=True).encode("utf-8")
                 self.send_response(200)
                 self.send_header("Content-Type", "application/json")
                 self.send_header("Content-Length", str(len(err_body)))
@@ -1739,7 +1731,7 @@ class DashboardHandler(_SuppressBrokenPipe, BaseHTTPRequestHandler):
                 self.wfile.write(resp)
                 return
             except Exception as e:
-                err = json.dumps({"error": str(e)}).encode()
+                err = json.dumps({"error": str(e).encode("ascii", errors="replace").decode("ascii")}).encode()
                 self.send_response(400)
                 self.send_header("Content-Type", "application/json")
                 self.send_header("Content-Length", str(len(err)))
@@ -1758,7 +1750,7 @@ class DashboardHandler(_SuppressBrokenPipe, BaseHTTPRequestHandler):
                     # Ollama uses /api/tags, NOT /v1/models
                     req = urllib.request.Request("http://localhost:11434/api/tags", method="GET")
                     with urllib.request.urlopen(req, timeout=5) as r:
-                        data = json.loads(r.read().decode())
+                        data = json.loads(r.read().decode("utf-8"))
                         models = sorted([m["name"] for m in data.get("models", [])])
                 elif provider == "Custom" and custom_url:
                     base = custom_url.rstrip("/")
@@ -1799,7 +1791,7 @@ class DashboardHandler(_SuppressBrokenPipe, BaseHTTPRequestHandler):
                 self.wfile.write(resp)
                 return
             except (ConnectionRefusedError, OSError) as e:
-                err_msg = "Connection refused — is the service running?"
+                err_msg = "Connection refused - is the service running?"
                 resp = json.dumps({"models": [], "error": err_msg}, ensure_ascii=True).encode("utf-8")
                 self.send_response(200)
                 self.send_header("Content-Type", "application/json; charset=utf-8")
@@ -1808,7 +1800,10 @@ class DashboardHandler(_SuppressBrokenPipe, BaseHTTPRequestHandler):
                 self.wfile.write(resp)
                 return
             except urllib.error.HTTPError as e:
-                err_msg = f"HTTP {e.code}: {e.read().decode(errors='replace')[:200]}"
+                raw_err = e.read()
+                err_text = raw_err.decode("utf-8", errors="replace")[:200]
+                err_text = err_text.encode("ascii", errors="replace").decode("ascii")
+                err_msg = "HTTP %d: %s" % (e.code, err_text)
                 resp = json.dumps({"models": [], "error": err_msg}, ensure_ascii=True).encode("utf-8")
                 self.send_response(200)
                 self.send_header("Content-Type", "application/json; charset=utf-8")
@@ -1817,7 +1812,7 @@ class DashboardHandler(_SuppressBrokenPipe, BaseHTTPRequestHandler):
                 self.wfile.write(resp)
                 return
             except Exception as e:
-                err_msg = str(e)[:200]
+                err_msg = str(e)[:200].encode("ascii", errors="replace").decode("ascii")
                 resp = json.dumps({"models": [], "error": err_msg}, ensure_ascii=True).encode("utf-8")
                 self.send_response(200)
                 self.send_header("Content-Type", "application/json; charset=utf-8")
