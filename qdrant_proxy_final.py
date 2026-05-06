@@ -20,6 +20,7 @@ Configuration via environment variables (all optional — defaults shown):
 """
 
 import os
+import sys
 import uuid
 import json
 import html
@@ -1866,8 +1867,13 @@ if __name__ == "__main__":
             print(f"ERROR: {msg}")
             if "limit reached" in msg.lower() or "seats" in msg.lower():
                 try:
-                    answer = input("\n  Release all license seats and retry? [y/N]: ").strip().lower()
-                    if answer in ("y", "yes"):
+                    if sys.stdin.isatty():
+                        answer = input("\n  Release all license seats and retry? [y/N]: ").strip().lower()
+                        should_release = answer in ("y", "yes")
+                    else:
+                        print("[contextcut] Non-interactive mode — auto-releasing stale seats...")
+                        should_release = True
+                    if should_release:
                         payload = json.dumps({"license_key": LICENSE_KEY}).encode()
                         req = urllib.request.Request(
                             f"{LICENSE_SERVER}/v1/license/reset",
