@@ -115,24 +115,23 @@ PROVIDERS = {
 }
 _provider_name = "Ollama"
 _custom_base_url = ""
+_ollama_url = ""
 _api_key = ""  # Stored in memory, loaded from encrypted file on startup
 
 def load_saved_credentials():
-    global _provider_name, _custom_base_url, _api_key, UPSTREAM
+    global _provider_name, _custom_base_url, _ollama_url, _api_key
     creds = CredentialManager.load_all()
     _provider_name = creds.get("provider", "Ollama")
     _custom_base_url = creds.get("custom_url", "")
+    _ollama_url = creds.get("ollama_url", "")
     _api_key = creds.get("api_key", "")
-    saved_ollama_url = creds.get("ollama_url", "")
-    if _provider_name == "Ollama" and saved_ollama_url:
-        UPSTREAM = saved_ollama_url
 
 def get_current_upstream():
-    global _provider_name, _custom_base_url
+    global _provider_name, _custom_base_url, _ollama_url
     if _provider_name == "Custom":
         return _custom_base_url
     if _provider_name == "Ollama":
-        return UPSTREAM
+        return _ollama_url if _ollama_url else UPSTREAM
     base = PROVIDERS.get(_provider_name, {}).get("url", "")
     return base + "/v1"
 
@@ -792,7 +791,7 @@ def make_settings_page():
     current_provider = _provider_name
     current_url = _custom_base_url if current_provider == "Custom" else PROVIDERS.get(current_provider, {}).get("url", "")
     if current_provider == "Ollama":
-        current_url = UPSTREAM
+        current_url = _ollama_url if _ollama_url else UPSTREAM
     has_key = bool(_api_key)
     masked_key = "••••••••••••••••" if has_key else ""
     provider_opts = "".join(f'<option value="{k}" {"selected" if k==current_provider else ""}>{k}</option>' for k in PROVIDERS.keys())
@@ -1726,15 +1725,15 @@ class DashboardHandler(_SuppressBrokenPipe, BaseHTTPRequestHandler):
         if self.path == "/api/settings/provider":
             try:
                 body = json.loads(raw_body)
-                global _provider_name, _custom_base_url, _api_key, UPSTREAM
+                global _provider_name, _custom_base_url, _ollama_url, _api_key, UPSTREAM
                 _provider_name = body.get("provider", "Ollama")
                 _custom_base_url = body.get("custom_url", "").strip()
                 _api_key = body.get("api_key", "").strip()
                 ollama_url = body.get("ollama_url", "").strip()
-                
+
                 if _provider_name == "Ollama" and ollama_url:
-                    UPSTREAM = ollama_url
-                
+                    _ollama_url = ollama_url
+
                 UPSTREAM = get_current_upstream()
 
                 # Save securely to disk
@@ -1770,7 +1769,7 @@ class DashboardHandler(_SuppressBrokenPipe, BaseHTTPRequestHandler):
                 
                 if provider == "Ollama":
                     # Ollama uses /api/tags, NOT /v1/models
-                    base = ollama_url if ollama_url else (UPSTREAM or "http://localhost:11434")
+                    base = ollama_url if ollama_url else (_ollama_url or UPSTREAM or "http://localhost:11434")
                     req = urllib.request.Request(f"{base}/api/tags", method="GET")
                     with urllib.request.urlopen(req, timeout=5) as r:
                         data = json.loads(r.read().decode("utf-8"))
