@@ -1600,9 +1600,31 @@ class DashboardHandler(_SuppressBrokenPipe, BaseHTTPRequestHandler):
         if self.path == "/api/tags":
             try:
                 upstream = get_current_upstream()
-                req = urllib.request.Request(f"{upstream}/api/tags", method="GET")
-                with urllib.request.urlopen(req, timeout=5) as r:
-                    body = r.read()
+                api_key = get_current_api_key()
+                
+                # Ollama uses /api/tags, cloud providers use /v1/models
+                if _provider_name == "Ollama":
+                    req = urllib.request.Request(f"{upstream}/api/tags", method="GET")
+                    with urllib.request.urlopen(req, timeout=5) as r:
+                        data = json.loads(r.read().decode())
+                        # Transform to match frontend expectation
+                        models = [{"name": m["name"]} for m in data.get("models", [])]
+                        body = json.dumps({"models": models}).encode()
+                else:
+                    req = urllib.request.Request(f"{upstream}/v1/models", method="GET")
+                    req.add_header("Authorization", f"Bearer {api_key}")
+                    req.add_header("Accept", "application/json")
+                    with urllib.request.urlopen(req, timeout=10) as r:
+                        raw = r.read()
+                        if r.headers.get("Content-Encoding") == "gzip":
+                            import gzip
+                            raw = gzip.decompress(raw)
+                        data = json.loads(raw.decode("utf-8"))
+                        # Transform OpenAI format to frontend expectation
+                        models = [{"name": m.get("id", str(m))} for m in data.get("data", [])]
+                        models.sort(key=lambda x: x["name"])
+                        body = json.dumps({"models": models}).encode()
+                
                 self.send_response(200)
                 self.send_header("Content-Type", "application/json")
                 self.send_header("Content-Length", str(len(body)))
