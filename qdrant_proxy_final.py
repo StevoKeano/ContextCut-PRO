@@ -459,7 +459,7 @@ import signal
 def _handle_signal(signum, frame):
     print("\n[contextcut] Shutting down gracefully...")
     shutdown_hook()
-    raise SystemExit(0)
+    os._exit(0)
 
 signal.signal(signal.SIGINT, _handle_signal)
 signal.signal(signal.SIGTERM, _handle_signal)
@@ -996,7 +996,7 @@ async function saveSettings() {{
     }});
     const data = await resp.json();
     if (data.ok) {{
-      if (sessionId) localStorage.setItem('contextcut_session', sessionId);
+      if (typeof sessionId !== 'undefined' && sessionId) localStorage.setItem('contextcut_session', sessionId);
       const msgs = document.getElementById('messages');
       if (msgs) localStorage.setItem('contextcut_msgs', msgs.innerHTML);
       status.textContent = 'Saved! Switching to dashboard...';
