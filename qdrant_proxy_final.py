@@ -1862,11 +1862,43 @@ if __name__ == "__main__":
     if LICENSE_KEY:
         print("[contextcut] Validating license key...")
         if not validate_license():
-            print(f"ERROR: {_license_state['message']}")
-            raise SystemExit(1)
-        print(f"[contextcut] License: {_license_state.get('license_type','?')} | {_license_state['message']}")
-        threading.Thread(target=heartbeat_loop, daemon=True).start()
-        print(f"[contextcut] Heartbeat: every {HEARTBEAT_INTERVAL}s | grace: {GRACE_PERIOD}s")
+            msg = _license_state['message']
+            print(f"ERROR: {msg}")
+            if "limit reached" in msg.lower() or "seats" in msg.lower():
+                try:
+                    answer = input("\n  Release all license seats and retry? [y/N]: ").strip().lower()
+                    if answer in ("y", "yes"):
+                        payload = json.dumps({"license_key": LICENSE_KEY}).encode()
+                        req = urllib.request.Request(
+                            f"{LICENSE_SERVER}/v1/license/reset",
+                            data=payload,
+                            headers={"Content-Type": "application/json"},
+                            method="POST",
+                        )
+                        with urllib.request.urlopen(req, timeout=10) as resp:
+                            result = json.loads(resp.read().decode())
+                        print(f"[contextcut] {result.get('message', 'Seats reset')}")
+                        print("[contextcut] Retrying license validation...")
+                        time.sleep(1)
+                        if validate_license():
+                            print(f"[contextcut] License: {_license_state.get('license_type','?')} | {_license_state['message']}")
+                            threading.Thread(target=heartbeat_loop, daemon=True).start()
+                            print(f"[contextcut] Heartbeat: every {HEARTBEAT_INTERVAL}s | grace: {GRACE_PERIOD}s")
+                        else:
+                            print(f"ERROR: {_license_state['message']}")
+                            raise SystemExit(1)
+                    else:
+                        print("Exiting. Release seats manually or wait 30 minutes.")
+                        raise SystemExit(1)
+                except Exception as e:
+                    print(f"ERROR: Failed to release seats: {e}")
+                    raise SystemExit(1)
+            else:
+                raise SystemExit(1)
+        else:
+            print(f"[contextcut] License: {_license_state.get('license_type','?')} | {_license_state['message']}")
+            threading.Thread(target=heartbeat_loop, daemon=True).start()
+            print(f"[contextcut] Heartbeat: every {HEARTBEAT_INTERVAL}s | grace: {GRACE_PERIOD}s")
     else:
         print("[contextcut] WARNING: No license key set. Set CONTEXTCUT_LICENSE_KEY.")
 
