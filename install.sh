@@ -24,6 +24,8 @@ if [ -n "$CONTEXTCUT_LICENSE_KEY" ]; then
   echo ""
   echo "  ── ContextCut PRO License ──"
   echo "  License key detected automatically: ${LICENSE_KEY:0:16}..."
+  # Reconnect stdin to terminal so read prompts work when piped via curl
+  exec < /dev/tty
 fi
 
 # ── Collect config ────────────────────────────────────────────────────────────
@@ -97,10 +99,12 @@ else
     exit 1
   fi
 
-  read -p "  Voyage AI API key (from dash.voyageai.com): " VOYAGE_KEY
+  read -p "  Voyage AI API key (leave blank for local Ollama embedding): " VOYAGE_KEY
+
   if [ -z "$VOYAGE_KEY" ]; then
-    echo "ERROR: Voyage API key is required."
-    exit 1
+    echo "  100% local mode — using Ollama for embeddings."
+    read -p "  Embedding model [nomic-embed-text]: " EMBED_MODEL
+    EMBED_MODEL="${EMBED_MODEL:-nomic-embed-text}"
   fi
 
   read -p "  Ollama host [localhost]: " OLLAMA_HOST
