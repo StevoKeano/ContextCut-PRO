@@ -1165,6 +1165,8 @@ tr:hover td{{background:var(--surf2)}}
 .settings-toggle:hover{{color:var(--text);border-color:var(--accent)}}
 .settings-panel{{display:none;background:var(--surf);border-top:1px solid var(--border);padding:8px 10px}}
 .settings-panel.open{{display:block}}
+.right.fullscreen{{position:fixed;top:48px;left:0;right:0;bottom:0;z-index:100;background:var(--bg);border-top:1px solid var(--border)}}
+.right.fullscreen .chat-input-bar{{position:fixed;bottom:0;left:0;right:0}}
 </style>
 </head>
 <body>
@@ -1212,6 +1214,7 @@ tr:hover td{{background:var(--surf2)}}
   <div class="right">
     <div class="chat-header" id="chatHeader">
       <span class="session-badge" id="sessionBadge">Session: new</span>
+      <button class="clear-btn" id="fsBtn" onclick="toggleFullscreen()" title="Toggle fullscreen (F11)" style="font-size:15px;padding:2px 8px;line-height:1">⛶</button>
       <button class="clear-btn" id="clearBtn" onclick="clearConversation()" title="Clear conversation (/clear)">Clear</button>
     </div>
     <div class="chat-messages" id="messages" role="log" aria-live="polite" aria-label="Chat messages">
@@ -1334,6 +1337,10 @@ function restoreMessages() {{
     msgs.innerHTML = saved;
     msgs.querySelector('.bubble:last-of-type')?.scrollIntoView({{behavior:'instant', block:'end'}});
   }}
+}}
+
+function toggleFullscreen() {{
+  document.querySelector('.right').classList.toggle('fullscreen');
 }}
 
 function toggleSettings() {{
