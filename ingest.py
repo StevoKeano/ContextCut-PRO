@@ -54,7 +54,27 @@ VOYAGE_API_KEY = os.environ.get("VOYAGE_API_KEY", "").strip().strip('"').strip("
 OLLAMA_EMBED   = os.environ.get("CONTEXTCUT_EMBED_MODEL", "").strip().strip('"').strip("'")
 OLLAMA_URL     = os.environ.get("CONTEXTCUT_UPSTREAM", "http://localhost:11434")
 VOYAGE_MODEL = "voyage-3"
-EMBED_DIM    = 1024
+
+def _get_embed_dim():
+    """Return embedding dimension based on active model."""
+    if OLLAMA_EMBED:
+        dims = {
+            "nomic-embed-text": 768,
+            "nomic-embed-text-v1.5": 768,
+            "nomic-embed-text-v2-moe": 768,
+            "mxbai-embed-large": 1024,
+            "bge-m3": 1024,
+            "qwen3-embedding:0.6b": 4096,
+            "qwen3-embedding:4b": 4096,
+            "qwen3-embedding:8b": 4096,
+            "snowflake-arctic-embed-l": 1024,
+            "all-minilm": 384,
+        }
+        base = OLLAMA_EMBED.split(":")[0]
+        return dims.get(OLLAMA_EMBED, dims.get(base, 1024))
+    return 1024
+
+EMBED_DIM = _get_embed_dim()
 
 # Files to never ingest
 EXCLUDE_FILES = {"MEMORY.md"}
@@ -87,7 +107,19 @@ def ensure_collection():
             collection_name=COLLECTION,
             vectors_config=VectorParams(size=EMBED_DIM, distance=Distance.COSINE),
         )
-        print(f"[+] Created collection '{COLLECTION}'")
+        print(f"[+] Created collection '{COLLECTION}' (dim={EMBED_DIM})")
+    else:
+        info = qc.get_collection(COLLECTION)
+        actual_dim = info.config.params.vectors.size
+        if actual_dim != EMBED_DIM:
+            print(f"[!] Dimension mismatch: Qdrant has {actual_dim}, model needs {EMBED_DIM}")
+            print(f"[!] Recreating collection '{COLLECTION}' with dim={EMBED_DIM}...")
+            qc.delete_collection(COLLECTION)
+            qc.create_collection(
+                collection_name=COLLECTION,
+                vectors_config=VectorParams(size=EMBED_DIM, distance=Distance.COSINE),
+            )
+            print(f"[+] Recreated collection '{COLLECTION}'")
 
 # ── Ingest ────────────────────────────────────────────────────────────────────
 def file_id(path: Path) -> str:
