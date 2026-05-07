@@ -913,7 +913,6 @@ function onProviderChange() {{
     o.classList.remove('hidden');
     c.classList.add('hidden');
     f.classList.add('hidden');
-    k.value = '';
     k.placeholder = 'Not required for local Ollama';
   }} else {{
     o.classList.add('hidden');
@@ -1300,18 +1299,13 @@ async function initSession() {{
     localStorage.removeItem('contextcut_session');
     updateSessionBadge();
     restoreMessages();
-  }}
-  const savedModel = localStorage.getItem('contextcut_model');
-  if (savedModel) {{
-    localStorage.removeItem('contextcut_model');
-    const inp = document.getElementById('modelInput');
-    if (inp) inp.value = savedModel;
+    return;
   }}
   try {{
     const r = await fetch('/api/session/new');
     if (r.ok) {{
       const d = await r.json();
-      if (!sessionId) sessionId = d.session_id;
+      sessionId = d.session_id;
       updateSessionBadge();
     }}
   }} catch(e) {{}}
@@ -1474,7 +1468,14 @@ async function fetchModels() {{
     sel.innerHTML = '<option value="">▾</option>' +
       models.map(m=>`<option value="${{m}}">${{m}}</option>`).join('');
     const inp = document.getElementById('modelInput');
-    if (inp && models.length) inp.value = models[0];
+    if (!inp) return;
+    const savedModel = localStorage.getItem('contextcut_model');
+    if (savedModel && models.includes(savedModel)) {{
+      inp.value = savedModel;
+      localStorage.removeItem('contextcut_model');
+    }} else if (!inp.value || !models.includes(inp.value)) {{
+      inp.value = models[0];
+    }}
   }} catch(e) {{}}
 }}
 
