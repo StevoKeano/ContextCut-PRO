@@ -478,44 +478,76 @@ _vc            = None
 _qclient       = None
 _last_embed_ts = 0.0
 _VK            = os.environ.get("VOYAGE_API_KEY", "").strip().strip('"').strip("'")  # strip accidental quotes
+_LOCAL_EMBED   = os.environ.get("CONTEXTCUT_EMBED_MODEL", "").strip().strip('"').strip("'")
 
 def get_clients():
     global _vc, _qclient
-    if _vc is None:
-        if not _VK:
-            print("[contextcut] WARNING: VOYAGE_API_KEY is empty at get_clients()")
-        else:
-            print(f"[contextcut] Voyage API key loaded: {_VK[:8]}...")
+    if _vc is None and _VK:
+        print(f"[contextcut] Voyage API key loaded: {_VK[:8]}...")
         _vc = voyageai.Client(api_key=_VK)
     if _qclient is None:
         _qclient = QdrantClient(host=QDRANT_HOST, port=QDRANT_PORT)
     return _vc, _qclient
 
+def _ollama_embed(text: str, model: str) -> list[float] | None:
+    """Embed using Ollama's /api/embed endpoint."""
+    try:
+        payload = json.dumps({"model": model, "input": text}).encode()
+        req = urllib.request.Request(f"{UPSTREAM}/api/embed", data=payload, method="POST")
+        req.add_header("Content-Type", "application/json")
+        with urllib.request.urlopen(req, timeout=30) as resp:
+            data = json.loads(resp.read().decode("utf-8"))
+        embeddings = data.get("embeddings", [])
+        if embeddings:
+            return embeddings[0]
+        return None
+    except Exception as e:
+        print(f"[contextcut] Ollama embed error: {e}")
+        return None
+
 # ── Qdrant lookup ─────────────────────────────────────────────────────────────
 def _safe_embed(query: str, input_type: str) -> list[float] | None:
-    """Embed with retry on rate limit (matches ingest.py safe_embed)."""
+    """Embed with retry. Uses Voyage AI if key set, falls back to Ollama local model."""
     global _last_embed_ts
-    max_retries = 3
-    for attempt in range(max_retries):
-        elapsed = time.time() - _last_embed_ts
-        if elapsed < 22.0:
-            time.sleep(22.0 - elapsed)
-        try:
-            vc, _ = get_clients()
-            result = vc.embed([query], model="voyage-3", input_type=input_type)
-            _last_embed_ts = time.time()
-            return result.embeddings[0]
-        except Exception as e:
-            err_msg = str(e).lower()
-            if "rate" in err_msg or "429" in err_msg:
-                wait = 60 + random.uniform(5, 15)
-                print(f"[contextcut] Voyage rate-limited, backing off {wait:.0f}s (attempt {attempt+1}/{max_retries})")
-                time.sleep(wait)
-            else:
-                print(f"[contextcut] Voyage embed error: {e}")
-                print(f"[contextcut] API key present: {bool(_VK)}, first 4 chars: {_VK[:4] if _VK else 'NONE'}")
-                return None
-    print(f"[contextcut] Voyage embed failed after {max_retries} retries")
+
+    # Try Voyage AI first if key available
+    if _VK:
+        max_retries = 3
+        for attempt in range(max_retries):
+            elapsed = time.time() - _last_embed_ts
+            if elapsed < 22.0:
+                time.sleep(22.0 - elapsed)
+            try:
+                vc, _ = get_clients()
+                result = vc.embed([query], model="voyage-3", input_type=input_type)
+                _last_embed_ts = time.time()
+                return result.embeddings[0]
+            except Exception as e:
+                err_msg = str(e).lower()
+                if "rate" in err_msg or "429" in err_msg:
+                    wait = 60 + random.uniform(5, 15)
+                    print(f"[contextcut] Voyage rate-limited, backing off {wait:.0f}s (attempt {attempt+1}/{max_retries})")
+                    time.sleep(wait)
+                else:
+                    print(f"[contextcut] Voyage embed error: {e}")
+                    if _LOCAL_EMBED:
+                        print(f"[contextcut] Falling back to Ollama embed model: {_LOCAL_EMBED}")
+                        emb = _ollama_embed(query, _LOCAL_EMBED)
+                        if emb is not None:
+                            return emb
+                    return None
+        print(f"[contextcut] Voyage embed failed after {max_retries} retries")
+        if _LOCAL_EMBED:
+            print(f"[contextcut] Falling back to Ollama embed model: {_LOCAL_EMBED}")
+            return _ollama_embed(query, _LOCAL_EMBED)
+        return None
+
+    # No Voyage key — use Ollama directly
+    if _LOCAL_EMBED:
+        print(f"[contextcut] Using Ollama local embed: {_LOCAL_EMBED}")
+        return _ollama_embed(query, _LOCAL_EMBED)
+
+    print("[contextcut] WARNING: No embedding backend configured. Set VOYAGE_API_KEY or CONTEXTCUT_EMBED_MODEL")
     return None
 
 def qdrant_context(query: str) -> tuple[str, list[dict]]:
@@ -2044,9 +2076,14 @@ class DashboardHandler(_SuppressBrokenPipe, BaseHTTPRequestHandler):
 
 # ── Main ──────────────────────────────────────────────────────────────────────
 if __name__ == "__main__":
-    if not os.getenv("VOYAGE_API_KEY"):
-        print("ERROR: VOYAGE_API_KEY not set. Export it and retry.")
+    if not os.getenv("VOYAGE_API_KEY") and not _LOCAL_EMBED:
+        print("ERROR: Neither VOYAGE_API_KEY nor CONTEXTCUT_EMBED_MODEL set. Set at least one.")
         raise SystemExit(1)
+
+    if _VK:
+        print(f"[contextcut] Embedding: Voyage AI (voyage-3)")
+    elif _LOCAL_EMBED:
+        print(f"[contextcut] Embedding: Ollama ({_LOCAL_EMBED})")
 
     load_sessions()
 

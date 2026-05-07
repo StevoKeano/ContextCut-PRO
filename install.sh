@@ -33,10 +33,12 @@ if $AUTO_INSTALL; then
   echo "  Defaults shown in [brackets]. Press Enter to accept, or type a new value."
   echo ""
 
-  read -p "  Voyage AI API key (from dash.voyageai.com): " VOYAGE_KEY
+  read -p "  Voyage AI API key (leave blank for local Ollama embedding): " VOYAGE_KEY
+
   if [ -z "$VOYAGE_KEY" ]; then
-    echo "ERROR: Voyage API key is required."
-    exit 1
+    echo "  100% local mode — using Ollama for embeddings."
+    read -p "  Embedding model [nomic-embed-text]: " EMBED_MODEL
+    EMBED_MODEL="${EMBED_MODEL:-nomic-embed-text}"
   fi
 
   read -p "  Ollama host [localhost]: " OLLAMA_HOST
@@ -180,6 +182,7 @@ cat > "$INSTALL_DIR/.env" << EOF
 CONTEXTCUT_LICENSE_KEY=$LICENSE_KEY
 CONTEXTCUT_LICENSE_SERVER=https://contextcut-license.ppsel03.workers.dev
 VOYAGE_API_KEY=$VOYAGE_KEY
+CONTEXTCUT_EMBED_MODEL=$EMBED_MODEL
 CONTEXTCUT_UPSTREAM=http://$OLLAMA_HOST:$OLLAMA_PORT
 CONTEXTCUT_QDRANT_HOST=$QDRANT_HOST
 CONTEXTCUT_QDRANT_PORT=$QDRANT_PORT
@@ -248,6 +251,7 @@ RESETEOF
     <key>CONTEXTCUT_LICENSE_KEY</key><string>$LICENSE_KEY</string>
     <key>CONTEXTCUT_LICENSE_SERVER</key><string>https://contextcut-license.ppsel03.workers.dev</string>
     <key>VOYAGE_API_KEY</key><string>$VOYAGE_KEY</string>
+    <key>CONTEXTCUT_EMBED_MODEL</key><string>$EMBED_MODEL</string>
     <key>CONTEXTCUT_UPSTREAM</key><string>http://$OLLAMA_HOST:$OLLAMA_PORT</string>
     <key>CONTEXTCUT_QDRANT_HOST</key><string>$QDRANT_HOST</string>
     <key>CONTEXTCUT_QDRANT_PORT</key><string>$QDRANT_PORT</string>
