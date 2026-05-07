@@ -129,6 +129,7 @@ _local_only = False
 
 def load_saved_credentials():
     global _provider_name, _custom_base_url, _ollama_url, _api_key, _free_only, _local_only
+    global _EMBED_MODE, _VK, _LOCAL_EMBED
     creds = CredentialManager.load_all()
     _provider_name = creds.get("provider", "Ollama")
     _custom_base_url = creds.get("custom_url", "")
@@ -136,6 +137,16 @@ def load_saved_credentials():
     _api_key = creds.get("api_key", "")
     _free_only = creds.get("free_only", False)
     _local_only = creds.get("local_only", False)
+
+    saved_embed_mode = creds.get("embed_mode", "")
+    if saved_embed_mode:
+        _EMBED_MODE = saved_embed_mode
+    saved_voyage = creds.get("voyage_key", "")
+    if saved_voyage:
+        _VK = saved_voyage
+    saved_model = creds.get("embed_model", "")
+    if saved_model:
+        _LOCAL_EMBED = saved_model
 
 def get_current_upstream():
     global _provider_name, _custom_base_url, _ollama_url
@@ -479,6 +490,7 @@ _qclient       = None
 _last_embed_ts = 0.0
 _VK            = os.environ.get("VOYAGE_API_KEY", "").strip().strip('"').strip("'")  # strip accidental quotes
 _LOCAL_EMBED   = os.environ.get("CONTEXTCUT_EMBED_MODEL", "").strip().strip('"').strip("'")
+_EMBED_MODE    = os.environ.get("CONTEXTCUT_EMBED_MODE", "voyage").strip().strip('"').strip("'")
 
 def get_clients():
     global _vc, _qclient
@@ -507,11 +519,10 @@ def _ollama_embed(text: str, model: str) -> list[float] | None:
 
 # ── Qdrant lookup ─────────────────────────────────────────────────────────────
 def _safe_embed(query: str, input_type: str) -> list[float] | None:
-    """Embed with retry. Uses Voyage AI if key set, falls back to Ollama local model."""
+    """Embed with retry. Uses configured backend: voyage or ollama."""
     global _last_embed_ts
 
-    # Try Voyage AI first if key available
-    if _VK:
+    if _EMBED_MODE == "voyage" and _VK:
         max_retries = 3
         for attempt in range(max_retries):
             elapsed = time.time() - _last_embed_ts
@@ -531,23 +542,19 @@ def _safe_embed(query: str, input_type: str) -> list[float] | None:
                 else:
                     print(f"[contextcut] Voyage embed error: {e}")
                     if _LOCAL_EMBED:
-                        print(f"[contextcut] Falling back to Ollama embed model: {_LOCAL_EMBED}")
-                        emb = _ollama_embed(query, _LOCAL_EMBED)
-                        if emb is not None:
-                            return emb
+                        print(f"[contextcut] Falling back to Ollama embed: {_LOCAL_EMBED}")
+                        return _ollama_embed(query, _LOCAL_EMBED)
                     return None
         print(f"[contextcut] Voyage embed failed after {max_retries} retries")
         if _LOCAL_EMBED:
-            print(f"[contextcut] Falling back to Ollama embed model: {_LOCAL_EMBED}")
             return _ollama_embed(query, _LOCAL_EMBED)
         return None
 
-    # No Voyage key — use Ollama directly
+    # Ollama local embed
     if _LOCAL_EMBED:
-        print(f"[contextcut] Using Ollama local embed: {_LOCAL_EMBED}")
         return _ollama_embed(query, _LOCAL_EMBED)
 
-    print("[contextcut] WARNING: No embedding backend configured. Set VOYAGE_API_KEY or CONTEXTCUT_EMBED_MODEL")
+    print("[contextcut] WARNING: No embedding backend configured")
     return None
 
 def qdrant_context(query: str) -> tuple[str, list[dict]]:
@@ -1234,7 +1241,11 @@ tr:hover td{{background:var(--surf2)}}
       <div class="ctx-wrap">
         <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:7px">
           <div class="ctx-label" style="margin-bottom:0">Most Recent Context Usage</div>
-          <button class="clear-btn" onclick="clearContext()" title="Clear response cache">Clear Cache</button>
+          <div style="display:flex;gap:6px;align-items:center">
+            <span id="embedBadge" style="font-size:11px;color:#8b95a5;background:#1e2638;padding:3px 8px;border-radius:4px" title="Current embedding backend">—</span>
+            <button class="clear-btn" onclick="openEmbedSettings()" title="Configure embedding model">⚙ Embed</button>
+            <button class="clear-btn" onclick="clearContext()" title="Clear response cache">Clear Cache</button>
+          </div>
         </div>
         <div class="ctx-track"><div class="ctx-fill" id="ctxBar"></div></div>
         <div class="ctx-info"><span id="ctxTok">{last_tok:,} / {CTX_LIMIT:,} tokens</span><strong style="color:{bc}" id="ctxPct">{last_pct}%</strong></div>
@@ -1727,6 +1738,148 @@ async function sendMessage() {{
     input.focus();
   }}
 }}
+
+// ── Embed Settings Modal ─────────────────────────────────────────────────────
+let embedModalOpen = false;
+
+function openEmbedSettings() {{
+  if (embedModalOpen) return;
+  embedModalOpen = true;
+  fetch('/api/embed/config')
+    .then(r => r.json())
+    .then(cfg => {{
+      const overlay = document.createElement('div');
+      overlay.id = 'embedOverlay';
+      overlay.style.cssText = 'position:fixed;top:0;left:0;width:100%;height:100%;background:rgba(0,0,0,.55);z-index:9999;display:flex;align-items:center;justify-content:center';
+      overlay.onclick = (e) => {{ if (e.target === overlay) closeEmbedOverlay(overlay); }};
+
+      const modeOpts = [
+        {{v:'voyage',label:'Voyage AI (voyage-3)',desc:'Cloud — highest quality, requires API key'}},
+        {{v:'ollama',label:'Ollama Local',desc:'100% local — nomic-embed-text, mxbai-embed-large, bge-m3, qwen3-embedding'}},
+      ];
+      const models = [
+        {{v:'nomic-embed-text',label:'nomic-embed-text (274MB, 8K ctx)'}},
+        {{v:'mxbai-embed-large',label:'mxbai-embed-large (670MB, 512 ctx)'}},
+        {{v:'bge-m3',label:'bge-m3 (1.2GB, 8K ctx, multilingual)'}},
+        {{v:'qwen3-embedding:8b',label:'qwen3-embedding:8b (4.9GB, best quality)'}},
+      ];
+      const isVoyage = cfg.mode === 'voyage';
+
+      overlay.innerHTML = `
+        <div style="background:#131a2b;border:1px solid var(--border);border-radius:8px;padding:24px;width:420px;max-width:90vw;font-family:'JetBrains Mono',monospace;font-size:12px;color:var(--text)">
+          <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:16px">
+            <strong style="font-size:14px">\u2699 Embed Model Settings</strong>
+            <button onclick="closeEmbedOverlay(document.getElementById('embedOverlay'))" style="background:none;border:none;color:var(--muted);font-size:18px;cursor:pointer">&times;</button>
+          </div>
+
+          <label style="display:block;margin-bottom:4px;color:var(--muted);font-size:11px">Backend</label>
+          <select id="emMode" style="width:100%;background:#0d1320;color:var(--text);border:1px solid var(--border);border-radius:4px;padding:7px 10px;font-family:inherit;font-size:12px;margin-bottom:4px">
+            ${{modeOpts.map(o => `<option value="$${{o.v}}" $${{o.v===cfg.mode?'selected':''}}>$${{o.label}}</option>`).join('')}}
+          </select>
+          <div id="emModeDesc" style="color:var(--muted);font-size:10px;margin-bottom:14px">${{isVoyage ? modeOpts[0].desc : modeOpts[1].desc}}</div>
+
+          <div id="emVoyageFields" style="display:${{isVoyage?'block':'none'}}">
+            <label style="display:block;margin-bottom:4px;color:var(--muted);font-size:11px">Voyage API Key</label>
+            <input id="emVoyageKey" type="password" value="$${{cfg.voyage_key||''}}" placeholder="Paste your voyage-ai key"
+              style="width:100%;background:#0d1320;color:var(--text);border:1px solid var(--border);border-radius:4px;padding:7px 10px;font-family:inherit;font-size:12px;margin-bottom:14px" />
+          </div>
+
+          <div id="emOllamaFields" style="display:${{isVoyage?'none':'block'}}">
+            <label style="display:block;margin-bottom:4px;color:var(--muted);font-size:11px">Ollama Embedding Model</label>
+            <select id="emModel" style="width:100%;background:#0d1320;color:var(--text);border:1px solid var(--border);border-radius:4px;padding:7px 10px;font-family:inherit;font-size:12px;margin-bottom:14px">
+              $${{models.map(m => `<option value="$${{m.v}}" $${{m.v===cfg.ollama_model?'selected':''}}>$${{m.label}}</option>`).join('')}}
+            </select>
+            <div style="color:var(--muted);font-size:10px;margin-bottom:14px">Ollama URL: $${{cfg.ollama_url||'http://localhost:11434'}}</div>
+          </div>
+
+          <div style="display:flex;gap:8px;justify-content:flex-end">
+            <button onclick="closeEmbedOverlay(document.getElementById('embedOverlay'))" style="background:transparent;border:1px solid var(--border);color:var(--muted);border-radius:4px;padding:6px 16px;font-size:11px;cursor:pointer;font-family:inherit">Cancel</button>
+            <button id="emSaveBtn" onclick="saveEmbedConfig()" style="background:var(--accent);color:#000;border:none;border-radius:4px;padding:6px 16px;font-size:11px;cursor:pointer;font-family:inherit;font-weight:600">Save</button>
+          </div>
+          <div id="emMsg" style="margin-top:10px;font-size:11px;min-height:16px"></div>
+        </div>
+      `;
+
+      document.getElementById('emMode').onchange = function() {{
+        const v = this.value;
+        document.getElementById('emVoyageFields').style.display = v==='voyage'?'block':'none';
+        document.getElementById('emOllamaFields').style.display = v==='ollama'?'block':'none';
+        document.getElementById('emModeDesc').textContent = v==='voyage'?'${{modeOpts[0].desc}}':'${{modeOpts[1].desc}}';
+      }};
+
+      document.body.appendChild(overlay);
+    }})
+    .catch(e => {{
+      embedModalOpen = false;
+      alert('Failed to load embed config: ' + e.message);
+    }});
+}}
+
+function closeEmbedOverlay(el) {{
+  if (el) el.remove();
+  embedModalOpen = false;
+}}
+
+function saveEmbedConfig() {{
+  const mode = document.getElementById('emMode').value;
+  const data = {{ mode }};
+  if (mode === 'voyage') {{
+    data.voyage_key = document.getElementById('emVoyageKey').value;
+  }} else {{
+    data.ollama_model = document.getElementById('emModel').value;
+  }}
+
+  const btn = document.getElementById('emSaveBtn');
+  const msg = document.getElementById('emMsg');
+  btn.disabled = true;
+  btn.textContent = 'Saving...';
+  msg.textContent = '';
+
+  fetch('/api/embed/config', {{
+    method: 'POST',
+    headers: {{'Content-Type': 'application/json'}},
+    body: JSON.stringify(data)
+  }})
+  .then(r => r.json())
+  .then(resp => {{
+    if (resp.ok) {{
+      msg.style.color = 'var(--green)';
+      msg.textContent = '\u2713 Saved! Embedding backend updated.';
+      loadEmbedBadge();
+      setTimeout(() => closeEmbedOverlay(document.getElementById('embedOverlay')), 800);
+    }} else {{
+      msg.style.color = 'var(--red)';
+      msg.textContent = 'Error: ' + (resp.error || 'Unknown');
+    }}
+  }})
+  .catch(e => {{
+    msg.style.color = 'var(--red)';
+    msg.textContent = 'Network error: ' + e.message;
+  }})
+  .finally(() => {{
+    btn.disabled = false;
+    btn.textContent = 'Save';
+  }});
+}}
+
+function loadEmbedBadge() {{
+  fetch('/api/embed/config')
+    .then(r => r.json())
+    .then(cfg => {{
+      const badge = document.getElementById('embedBadge');
+      if (cfg.mode === 'voyage') {{
+        badge.textContent = '\u26a1 VoyageAI';
+        badge.title = 'Embedding: Voyage AI (voyage-3)';
+      }} else if (cfg.mode === 'ollama') {{
+        badge.textContent = '\uD83D\uDDA5 ' + (cfg.ollama_model || 'ollama');
+        badge.title = 'Embedding: Ollama local — ' + (cfg.ollama_model || 'not set');
+      }} else {{
+        badge.textContent = cfg.mode || '\u2014';
+      }}
+    }})
+    .catch(() => {{}});
+}}
+loadEmbedBadge();
 </script>
 </body></html>"""
 
@@ -1834,6 +1987,20 @@ class DashboardHandler(_SuppressBrokenPipe, BaseHTTPRequestHandler):
             self.send_header("Content-Length", str(len(resp)))
             self.end_headers()
             self.wfile.write(resp)
+            return
+        if self.path == "/api/embed/config":
+            cfg = {
+                "mode": _EMBED_MODE,
+                "voyage_key": _VK[:8] + "..." if _VK and _EMBED_MODE == "voyage" else "",
+                "ollama_model": _LOCAL_EMBED if _EMBED_MODE == "ollama" else "",
+                "ollama_url": UPSTREAM,
+            }
+            body = json.dumps(cfg).encode()
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
             return
         if self.path == "/api/license":
             body = json.dumps(check_license_status()).encode()
@@ -2034,6 +2201,38 @@ class DashboardHandler(_SuppressBrokenPipe, BaseHTTPRequestHandler):
                 self.wfile.write(err)
                 return
 
+        # ── Embed model config ──
+        if self.path == "/api/embed/config":
+            try:
+                body = json.loads(raw_body)
+                global _EMBED_MODE, _VK, _LOCAL_EMBED
+                _EMBED_MODE = body.get("mode", "voyage")
+                incoming_key = body.get("voyage_key", "").strip()
+                if incoming_key and incoming_key != "••••••••••••••••":
+                    _VK = incoming_key
+                _LOCAL_EMBED = body.get("ollama_model", "").strip()
+
+                CredentialManager.save("embed_mode", _EMBED_MODE)
+                if _VK: CredentialManager.save("voyage_key", _VK)
+                if _LOCAL_EMBED: CredentialManager.save("embed_model", _LOCAL_EMBED)
+
+                print(f"[contextcut] Embed mode: {_EMBED_MODE} | model: {_LOCAL_EMBED or 'voyage-3'}")
+                resp = json.dumps({"ok": True, "mode": _EMBED_MODE}).encode()
+                self.send_response(200)
+                self.send_header("Content-Type", "application/json")
+                self.send_header("Content-Length", str(len(resp)))
+                self.end_headers()
+                self.wfile.write(resp)
+                return
+            except Exception as e:
+                err = json.dumps({"error": str(e).encode("ascii", errors="replace").decode("ascii")}).encode()
+                self.send_response(400)
+                self.send_header("Content-Type", "application/json")
+                self.send_header("Content-Length", str(len(err)))
+                self.end_headers()
+                self.wfile.write(err)
+                return
+
         try:
             parsed_body = json.loads(raw_body)
         except Exception:
@@ -2076,14 +2275,21 @@ class DashboardHandler(_SuppressBrokenPipe, BaseHTTPRequestHandler):
 
 # ── Main ──────────────────────────────────────────────────────────────────────
 if __name__ == "__main__":
-    if not os.getenv("VOYAGE_API_KEY") and not _LOCAL_EMBED:
-        print("ERROR: Neither VOYAGE_API_KEY nor CONTEXTCUT_EMBED_MODEL set. Set at least one.")
-        raise SystemExit(1)
+    load_saved_credentials()
 
-    if _VK:
+    if _EMBED_MODE == "voyage" and _VK:
+        print(f"[contextcut] Embedding: Voyage AI (voyage-3)")
+    elif _EMBED_MODE == "ollama" and _LOCAL_EMBED:
+        print(f"[contextcut] Embedding: Ollama local ({_LOCAL_EMBED})")
+    elif _VK:
+        _EMBED_MODE = "voyage"
         print(f"[contextcut] Embedding: Voyage AI (voyage-3)")
     elif _LOCAL_EMBED:
-        print(f"[contextcut] Embedding: Ollama ({_LOCAL_EMBED})")
+        _EMBED_MODE = "ollama"
+        print(f"[contextcut] Embedding: Ollama local ({_LOCAL_EMBED})")
+    else:
+        print("[contextcut] ERROR: No embedding backend configured")
+        raise SystemExit(1)
 
     load_sessions()
 
