@@ -103,11 +103,15 @@ def _ollama_embed(texts, model):
 def ensure_collection():
     existing = [c.name for c in qc.get_collections().collections]
     if COLLECTION not in existing:
-        qc.create_collection(
-            collection_name=COLLECTION,
-            vectors_config=VectorParams(size=EMBED_DIM, distance=Distance.COSINE),
-        )
-        print(f"[+] Created collection '{COLLECTION}' (dim={EMBED_DIM})")
+        try:
+            qc.create_collection(
+                collection_name=COLLECTION,
+                vectors_config=VectorParams(size=EMBED_DIM, distance=Distance.COSINE),
+            )
+            print(f"[+] Created collection '{COLLECTION}' (dim={EMBED_DIM})")
+        except Exception:
+            # Already exists (race with another process)
+            pass
     else:
         info = qc.get_collection(COLLECTION)
         actual_dim = info.config.params.vectors.size
@@ -115,11 +119,16 @@ def ensure_collection():
             print(f"[!] Dimension mismatch: Qdrant has {actual_dim}, model needs {EMBED_DIM}")
             print(f"[!] Recreating collection '{COLLECTION}' with dim={EMBED_DIM}...")
             qc.delete_collection(COLLECTION)
-            qc.create_collection(
-                collection_name=COLLECTION,
-                vectors_config=VectorParams(size=EMBED_DIM, distance=Distance.COSINE),
-            )
-            print(f"[+] Recreated collection '{COLLECTION}'")
+            time.sleep(2)
+            try:
+                qc.create_collection(
+                    collection_name=COLLECTION,
+                    vectors_config=VectorParams(size=EMBED_DIM, distance=Distance.COSINE),
+                )
+                print(f"[+] Recreated collection '{COLLECTION}'")
+            except Exception:
+                # Already exists (race with another ingest process)
+                print(f"[+] Collection '{COLLECTION}' exists (dim={EMBED_DIM})")
 
 # ── Ingest ────────────────────────────────────────────────────────────────────
 def file_id(path: Path) -> str:

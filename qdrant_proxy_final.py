@@ -1806,6 +1806,8 @@ function openEmbedSettings() {{
         </div>
       `;
 
+      document.body.appendChild(overlay);
+
       document.getElementById('emMode').onchange = function() {{
         const v = this.value;
         document.getElementById('emVoyageFields').style.display = v==='voyage'?'block':'none';
