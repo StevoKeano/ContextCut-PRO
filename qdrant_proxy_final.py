@@ -56,7 +56,14 @@ class CredentialManager:
                 with open("/etc/machine-id") as f: raw = f.read().strip()
             elif platform.system() == "Darwin":
                 import subprocess
-                raw = subprocess.check_output(["ioreg", "-rd1", "-c", "IOPlatformExpertDevice"]).decode().strip()
+                raw = subprocess.check_output(
+                    ["/usr/sbin/ioreg", "-rd1", "-c", "IOPlatformExpertDevice"],
+                    encoding="utf-8"
+                ).strip()
+                import re
+                match = re.search(r'"IOPlatformSerialNumber"\s*=\s*"([^"]+)"', raw)
+                if match:
+                    raw = match.group(1)
             else:
                 raw = platform.node()
         except Exception:
