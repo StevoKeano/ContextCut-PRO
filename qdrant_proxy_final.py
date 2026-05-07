@@ -996,6 +996,7 @@ async function saveSettings() {{
     }});
     const data = await resp.json();
     if (data.ok) {{
+      if (selectedModelName) localStorage.setItem('contextcut_model', selectedModelName);
       if (typeof sessionId !== 'undefined' && sessionId) localStorage.setItem('contextcut_session', sessionId);
       const msgs = document.getElementById('messages');
       if (msgs) localStorage.setItem('contextcut_msgs', msgs.innerHTML);
@@ -1299,13 +1300,18 @@ async function initSession() {{
     localStorage.removeItem('contextcut_session');
     updateSessionBadge();
     restoreMessages();
-    return;
+  }}
+  const savedModel = localStorage.getItem('contextcut_model');
+  if (savedModel) {{
+    localStorage.removeItem('contextcut_model');
+    const inp = document.getElementById('modelInput');
+    if (inp) inp.value = savedModel;
   }}
   try {{
     const r = await fetch('/api/session/new');
     if (r.ok) {{
       const d = await r.json();
-      sessionId = d.session_id;
+      if (!sessionId) sessionId = d.session_id;
       updateSessionBadge();
     }}
   }} catch(e) {{}}
