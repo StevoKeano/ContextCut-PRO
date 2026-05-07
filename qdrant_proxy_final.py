@@ -118,15 +118,17 @@ _custom_base_url = ""
 _ollama_url = ""
 _api_key = ""
 _free_only = False
+_local_only = False
 
 def load_saved_credentials():
-    global _provider_name, _custom_base_url, _ollama_url, _api_key, _free_only
+    global _provider_name, _custom_base_url, _ollama_url, _api_key, _free_only, _local_only
     creds = CredentialManager.load_all()
     _provider_name = creds.get("provider", "Ollama")
     _custom_base_url = creds.get("custom_url", "")
     _ollama_url = creds.get("ollama_url", "")
     _api_key = creds.get("api_key", "")
     _free_only = creds.get("free_only", False)
+    _local_only = creds.get("local_only", False)
 
 def get_current_upstream():
     global _provider_name, _custom_base_url, _ollama_url
@@ -876,6 +878,13 @@ body{{background:var(--bg);color:var(--text);font-family:'JetBrains Mono',monosp
       <div style="font-size:10px;color:var(--muted);margin-top:4px">Stored encrypted on disk. Only your machine can decrypt it.</div>
     </div>
 
+    <div class="form-group hidden" id="ollamaLocalGroup">
+      <label style="cursor:pointer;display:flex;align-items:center;gap:8px">
+        <input type="checkbox" id="ollamaLocalOnly" style="width:auto;accent-color:var(--accent)"{" checked" if _local_only else ""}>
+        Local models only (exclude cloud)
+      </label>
+    </div>
+
     <div class="form-group hidden" id="freeOnlyGroup">
       <label style="cursor:pointer;display:flex;align-items:center;gap:8px">
         <input type="checkbox" id="freeOnly" style="width:auto;accent-color:var(--accent)"{" checked" if _free_only else ""}>
@@ -906,16 +915,19 @@ let selectedModelName = null;
 function onProviderChange() {{
   const p = document.getElementById('providerSelect').value;
   const o = document.getElementById('ollamaUrlGroup');
+  const l = document.getElementById('ollamaLocalGroup');
   const c = document.getElementById('customUrlGroup');
   const f = document.getElementById('freeOnlyGroup');
   const k = document.getElementById('apiKey');
   if (p === 'Ollama') {{
     o.classList.remove('hidden');
+    l.classList.remove('hidden');
     c.classList.add('hidden');
     f.classList.add('hidden');
     k.placeholder = 'Not required for local Ollama';
   }} else {{
     o.classList.add('hidden');
+    l.classList.add('hidden');
     if (p === 'Custom') c.classList.remove('hidden');
     else c.classList.add('hidden');
     if (p === 'OpenRouter') f.classList.remove('hidden');
@@ -943,10 +955,11 @@ async function fetchModels() {{
     const customUrl = document.getElementById('customUrl').value;
     const ollamaUrl = document.getElementById('ollamaUrl').value;
     const freeOnly = document.getElementById('freeOnly').checked;
+    const localOnly = document.getElementById('ollamaLocalOnly').checked;
     const resp = await fetch('/api/settings/models', {{
       method: 'POST',
       headers: {{'Content-Type': 'application/json'}},
-      body: JSON.stringify({{provider, api_key: apiKey, custom_url: customUrl, ollama_url: ollamaUrl, free_only: freeOnly}})
+      body: JSON.stringify({{provider, api_key: apiKey, custom_url: customUrl, ollama_url: ollamaUrl, free_only: freeOnly, local_only: localOnly}})
     }});
     const data = await resp.json();
     if (data.error) {{
@@ -988,10 +1001,11 @@ async function saveSettings() {{
     const customUrl = document.getElementById('customUrl').value;
     const ollamaUrl = document.getElementById('ollamaUrl').value;
     const freeOnly = document.getElementById('freeOnly').checked;
+    const localOnly = document.getElementById('ollamaLocalOnly').checked;
     const resp = await fetch('/api/settings/provider', {{
       method: 'POST',
       headers: {{'Content-Type': 'application/json'}},
-      body: JSON.stringify({{provider, api_key: apiKey, custom_url: customUrl, ollama_url: ollamaUrl, free_only: freeOnly, model: selectedModelName}})
+      body: JSON.stringify({{provider, api_key: apiKey, custom_url: customUrl, ollama_url: ollamaUrl, free_only: freeOnly, local_only: localOnly, model: selectedModelName}})
     }});
     const data = await resp.json();
     if (data.ok) {{
@@ -1695,7 +1709,10 @@ class DashboardHandler(_SuppressBrokenPipe, BaseHTTPRequestHandler):
                     req = urllib.request.Request(f"{upstream}/api/tags", method="GET")
                     with urllib.request.urlopen(req, timeout=5) as r:
                         data = json.loads(r.read().decode("utf-8"))
-                        models = [{"name": m["name"]} for m in data.get("models", [])]
+                        if _local_only:
+                            models = [{"name": m["name"]} for m in data.get("models", []) if "cloud" not in m["name"].lower()]
+                        else:
+                            models = [{"name": m["name"]} for m in data.get("models", [])]
                         body = json.dumps({"models": models}, ensure_ascii=True).encode("utf-8")
                 else:
                     url = f"{upstream}/v1/models"
@@ -1819,6 +1836,7 @@ class DashboardHandler(_SuppressBrokenPipe, BaseHTTPRequestHandler):
                 incoming_key = body.get("api_key", "").strip()
                 ollama_url = body.get("ollama_url", "").strip()
                 _free_only = body.get("free_only", False)
+                _local_only = body.get("local_only", False)
 
                 # If frontend sent masked value, keep server-side key
                 if incoming_key and incoming_key != "••••••••••••••••":
@@ -1832,6 +1850,7 @@ class DashboardHandler(_SuppressBrokenPipe, BaseHTTPRequestHandler):
                 CredentialManager.save("custom_url", _custom_base_url)
                 CredentialManager.save("ollama_url", ollama_url)
                 CredentialManager.save("free_only", _free_only)
+                CredentialManager.save("local_only", _local_only)
                 if _api_key: CredentialManager.save("api_key", _api_key)
 
                 print(f"[contextcut] Provider switched to {_provider_name} | upstream: {UPSTREAM}")
@@ -1859,6 +1878,7 @@ class DashboardHandler(_SuppressBrokenPipe, BaseHTTPRequestHandler):
                 custom_url = body.get("custom_url", "").strip()
                 ollama_url = body.get("ollama_url", "").strip()
                 free_only = body.get("free_only", False)
+                local_only = body.get("local_only", False)
                 
                 # If frontend sent masked value, use server-side stored key
                 if not api_key or api_key == "••••••••••••••••":
@@ -1870,7 +1890,7 @@ class DashboardHandler(_SuppressBrokenPipe, BaseHTTPRequestHandler):
                     req = urllib.request.Request(f"{base}/api/tags", method="GET")
                     with urllib.request.urlopen(req, timeout=5) as r:
                         data = json.loads(r.read().decode("utf-8"))
-                        models = sorted([m["name"] for m in data.get("models", [])])
+                        models = sorted([m["name"] for m in data.get("models", []) if not (local_only and "cloud" in m["name"].lower())])
                 elif provider == "Custom" and custom_url:
                     base = custom_url.rstrip("/")
                     req = urllib.request.Request(f"{base}/v1/models", method="GET")
