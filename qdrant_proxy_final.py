@@ -520,7 +520,7 @@ _EMBED_MODE    = os.environ.get("CONTEXTCUT_EMBED_MODE", "voyage").strip().strip
 
 def get_clients():
     global _vc, _qclient
-    if _vc is None and _VK:
+    if _vc is None and _VK and _VOYAGE_AVAILABLE:
         print(f"[contextcut] Voyage API key loaded: {_VK[:8]}...")
         _vc = voyageai.Client(api_key=_VK)
     if _qclient is None:
@@ -548,7 +548,7 @@ def _safe_embed(query: str, input_type: str) -> list[float] | None:
     """Embed with retry. Uses configured backend: voyage or ollama."""
     global _last_embed_ts
 
-    if _EMBED_MODE == "voyage" and _VK:
+    if _EMBED_MODE == "voyage" and _VK and _VOYAGE_AVAILABLE:
         max_retries = 3
         for attempt in range(max_retries):
             elapsed = time.time() - _last_embed_ts
@@ -2332,11 +2332,11 @@ class DashboardHandler(_SuppressBrokenPipe, BaseHTTPRequestHandler):
 if __name__ == "__main__":
     load_saved_credentials()
 
-    if _EMBED_MODE == "voyage" and _VK:
+    if _EMBED_MODE == "voyage" and _VK and _VOYAGE_AVAILABLE:
         print(f"[contextcut] Embedding: Voyage AI (voyage-3)")
     elif _EMBED_MODE == "ollama" and _LOCAL_EMBED:
         print(f"[contextcut] Embedding: Ollama local ({_LOCAL_EMBED})")
-    elif _VK:
+    elif _VK and _VOYAGE_AVAILABLE:
         _EMBED_MODE = "voyage"
         print(f"[contextcut] Embedding: Voyage AI (voyage-3)")
     elif _LOCAL_EMBED:
