@@ -1619,9 +1619,14 @@ async function sendMessage() {{
           fullText += token;
           ensureBubble();
           bubble.innerHTML = esc(fullText);
-          assistantDiv.scrollIntoView({{behavior:'instant', block:'end'}});
         }} catch(e) {{}}
       }}
+    }}
+
+    const box = document.getElementById('messages');
+    const atBottom = box.scrollHeight - box.scrollTop - box.clientHeight < 100;
+    if (atBottom) {{
+      box.scrollTop = box.scrollHeight;
     }}
 
     ensureBubble();

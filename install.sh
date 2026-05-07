@@ -357,6 +357,7 @@ if [ -f "$PROXY_PIDFILE" ]; then
   if kill -0 "$PID" 2>/dev/null; then
     echo "Stopping proxy (PID $PID)..."
     kill "$PID"
+    sleep 1
     echo "Proxy stopped."
   fi
   rm -f "$PROXY_PIDFILE"
@@ -364,6 +365,7 @@ else
   echo "No PID files found. Attempting pkill..."
   pkill -f ingest.py 2>/dev/null
   pkill -f qdrant_proxy_final.py 2>/dev/null
+  sleep 1
 fi
 echo "Done."
 STOPEOF
