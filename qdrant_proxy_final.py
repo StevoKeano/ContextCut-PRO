@@ -1491,11 +1491,10 @@ async function fetchModels() {{
     const inp = document.getElementById('modelInput');
     if (!inp) return;
     const savedModel = localStorage.getItem('contextcut_model');
-    if (savedModel && models.includes(savedModel)) {{
-      inp.value = savedModel;
+    if (savedModel) {{
+      if (models.includes(savedModel)) inp.value = savedModel;
+      else inp.value = models[0];
       localStorage.removeItem('contextcut_model');
-    }} else if (!inp.value || !models.includes(inp.value)) {{
-      inp.value = models[0];
     }}
   }} catch(e) {{}}
 }}
