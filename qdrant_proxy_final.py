@@ -38,7 +38,13 @@ from datetime import datetime
 from http.server import HTTPServer, BaseHTTPRequestHandler
 from socketserver import ThreadingMixIn
 
-import voyageai
+_VOYAGE_AVAILABLE = False
+try:
+    import voyageai
+    _VOYAGE_AVAILABLE = True
+except ImportError:
+    pass
+
 from qdrant_client import QdrantClient
 
 # ── Secure Credential Manager (Machine-bound encryption) ─────────────────────
