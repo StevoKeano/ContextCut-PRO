@@ -1877,7 +1877,7 @@ function loadEmbedBadge() {{
         badge.textContent = '\u26a1 VoyageAI';
         badge.title = 'Embedding: Voyage AI (voyage-3)';
       }} else if (cfg.mode === 'ollama') {{
-        badge.textContent = '\uD83D\uDDA5 ' + (cfg.ollama_model || 'ollama');
+        badge.textContent = 'Local ' + (cfg.ollama_model || 'ollama');
         badge.title = 'Embedding: Ollama local — ' + (cfg.ollama_model || 'not set');
       }} else {{
         badge.textContent = cfg.mode || '\u2014';
