@@ -2,7 +2,7 @@
 # ContextCut installer — macOS / Linux
 # https://github.com/StevoKeano/ContextCut
 
-REPO="https://raw.githubusercontent.com/StevoKeano/ContextCut-PRO/main"
+REPO="https://raw.githubusercontent.com/StevoKeano/ContextCut-PRO/feature/Settings-page"
 INSTALL_DIR="$HOME/contextcut"
 LOG_DIR="$HOME/.contextcut/logs"
 PLIST_PROXY="$HOME/Library/LaunchAgents/ai.contextcut.proxy.plist"
@@ -411,10 +411,15 @@ fi
 
 # ── Initial ingest ────────────────────────────────────────────────────────────
 echo ""
-echo "  Running initial knowledge base ingest..."
-echo "  (this may take a while — Voyage AI free tier: 1 file per 21s)"
+if [ -n "$VOYAGE_KEY" ]; then
+  echo "  Running initial knowledge base ingest..."
+  echo "  (this may take a while — Voyage AI free tier: 1 file per 21s)"
+else
+  echo "  Running initial knowledge base ingest (local Ollama)..."
+fi
 echo ""
 export VOYAGE_API_KEY="$VOYAGE_KEY"
+export CONTEXTCUT_EMBED_MODEL="$EMBED_MODEL"
 export CONTEXTCUT_QDRANT_HOST="$QDRANT_HOST"
 export CONTEXTCUT_QDRANT_PORT="$QDRANT_PORT"
 export CONTEXTCUT_KB_DIR="$KB_DIR"
