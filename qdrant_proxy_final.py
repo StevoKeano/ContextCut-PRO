@@ -46,6 +46,26 @@ except ImportError:
     pass
 
 from qdrant_client import QdrantClient
+from qdrant_client.models import Distance, VectorParams
+
+EMBED_DIM_MAP = {
+    "nomic-embed-text": 768,
+    "nomic-embed-text-v1.5": 768,
+    "nomic-embed-text-v2-moe": 768,
+    "mxbai-embed-large": 1024,
+    "bge-m3": 1024,
+    "qwen3-embedding:0.6b": 4096,
+    "qwen3-embedding:4b": 4096,
+    "qwen3-embedding:8b": 4096,
+    "snowflake-arctic-embed-l": 1024,
+    "all-minilm": 384,
+}
+
+def _get_embed_dim(model: str) -> int:
+    if not model:
+        return 1024
+    base = model.split(":")[0]
+    return EMBED_DIM_MAP.get(model, EMBED_DIM_MAP.get(base, 1024))
 
 # ── Secure Credential Manager (Machine-bound encryption) ─────────────────────
 class CredentialManager:
@@ -1766,6 +1786,10 @@ function openEmbedSettings() {{
           '<strong style="font-size:14px">\\u2699 Embed Model Settings</strong>' +
           '<button id="emCloseBtn" style="background:none;border:none;color:var(--muted);font-size:18px;cursor:pointer">&times;</button>' +
         '</div>' +
+        '<div style="background:#2a0a0a;border:1px solid #dc2626;border-radius:6px;padding:12px;margin-bottom:16px">' +
+          '<div style="color:#ef4444;font-weight:700;font-size:13px;margin-bottom:4px">\\u26a0 DANGER ZONE</div>' +
+          '<div style="color:#fca5a5;font-size:11px;line-height:1.5">Switching embedding models will <b>delete all existing vectors</b> in Qdrant. Your knowledge base will be wiped and you must re-ingest all files. This action cannot be undone.</div>' +
+        '</div>' +
         '<label style="display:block;margin-bottom:4px;color:var(--muted);font-size:11px">Backend</label>' +
         '<select id="emMode" style="width:100%;background:#0d1320;color:var(--text);border:1px solid var(--border);border-radius:4px;padding:7px 10px;font-family:inherit;font-size:12px;margin-bottom:4px">' +
           '<option value="voyage" '+(isVoyage?'selected':'')+'>Voyage AI (voyage-3)</option>' +
@@ -1791,6 +1815,10 @@ function openEmbedSettings() {{
           '<button id="emSaveBtn" onclick="saveEmbedConfig()" style="background:var(--accent);color:#000;border:none;border-radius:4px;padding:6px 16px;font-size:11px;cursor:pointer;font-family:inherit;font-weight:600">Save</button>' +
         '</div>' +
         '<div id="emMsg" style="margin-top:10px;font-size:11px;min-height:16px"></div>' +
+        '<label style="display:flex;align-items:flex-start;gap:8px;margin-top:12px;cursor:pointer">' +
+          '<input type="checkbox" id="emDangerCheck" style="margin-top:2px;accent-color:#ef4444;width:16px;height:16px" />' +
+          '<span style="color:#f87171;font-size:10px;line-height:1.4">I understand this will delete all existing embeddings and I will need to re-ingest my knowledge base.</span>' +
+        '</label>' +
       '</div>';
 
       overlay.innerHTML = html;
@@ -1821,6 +1849,14 @@ function closeEmbedOverlay(el) {{
 }}
 
 function saveEmbedConfig() {{
+  const chk = document.getElementById('emDangerCheck');
+  if (!chk || !chk.checked) {{
+    const msg = document.getElementById('emMsg');
+    msg.style.color = '#ef4444';
+    msg.textContent = '\\u26a0 You must check the confirmation box below first.';
+    return;
+  }}
+
   const mode = document.getElementById('emMode').value;
   const data = {{ mode }};
   if (mode === 'voyage') {{
@@ -1832,7 +1868,7 @@ function saveEmbedConfig() {{
   const btn = document.getElementById('emSaveBtn');
   const msg = document.getElementById('emMsg');
   btn.disabled = true;
-  btn.textContent = 'Saving...';
+  btn.textContent = 'Deleting & recreating...';
   msg.textContent = '';
 
   fetch('/api/embed/config', {{
@@ -2215,6 +2251,25 @@ class DashboardHandler(_SuppressBrokenPipe, BaseHTTPRequestHandler):
                 CredentialManager.save("embed_mode", _EMBED_MODE)
                 if _VK: CredentialManager.save("voyage_key", _VK)
                 if _LOCAL_EMBED: CredentialManager.save("embed_model", _LOCAL_EMBED)
+
+                # Check Qdrant collection dimension and recreate if needed
+                try:
+                    expected_dim = _get_embed_dim(_LOCAL_EMBED)
+                    qclient = QdrantClient(host=QDRANT_HOST, port=QDRANT_PORT)
+                    info = qclient.get_collection(COLLECTION)
+                    actual_dim = info.config.params.vectors.size
+                    if actual_dim != expected_dim:
+                        print(f"[contextcut] Dimension change: {actual_dim} → {expected_dim}. Recreating collection...")
+                        qclient.delete_collection(COLLECTION)
+                        import time
+                        time.sleep(2)
+                        qclient.create_collection(
+                            collection_name=COLLECTION,
+                            vectors_config=VectorParams(size=expected_dim, distance=Distance.COSINE),
+                        )
+                        print(f"[contextcut] Collection recreated with dim={expected_dim}")
+                except Exception as e:
+                    print(f"[contextcut] Dimension check warning: {e}")
 
                 print(f"[contextcut] Embed mode: {_EMBED_MODE} | model: {_LOCAL_EMBED or 'voyage-3'}")
                 resp = json.dumps({"ok": True, "mode": _EMBED_MODE}).encode()
