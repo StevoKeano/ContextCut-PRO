@@ -1764,7 +1764,7 @@ function openEmbedSettings() {{
       const html = '<div style="background:#131a2b;border:1px solid var(--border);border-radius:8px;padding:24px;width:420px;max-width:90vw;font-family:JetBrains Mono,monospace;font-size:12px;color:var(--text)">' +
         '<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:16px">' +
           '<strong style="font-size:14px">\\u2699 Embed Model Settings</strong>' +
-          '<button onclick="closeEmbedOverlay(document.getElementById(\'embedOverlay\'))" style="background:none;border:none;color:var(--muted);font-size:18px;cursor:pointer">&times;</button>' +
+          '<button id="emCloseBtn" style="background:none;border:none;color:var(--muted);font-size:18px;cursor:pointer">&times;</button>' +
         '</div>' +
         '<label style="display:block;margin-bottom:4px;color:var(--muted);font-size:11px">Backend</label>' +
         '<select id="emMode" style="width:100%;background:#0d1320;color:var(--text);border:1px solid var(--border);border-radius:4px;padding:7px 10px;font-family:inherit;font-size:12px;margin-bottom:4px">' +
@@ -1787,7 +1787,7 @@ function openEmbedSettings() {{
           '<div style="color:var(--muted);font-size:10px;margin-bottom:14px">Ollama URL: '+(cfg.ollama_url||'http://localhost:11434')+'</div>' +
         '</div>' +
         '<div style="display:flex;gap:8px;justify-content:flex-end">' +
-          '<button onclick="closeEmbedOverlay(document.getElementById(\'embedOverlay\'))" style="background:transparent;border:1px solid var(--border);color:var(--muted);border-radius:4px;padding:6px 16px;font-size:11px;cursor:pointer;font-family:inherit">Cancel</button>' +
+          '<button id="emCancelBtn" style="background:transparent;border:1px solid var(--border);color:var(--muted);border-radius:4px;padding:6px 16px;font-size:11px;cursor:pointer;font-family:inherit">Cancel</button>' +
           '<button id="emSaveBtn" onclick="saveEmbedConfig()" style="background:var(--accent);color:#000;border:none;border-radius:4px;padding:6px 16px;font-size:11px;cursor:pointer;font-family:inherit;font-weight:600">Save</button>' +
         '</div>' +
         '<div id="emMsg" style="margin-top:10px;font-size:11px;min-height:16px"></div>' +
@@ -1796,15 +1796,17 @@ function openEmbedSettings() {{
       overlay.innerHTML = html;
       document.body.appendChild(overlay);
 
+      document.getElementById('emCloseBtn').onclick = function() {{ closeEmbedOverlay(overlay); }};
+      document.getElementById('emCancelBtn').onclick = function() {{ closeEmbedOverlay(overlay); }};
+
       document.getElementById('emMode').onchange = function() {{
         const v = this.value;
         document.getElementById('emVoyageFields').style.display = v==='voyage'?'block':'none';
         document.getElementById('emOllamaFields').style.display = v==='ollama'?'block':'none';
-        const descs = {{
-          voyage: 'Cloud \\u2014 highest quality, requires API key',
-          ollama: '100% local \\u2014 nomic-embed-text, mxbai-embed-large, bge-m3, qwen3-embedding'
-        }};
-        document.getElementById('emModeDesc').textContent = descs[v];
+        if (v === 'voyage')
+          document.getElementById('emModeDesc').textContent = 'Cloud \\u2014 highest quality, requires API key';
+        else
+          document.getElementById('emModeDesc').textContent = '100% local \\u2014 nomic-embed-text, mxbai-embed-large, bge-m3, qwen3-embedding';
       }};
     }})
     .catch(e => {{
