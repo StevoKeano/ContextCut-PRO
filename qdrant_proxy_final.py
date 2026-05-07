@@ -1759,63 +1759,53 @@ function openEmbedSettings() {{
       overlay.style.cssText = 'position:fixed;top:0;left:0;width:100%;height:100%;background:rgba(0,0,0,.55);z-index:9999;display:flex;align-items:center;justify-content:center';
       overlay.onclick = (e) => {{ if (e.target === overlay) closeEmbedOverlay(overlay); }};
 
-      const modeOpts = [
-        {{v:'voyage',label:'Voyage AI (voyage-3)',desc:'Cloud — highest quality, requires API key'}},
-        {{v:'ollama',label:'Ollama Local',desc:'100% local — nomic-embed-text, mxbai-embed-large, bge-m3, qwen3-embedding'}},
-      ];
-      const models = [
-        {{v:'nomic-embed-text',label:'nomic-embed-text (274MB, 8K ctx)'}},
-        {{v:'mxbai-embed-large',label:'mxbai-embed-large (670MB, 512 ctx)'}},
-        {{v:'bge-m3',label:'bge-m3 (1.2GB, 8K ctx, multilingual)'}},
-        {{v:'qwen3-embedding:8b',label:'qwen3-embedding:8b (4.9GB, best quality)'}},
-      ];
       const isVoyage = cfg.mode === 'voyage';
 
-      overlay.innerHTML = `
-        <div style="background:#131a2b;border:1px solid var(--border);border-radius:8px;padding:24px;width:420px;max-width:90vw;font-family:'JetBrains Mono',monospace;font-size:12px;color:var(--text)">
-          <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:16px">
-            <strong style="font-size:14px">\u2699 Embed Model Settings</strong>
-            <button onclick="closeEmbedOverlay(document.getElementById('embedOverlay'))" style="background:none;border:none;color:var(--muted);font-size:18px;cursor:pointer">&times;</button>
-          </div>
+      const html = '<div style="background:#131a2b;border:1px solid var(--border);border-radius:8px;padding:24px;width:420px;max-width:90vw;font-family:JetBrains Mono,monospace;font-size:12px;color:var(--text)">' +
+        '<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:16px">' +
+          '<strong style="font-size:14px">\\u2699 Embed Model Settings</strong>' +
+          '<button onclick="closeEmbedOverlay(document.getElementById(\'embedOverlay\'))" style="background:none;border:none;color:var(--muted);font-size:18px;cursor:pointer">&times;</button>' +
+        '</div>' +
+        '<label style="display:block;margin-bottom:4px;color:var(--muted);font-size:11px">Backend</label>' +
+        '<select id="emMode" style="width:100%;background:#0d1320;color:var(--text);border:1px solid var(--border);border-radius:4px;padding:7px 10px;font-family:inherit;font-size:12px;margin-bottom:4px">' +
+          '<option value="voyage" '+(isVoyage?'selected':'')+'>Voyage AI (voyage-3)</option>' +
+          '<option value="ollama" '+(!isVoyage?'selected':'')+'>Ollama Local</option>' +
+        '</select>' +
+        '<div id="emModeDesc" style="color:var(--muted);font-size:10px;margin-bottom:14px">'+(isVoyage?'Cloud \\u2014 highest quality, requires API key':'100% local \\u2014 nomic-embed-text, mxbai-embed-large, bge-m3, qwen3-embedding')+'</div>' +
+        '<div id="emVoyageFields" style="display:'+(isVoyage?'block':'none')+'">' +
+          '<label style="display:block;margin-bottom:4px;color:var(--muted);font-size:11px">Voyage API Key</label>' +
+          '<input id="emVoyageKey" type="password" value="'+(cfg.voyage_key||'')+'" placeholder="Paste your voyage-ai key" style="width:100%;background:#0d1320;color:var(--text);border:1px solid var(--border);border-radius:4px;padding:7px 10px;font-family:inherit;font-size:12px;margin-bottom:14px" />' +
+        '</div>' +
+        '<div id="emOllamaFields" style="display:'+(isVoyage?'none':'block')+'">' +
+          '<label style="display:block;margin-bottom:4px;color:var(--muted);font-size:11px">Ollama Embedding Model</label>' +
+          '<select id="emModel" style="width:100%;background:#0d1320;color:var(--text);border:1px solid var(--border);border-radius:4px;padding:7px 10px;font-family:inherit;font-size:12px;margin-bottom:14px">' +
+            '<option value="nomic-embed-text"'+(cfg.ollama_model==='nomic-embed-text'?' selected':'')+'>nomic-embed-text (274MB, 8K ctx)</option>' +
+            '<option value="mxbai-embed-large"'+(cfg.ollama_model==='mxbai-embed-large'?' selected':'')+'>mxbai-embed-large (670MB, 512 ctx)</option>' +
+            '<option value="bge-m3"'+(cfg.ollama_model==='bge-m3'?' selected':'')+'>bge-m3 (1.2GB, 8K ctx, multilingual)</option>' +
+            '<option value="qwen3-embedding:8b"'+(cfg.ollama_model==='qwen3-embedding:8b'?' selected':'')+'>qwen3-embedding:8b (4.9GB, best quality)</option>' +
+          '</select>' +
+          '<div style="color:var(--muted);font-size:10px;margin-bottom:14px">Ollama URL: '+(cfg.ollama_url||'http://localhost:11434')+'</div>' +
+        '</div>' +
+        '<div style="display:flex;gap:8px;justify-content:flex-end">' +
+          '<button onclick="closeEmbedOverlay(document.getElementById(\'embedOverlay\'))" style="background:transparent;border:1px solid var(--border);color:var(--muted);border-radius:4px;padding:6px 16px;font-size:11px;cursor:pointer;font-family:inherit">Cancel</button>' +
+          '<button id="emSaveBtn" onclick="saveEmbedConfig()" style="background:var(--accent);color:#000;border:none;border-radius:4px;padding:6px 16px;font-size:11px;cursor:pointer;font-family:inherit;font-weight:600">Save</button>' +
+        '</div>' +
+        '<div id="emMsg" style="margin-top:10px;font-size:11px;min-height:16px"></div>' +
+      '</div>';
 
-          <label style="display:block;margin-bottom:4px;color:var(--muted);font-size:11px">Backend</label>
-          <select id="emMode" style="width:100%;background:#0d1320;color:var(--text);border:1px solid var(--border);border-radius:4px;padding:7px 10px;font-family:inherit;font-size:12px;margin-bottom:4px">
-            ${{modeOpts.map(o => `<option value="$${{o.v}}" $${{o.v===cfg.mode?'selected':''}}>$${{o.label}}</option>`).join('')}}
-          </select>
-          <div id="emModeDesc" style="color:var(--muted);font-size:10px;margin-bottom:14px">${{isVoyage ? modeOpts[0].desc : modeOpts[1].desc}}</div>
-
-          <div id="emVoyageFields" style="display:${{isVoyage?'block':'none'}}">
-            <label style="display:block;margin-bottom:4px;color:var(--muted);font-size:11px">Voyage API Key</label>
-            <input id="emVoyageKey" type="password" value="$${{cfg.voyage_key||''}}" placeholder="Paste your voyage-ai key"
-              style="width:100%;background:#0d1320;color:var(--text);border:1px solid var(--border);border-radius:4px;padding:7px 10px;font-family:inherit;font-size:12px;margin-bottom:14px" />
-          </div>
-
-          <div id="emOllamaFields" style="display:${{isVoyage?'none':'block'}}">
-            <label style="display:block;margin-bottom:4px;color:var(--muted);font-size:11px">Ollama Embedding Model</label>
-            <select id="emModel" style="width:100%;background:#0d1320;color:var(--text);border:1px solid var(--border);border-radius:4px;padding:7px 10px;font-family:inherit;font-size:12px;margin-bottom:14px">
-              $${{models.map(m => `<option value="$${{m.v}}" $${{m.v===cfg.ollama_model?'selected':''}}>$${{m.label}}</option>`).join('')}}
-            </select>
-            <div style="color:var(--muted);font-size:10px;margin-bottom:14px">Ollama URL: $${{cfg.ollama_url||'http://localhost:11434'}}</div>
-          </div>
-
-          <div style="display:flex;gap:8px;justify-content:flex-end">
-            <button onclick="closeEmbedOverlay(document.getElementById('embedOverlay'))" style="background:transparent;border:1px solid var(--border);color:var(--muted);border-radius:4px;padding:6px 16px;font-size:11px;cursor:pointer;font-family:inherit">Cancel</button>
-            <button id="emSaveBtn" onclick="saveEmbedConfig()" style="background:var(--accent);color:#000;border:none;border-radius:4px;padding:6px 16px;font-size:11px;cursor:pointer;font-family:inherit;font-weight:600">Save</button>
-          </div>
-          <div id="emMsg" style="margin-top:10px;font-size:11px;min-height:16px"></div>
-        </div>
-      `;
-
+      overlay.innerHTML = html;
       document.body.appendChild(overlay);
 
       document.getElementById('emMode').onchange = function() {{
         const v = this.value;
         document.getElementById('emVoyageFields').style.display = v==='voyage'?'block':'none';
         document.getElementById('emOllamaFields').style.display = v==='ollama'?'block':'none';
-        document.getElementById('emModeDesc').textContent = v==='voyage'?'${{modeOpts[0].desc}}':'${{modeOpts[1].desc}}';
+        const descs = {{
+          voyage: 'Cloud \\u2014 highest quality, requires API key',
+          ollama: '100% local \\u2014 nomic-embed-text, mxbai-embed-large, bge-m3, qwen3-embedding'
+        }};
+        document.getElementById('emModeDesc').textContent = descs[v];
       }};
-
-      document.body.appendChild(overlay);
     }})
     .catch(e => {{
       embedModalOpen = false;
