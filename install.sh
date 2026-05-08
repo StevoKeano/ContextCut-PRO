@@ -341,7 +341,13 @@ echo $! > "$PROXY_PIDFILE"
 
 # Wait for proxy to initialize and fix collection dimension
 echo "Waiting for proxy to initialize..."
-sleep 5
+for i in $(seq 1 60); do
+  if nc -z 127.0.0.1 "${CONTEXTCUT_DASHBOARD_PORT}" 2>/dev/null; then
+    echo "Proxy ready."
+    break
+  fi
+  sleep 1
+done
 
 # ── Start watcher ──
 WATCHER_PIDFILE="$INST/.ingest.pid"

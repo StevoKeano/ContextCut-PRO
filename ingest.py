@@ -120,18 +120,8 @@ def ensure_collection():
         actual_dim = info.config.params.vectors.size
         if actual_dim != EMBED_DIM:
             print(f"[!] Dimension mismatch: Qdrant has {actual_dim}, model needs {EMBED_DIM}")
-            print(f"[!] Recreating collection '{COLLECTION}' with dim={EMBED_DIM}...")
-            qc.delete_collection(COLLECTION)
-            time.sleep(2)
-            try:
-                qc.create_collection(
-                    collection_name=COLLECTION,
-                    vectors_config=VectorParams(size=EMBED_DIM, distance=Distance.COSINE),
-                )
-                print(f"[+] Recreated collection '{COLLECTION}'")
-            except Exception:
-                # Already exists (race with another ingest process)
-                print(f"[+] Collection '{COLLECTION}' exists (dim={EMBED_DIM})")
+            print(f"[!] Fix: update CONTEXTCUT_EMBED_MODE/CONTEXTCUT_EMBED_MODEL in .env or use the dashboard Settings")
+            raise SystemExit(1)
 
 # ── Ingest ────────────────────────────────────────────────────────────────────
 def file_id(path: Path) -> str:

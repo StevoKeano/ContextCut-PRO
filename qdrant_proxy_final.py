@@ -2525,8 +2525,10 @@ if __name__ == "__main__":
         print("[contextcut] ERROR: No embedding backend configured")
         raise SystemExit(1)
 
-    ensure_collection_dim()
+    # Sync .env immediately so ingest.py sees correct settings when started after us
     _sync_env_on_startup()
+
+    ensure_collection_dim()
 
     load_sessions()
 
