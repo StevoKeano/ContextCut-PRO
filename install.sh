@@ -2,7 +2,7 @@
 # ContextCut installer — macOS / Linux
 # https://github.com/StevoKeano/ContextCut
 
-REPO="https://raw.githubusercontent.com/StevoKeano/ContextCut-PRO/main"
+REPO="https://raw.githubusercontent.com/StevoKeano/ContextCut-PRO/feature/Settings-page"
 INSTALL_DIR="$HOME/contextcut"
 LOG_DIR="$HOME/.contextcut/logs"
 PLIST_PROXY="$HOME/Library/LaunchAgents/ai.contextcut.proxy.plist"
@@ -24,6 +24,8 @@ if [ -n "$CONTEXTCUT_LICENSE_KEY" ]; then
   echo ""
   echo "  ── ContextCut PRO License ──"
   echo "  License key detected automatically: ${LICENSE_KEY:0:16}..."
+  # Reconnect stdin to terminal so read prompts work when piped via curl
+  exec < /dev/tty
 fi
 
 # ── Collect config ────────────────────────────────────────────────────────────
@@ -33,10 +35,15 @@ if $AUTO_INSTALL; then
   echo "  Defaults shown in [brackets]. Press Enter to accept, or type a new value."
   echo ""
 
-  read -p "  Voyage AI API key (from dash.voyageai.com): " VOYAGE_KEY
+  read -p "  Voyage AI API key (leave blank for local Ollama embedding): " VOYAGE_KEY
+
   if [ -z "$VOYAGE_KEY" ]; then
-    echo "ERROR: Voyage API key is required."
-    exit 1
+    echo "  100% local mode — using Ollama for embeddings."
+    EMBED_MODE="ollama"
+    read -p "  Embedding model [nomic-embed-text]: " EMBED_MODEL
+    EMBED_MODEL="${EMBED_MODEL:-nomic-embed-text}"
+  else
+    EMBED_MODE="voyage"
   fi
 
   read -p "  Ollama host [localhost]: " OLLAMA_HOST
@@ -95,10 +102,15 @@ else
     exit 1
   fi
 
-  read -p "  Voyage AI API key (from dash.voyageai.com): " VOYAGE_KEY
+  read -p "  Voyage AI API key (leave blank for local Ollama embedding): " VOYAGE_KEY
+
   if [ -z "$VOYAGE_KEY" ]; then
-    echo "ERROR: Voyage API key is required."
-    exit 1
+    echo "  100% local mode — using Ollama for embeddings."
+    EMBED_MODE="ollama"
+    read -p "  Embedding model [nomic-embed-text]: " EMBED_MODEL
+    EMBED_MODEL="${EMBED_MODEL:-nomic-embed-text}"
+  else
+    EMBED_MODE="voyage"
   fi
 
   read -p "  Ollama host [localhost]: " OLLAMA_HOST
@@ -127,6 +139,33 @@ else
 
   read -p "  Minimum relevance score 0.0-1.0 [0.20]: " MIN_SCORE
   MIN_SCORE="${MIN_SCORE:-0.20}"
+fi
+
+echo ""
+echo "  ── Summary ──"
+if [ -n "$VOYAGE_KEY" ]; then
+  echo "  Embed mode  : Voyage AI (voyage-3)"
+else
+  echo "  Embed mode  : Ollama local ($EMBED_MODEL)"
+fi
+echo "  Install dir : $INSTALL_DIR"
+echo "  Qdrant      : $QDRANT_HOST:$QDRANT_PORT"
+echo "  Ollama      : $OLLAMA_HOST:$OLLAMA_PORT"
+echo "  Dashboard   : port $DASH_PORT"
+echo "  Proxy       : port $PROXY_PORT"
+echo ""
+
+if $AUTO_INSTALL; then
+  read -p "  Proceed with install? [Y/n]: " ANSWER
+  if echo "$ANSWER" | grep -qi "^n"; then
+    echo ""
+    echo "  Install aborted."
+    echo ""
+    echo "  To restart the install:"
+    echo "    bash $0"
+    echo ""
+    exit 0
+  fi
 fi
 
 echo ""
@@ -162,13 +201,16 @@ fi
 
 # ── Python venv ───────────────────────────────────────────────────────────────
 echo "  Creating Python virtual environment..."
-python3 -m venv "$INSTALL_DIR/venv"
+python3 -m venv "$INSTALL_DIR/venv" || { echo "ERROR: venv creation failed"; exit 1; }
 source "$INSTALL_DIR/venv/bin/activate"
 
 echo "  Installing Python dependencies..."
-pip install --upgrade pip -q
-pip install voyageai qdrant-client watchdog -q
-pip install tiktoken -q && echo "  tiktoken installed (exact token counts)" || echo "  tiktoken skipped (estimate mode)"
+pip install --upgrade pip -q 2>/dev/null
+pip install qdrant-client watchdog cryptography -q
+if [ -n "$VOYAGE_KEY" ]; then
+  pip install voyageai -q && echo "  voyageai installed" || echo "  WARNING: voyageai install failed (Voyage AI mode will not work)"
+fi
+pip install tiktoken -q 2>/dev/null && echo "  tiktoken installed (exact token counts)" || echo "  tiktoken skipped (estimate mode)"
 
 # ── Download scripts ──────────────────────────────────────────────────────────
 echo "  Downloading ContextCut scripts..."
@@ -180,6 +222,8 @@ cat > "$INSTALL_DIR/.env" << EOF
 CONTEXTCUT_LICENSE_KEY=$LICENSE_KEY
 CONTEXTCUT_LICENSE_SERVER=https://contextcut-license.ppsel03.workers.dev
 VOYAGE_API_KEY=$VOYAGE_KEY
+CONTEXTCUT_EMBED_MODE=$EMBED_MODE
+CONTEXTCUT_EMBED_MODEL=$EMBED_MODEL
 CONTEXTCUT_UPSTREAM=http://$OLLAMA_HOST:$OLLAMA_PORT
 CONTEXTCUT_QDRANT_HOST=$QDRANT_HOST
 CONTEXTCUT_QDRANT_PORT=$QDRANT_PORT
@@ -248,6 +292,7 @@ RESETEOF
     <key>CONTEXTCUT_LICENSE_KEY</key><string>$LICENSE_KEY</string>
     <key>CONTEXTCUT_LICENSE_SERVER</key><string>https://contextcut-license.ppsel03.workers.dev</string>
     <key>VOYAGE_API_KEY</key><string>$VOYAGE_KEY</string>
+    <key>CONTEXTCUT_EMBED_MODEL</key><string>$EMBED_MODEL</string>
     <key>CONTEXTCUT_UPSTREAM</key><string>http://$OLLAMA_HOST:$OLLAMA_PORT</string>
     <key>CONTEXTCUT_QDRANT_HOST</key><string>$QDRANT_HOST</string>
     <key>CONTEXTCUT_QDRANT_PORT</key><string>$QDRANT_PORT</string>
@@ -311,6 +356,29 @@ set +a
 
 INST="$(dirname "$0")"
 
+# Clean stale ready file
+rm -f "$INST/.proxy_ready"
+
+# ── Start proxy first (it ensures correct collection dimension) ──
+PROXY_PIDFILE="$INST/.proxy.pid"
+if [ -f "$PROXY_PIDFILE" ] && kill -0 $(cat "$PROXY_PIDFILE") 2>/dev/null; then
+  echo "Proxy already running (PID $(cat "$PROXY_PIDFILE")). Stop it first with ./stop.sh"
+  exit 1
+fi
+source "$INST/.env"
+"$INST/venv/bin/python" "$INST/qdrant_proxy_final.py" &
+echo $! > "$PROXY_PIDFILE"
+
+# Wait for proxy ready marker (means .env synced + collection fixed)
+echo "Waiting for proxy to initialize..."
+for i in $(seq 1 60); do
+  if [ -f "$INST/.proxy_ready" ]; then
+    echo "Proxy ready."
+    break
+  fi
+  sleep 1
+done
+
 # ── Start watcher ──
 WATCHER_PIDFILE="$INST/.ingest.pid"
 if [ -f "$WATCHER_PIDFILE" ] && kill -0 $(cat "$WATCHER_PIDFILE") 2>/dev/null; then
@@ -320,16 +388,6 @@ else
   echo $! > "$WATCHER_PIDFILE"
   echo "Watcher started. PID: $(cat "$WATCHER_PIDFILE")"
 fi
-
-# ── Start proxy ──
-PROXY_PIDFILE="$INST/.proxy.pid"
-if [ -f "$PROXY_PIDFILE" ] && kill -0 $(cat "$PROXY_PIDFILE") 2>/dev/null; then
-  echo "Proxy already running (PID $(cat "$PROXY_PIDFILE")). Stop it first with ./stop.sh"
-  exit 1
-fi
-source "$INST/.env"
-"$INST/venv/bin/python" "$INST/qdrant_proxy_final.py" &
-echo $! > "$PROXY_PIDFILE"
 echo "ContextCut started. Dashboard: http://localhost:${CONTEXTCUT_DASHBOARD_PORT}"
 STARTEOF
   chmod +x "$INSTALL_DIR/start.sh"
@@ -357,15 +415,12 @@ if [ -f "$PROXY_PIDFILE" ]; then
   if kill -0 "$PID" 2>/dev/null; then
     echo "Stopping proxy (PID $PID)..."
     kill "$PID"
+    sleep 1
     echo "Proxy stopped."
   fi
   rm -f "$PROXY_PIDFILE"
-else
-  echo "No PID files found. Attempting pkill..."
-  pkill -f ingest.py 2>/dev/null
-  pkill -f qdrant_proxy_final.py 2>/dev/null
+  rm -f "$INST/.proxy_ready"
 fi
-echo "Done."
 STOPEOF
   chmod +x "$INSTALL_DIR/stop.sh"
 
@@ -401,10 +456,16 @@ fi
 
 # ── Initial ingest ────────────────────────────────────────────────────────────
 echo ""
-echo "  Running initial knowledge base ingest..."
-echo "  (this may take a while — Voyage AI free tier: 1 file per 21s)"
+if [ -n "$VOYAGE_KEY" ]; then
+  echo "  Running initial knowledge base ingest..."
+  echo "  (this may take a while — Voyage AI free tier: 1 file per 21s)"
+else
+  echo "  Running initial knowledge base ingest (local Ollama)..."
+fi
 echo ""
 export VOYAGE_API_KEY="$VOYAGE_KEY"
+export CONTEXTCUT_EMBED_MODE="$EMBED_MODE"
+export CONTEXTCUT_EMBED_MODEL="$EMBED_MODEL"
 export CONTEXTCUT_QDRANT_HOST="$QDRANT_HOST"
 export CONTEXTCUT_QDRANT_PORT="$QDRANT_PORT"
 export CONTEXTCUT_KB_DIR="$KB_DIR"

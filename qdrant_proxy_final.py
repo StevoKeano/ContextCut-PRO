@@ -20,6 +20,7 @@ Configuration via environment variables (all optional — defaults shown):
 """
 
 import os
+import sys
 import uuid
 import json
 import html
@@ -27,27 +28,168 @@ import time
 import socket
 import random
 import threading
+import platform
+import hashlib
+import base64
 import urllib.request
 import urllib.error
 from collections import deque
+from pathlib import Path
 from datetime import datetime
 from http.server import HTTPServer, BaseHTTPRequestHandler
 from socketserver import ThreadingMixIn
 
-import voyageai
+_VOYAGE_AVAILABLE = False
+_voyage_mod = None
+try:
+    import voyageai
+    _voyage_mod = voyageai
+    _VOYAGE_AVAILABLE = True
+except ImportError:
+    pass
+
 from qdrant_client import QdrantClient
+from qdrant_client.models import Distance, VectorParams
+
+EMBED_DIM_MAP = {
+    "nomic-embed-text": 768,
+    "nomic-embed-text-v1.5": 768,
+    "nomic-embed-text-v2-moe": 768,
+    "mxbai-embed-large": 1024,
+    "bge-m3": 1024,
+    "qwen3-embedding:0.6b": 4096,
+    "qwen3-embedding:4b": 4096,
+    "qwen3-embedding:8b": 4096,
+    "snowflake-arctic-embed-l": 1024,
+    "all-minilm": 384,
+}
+
+def _get_embed_dim(model: str) -> int:
+    if not model:
+        return 1024
+    base = model.split(":")[0]
+    return EMBED_DIM_MAP.get(model, EMBED_DIM_MAP.get(base, 1024))
+
+# ── Secure Credential Manager (Machine-bound encryption) ─────────────────────
+class CredentialManager:
+    """Stores API keys encrypted with a machine-derived key.
+    If copied to another machine, the file is useless."""
+
+    _cred_file = os.path.join(os.path.dirname(os.path.abspath(__file__)), ".contextcut_creds.enc")
+
+    @staticmethod
+    def _machine_key():
+        raw = ""
+        try:
+            if platform.system() == "Linux":
+                with open("/etc/machine-id") as f: raw = f.read().strip()
+            elif platform.system() == "Darwin":
+                import subprocess
+                raw = subprocess.check_output(
+                    ["/usr/sbin/ioreg", "-rd1", "-c", "IOPlatformExpertDevice"],
+                    encoding="utf-8"
+                ).strip()
+                import re
+                match = re.search(r'"IOPlatformSerialNumber"\s*=\s*"([^"]+)"', raw)
+                if match:
+                    raw = match.group(1)
+            else:
+                raw = platform.node()
+        except Exception:
+            raw = "fallback-constant-key"
+        return hashlib.sha256(raw.encode()).digest()
+
+    @classmethod
+    def _get_fernet(cls):
+        from cryptography.fernet import Fernet
+        key = base64.urlsafe_b64encode(cls._machine_key())
+        return Fernet(key)
+
+    @classmethod
+    def save(cls, key_name, value):
+        creds = cls.load_all()
+        creds[key_name] = value
+        f = cls._get_fernet()
+        encrypted = f.encrypt(json.dumps(creds).encode())
+        with open(cls._cred_file, "wb") as fh: fh.write(encrypted)
+        os.chmod(cls._cred_file, 0o600)
+
+    @classmethod
+    def get(cls, key_name):
+        return cls.load_all().get(key_name)
+
+    @classmethod
+    def load_all(cls):
+        if not os.path.exists(cls._cred_file): return {}
+        try:
+            f = cls._get_fernet()
+            with open(cls._cred_file, "rb") as fh: encrypted = fh.read()
+            return json.loads(f.decrypt(encrypted).decode())
+        except Exception:
+            return {}
 
 # ── Config ────────────────────────────────────────────────────────────────────
 UPSTREAM       = os.getenv("CONTEXTCUT_UPSTREAM",        "http://localhost:11434")
 QDRANT_HOST    = os.getenv("CONTEXTCUT_QDRANT_HOST",     "localhost")
 QDRANT_PORT    = int(os.getenv("CONTEXTCUT_QDRANT_PORT", "6333"))
 COLLECTION     = os.getenv("CONTEXTCUT_COLLECTION",      "contextcut")
+KB_DIR         = Path(os.getenv("CONTEXTCUT_KB_DIR", str(Path.home() / "contextcut" / "knowledge"))).expanduser()
 LISTEN_PORT    = int(os.getenv("CONTEXTCUT_PROXY_PORT",     "18788"))
 DASHBOARD_PORT = int(os.getenv("CONTEXTCUT_DASHBOARD_PORT", "18787"))
 CTX_LIMIT      = int(os.getenv("CONTEXTCUT_CTX_LIMIT",   "8192"))
 TOP_K          = int(os.getenv("CONTEXTCUT_TOP_K",       "5"))
 MIN_SCORE      = float(os.getenv("CONTEXTCUT_MIN_SCORE", "0.20"))
 DEFAULT_MODEL  = os.getenv("CONTEXTCUT_MODEL",           "")
+
+# ── Dynamic Provider Settings ────────────────────────────────────────────────
+PROVIDERS = {
+    "Ollama":     {"url": "http://localhost:11434", "key_required": False},
+    "OpenAI":     {"url": "https://api.openai.com", "key_required": True},
+    "OpenRouter": {"url": "https://openrouter.ai/api", "key_required": True},
+    "Anthropic":  {"url": "https://api.anthropic.com", "key_required": True},
+    "xAI":        {"url": "https://api.x.ai", "key_required": True},
+    "Custom":     {"url": "", "key_required": True},
+}
+_provider_name = "Ollama"
+_custom_base_url = ""
+_ollama_url = ""
+_api_key = ""
+_free_only = False
+_local_only = False
+
+def load_saved_credentials():
+    global _provider_name, _custom_base_url, _ollama_url, _api_key, _free_only, _local_only
+    global _EMBED_MODE, _VK, _LOCAL_EMBED
+    creds = CredentialManager.load_all()
+    _provider_name = creds.get("provider", "Ollama")
+    _custom_base_url = creds.get("custom_url", "")
+    _ollama_url = creds.get("ollama_url", "")
+    _api_key = creds.get("api_key", "")
+    _free_only = creds.get("free_only", False)
+    _local_only = creds.get("local_only", False)
+
+    saved_embed_mode = creds.get("embed_mode", "")
+    if saved_embed_mode:
+        _EMBED_MODE = saved_embed_mode
+    saved_voyage = creds.get("voyage_key", "")
+    if saved_voyage:
+        _VK = saved_voyage
+    saved_model = creds.get("embed_model", "")
+    if saved_model:
+        _LOCAL_EMBED = saved_model
+
+def get_current_upstream():
+    global _provider_name, _custom_base_url, _ollama_url
+    if _provider_name == "Custom":
+        return _custom_base_url
+    if _provider_name == "Ollama":
+        return _ollama_url if _ollama_url else UPSTREAM
+    return PROVIDERS.get(_provider_name, {}).get("url", "")
+
+def get_current_api_key():
+    return _api_key if PROVIDERS.get(_provider_name, {}).get("key_required") else None
+
+load_saved_credentials()
 DEFAULT_TEMP   = float(os.getenv("CONTEXTCUT_TEMP",      "0.7"))
 DEFAULT_MAX_TK = int(os.getenv("CONTEXTCUT_MAX_TOKENS",  "0"))
 DEFAULT_TOP_P  = float(os.getenv("CONTEXTCUT_TOP_P",     "1.0"))
@@ -218,13 +360,19 @@ def release_license():
             headers={"Content-Type": "application/json", "User-Agent": "ContextCutPRO/1.0"},
             method="POST",
         )
-        with urllib.request.urlopen(req, timeout=5) as resp:
+        with urllib.request.urlopen(req, timeout=3) as resp:
             data = json.loads(resp.read().decode())
         print(f"[contextcut] License seat released: {data.get('message','OK')}")
     except Exception as e:
         print(f"[contextcut] License release error (non-fatal): {e}")
 
+_shutdown_done = False
+
 def shutdown_hook():
+    global _shutdown_done
+    if _shutdown_done:
+        return
+    _shutdown_done = True
     release_license()
     save_sessions()
 import atexit
@@ -361,7 +509,7 @@ import signal
 def _handle_signal(signum, frame):
     print("\n[contextcut] Shutting down gracefully...")
     shutdown_hook()
-    raise SystemExit(0)
+    os._exit(0)
 
 signal.signal(signal.SIGINT, _handle_signal)
 signal.signal(signal.SIGTERM, _handle_signal)
@@ -371,45 +519,129 @@ _vc            = None
 _qclient       = None
 _last_embed_ts = 0.0
 _VK            = os.environ.get("VOYAGE_API_KEY", "").strip().strip('"').strip("'")  # strip accidental quotes
+_LOCAL_EMBED   = os.environ.get("CONTEXTCUT_EMBED_MODEL", "").strip().strip('"').strip("'")
+_EMBED_MODE    = os.environ.get("CONTEXTCUT_EMBED_MODE", "voyage").strip().strip('"').strip("'")
 
 def get_clients():
     global _vc, _qclient
-    if _vc is None:
-        if not _VK:
-            print("[contextcut] WARNING: VOYAGE_API_KEY is empty at get_clients()")
-        else:
-            print(f"[contextcut] Voyage API key loaded: {_VK[:8]}...")
-        _vc = voyageai.Client(api_key=_VK)
+    if _vc is None and _VK and _VOYAGE_AVAILABLE:
+        print(f"[contextcut] Voyage API key loaded: {_VK[:8]}...")
+        _vc = _voyage_mod.Client(api_key=_VK)
     if _qclient is None:
         _qclient = QdrantClient(host=QDRANT_HOST, port=QDRANT_PORT)
     return _vc, _qclient
 
+def _ollama_embed(text: str, model: str) -> list[float] | None:
+    """Embed using Ollama's /api/embed endpoint."""
+    try:
+        payload = json.dumps({"model": model, "input": text}).encode()
+        req = urllib.request.Request(f"{UPSTREAM}/api/embed", data=payload, method="POST")
+        req.add_header("Content-Type", "application/json")
+        with urllib.request.urlopen(req, timeout=30) as resp:
+            data = json.loads(resp.read().decode("utf-8"))
+        embeddings = data.get("embeddings", [])
+        if embeddings:
+            return embeddings[0]
+        return None
+    except Exception as e:
+        print(f"[contextcut] Ollama embed error: {e}")
+        return None
+
 # ── Qdrant lookup ─────────────────────────────────────────────────────────────
 def _safe_embed(query: str, input_type: str) -> list[float] | None:
-    """Embed with retry on rate limit (matches ingest.py safe_embed)."""
+    """Embed with retry. Uses configured backend: voyage or ollama."""
     global _last_embed_ts
-    max_retries = 3
-    for attempt in range(max_retries):
-        elapsed = time.time() - _last_embed_ts
-        if elapsed < 22.0:
-            time.sleep(22.0 - elapsed)
-        try:
-            vc, _ = get_clients()
-            result = vc.embed([query], model="voyage-3", input_type=input_type)
-            _last_embed_ts = time.time()
-            return result.embeddings[0]
-        except Exception as e:
-            err_msg = str(e).lower()
-            if "rate" in err_msg or "429" in err_msg:
-                wait = 60 + random.uniform(5, 15)
-                print(f"[contextcut] Voyage rate-limited, backing off {wait:.0f}s (attempt {attempt+1}/{max_retries})")
-                time.sleep(wait)
-            else:
-                print(f"[contextcut] Voyage embed error: {e}")
-                print(f"[contextcut] API key present: {bool(_VK)}, first 4 chars: {_VK[:4] if _VK else 'NONE'}")
-                return None
-    print(f"[contextcut] Voyage embed failed after {max_retries} retries")
+
+    if _EMBED_MODE == "voyage" and _VK and _VOYAGE_AVAILABLE:
+        max_retries = 3
+        for attempt in range(max_retries):
+            elapsed = time.time() - _last_embed_ts
+            if elapsed < 22.0:
+                time.sleep(22.0 - elapsed)
+            try:
+                vc, _ = get_clients()
+                result = vc.embed([query], model="voyage-3", input_type=input_type)
+                _last_embed_ts = time.time()
+                return result.embeddings[0]
+            except Exception as e:
+                err_msg = str(e).lower()
+                if "rate" in err_msg or "429" in err_msg:
+                    wait = 60 + random.uniform(5, 15)
+                    print(f"[contextcut] Voyage rate-limited, backing off {wait:.0f}s (attempt {attempt+1}/{max_retries})")
+                    time.sleep(wait)
+                else:
+                    print(f"[contextcut] Voyage embed error: {e}")
+                    if _LOCAL_EMBED:
+                        print(f"[contextcut] Falling back to Ollama embed: {_LOCAL_EMBED}")
+                        return _ollama_embed(query, _LOCAL_EMBED)
+                    return None
+        print(f"[contextcut] Voyage embed failed after {max_retries} retries")
+        if _LOCAL_EMBED:
+            return _ollama_embed(query, _LOCAL_EMBED)
+        return None
+
+    # Ollama local embed
+    if _LOCAL_EMBED:
+        return _ollama_embed(query, _LOCAL_EMBED)
+
+    print("[contextcut] WARNING: No embedding backend configured")
     return None
+
+def _sync_env_on_startup():
+    """Write current embed settings to .env so ingest.py matches."""
+    try:
+        env_path = Path(__file__).parent / ".env"
+        env_lines = {}
+        if env_path.exists():
+            for line in env_path.read_text().splitlines():
+                if "=" in line and not line.startswith("#"):
+                    k, v = line.split("=", 1)
+                    env_lines[k.strip()] = v.strip()
+        env_lines["CONTEXTCUT_EMBED_MODE"] = _EMBED_MODE
+        if _EMBED_MODE == "ollama":
+            env_lines["CONTEXTCUT_EMBED_MODEL"] = _LOCAL_EMBED
+        elif "CONTEXTCUT_EMBED_MODEL" in env_lines:
+            del env_lines["CONTEXTCUT_EMBED_MODEL"]
+        if _VK:
+            env_lines["VOYAGE_API_KEY"] = _VK
+        with open(env_path, "w") as f:
+            for k, v in env_lines.items():
+                f.write(f"{k}={v}\n")
+        if _EMBED_MODE == "voyage":
+            print(f"[contextcut] .env synced: mode=voyage (voyage-3)")
+        else:
+            print(f"[contextcut] .env synced: mode=ollama model={_LOCAL_EMBED}")
+    except Exception as e:
+        print(f"[contextcut] .env sync warning: {e}")
+
+def ensure_collection_dim():
+    """Check Qdrant collection dimension matches current embed model; recreate if needed."""
+    try:
+        expected_dim = _get_embed_dim(_LOCAL_EMBED if _EMBED_MODE == "ollama" else "")
+        qclient = QdrantClient(host=QDRANT_HOST, port=QDRANT_PORT)
+        try:
+            info = qclient.get_collection(COLLECTION)
+            actual_dim = info.config.params.vectors.size
+            if actual_dim != expected_dim:
+                print(f"[contextcut] Dimension mismatch: collection={actual_dim}, model={expected_dim}. Recreating...")
+                qclient.delete_collection(COLLECTION)
+                time.sleep(2)
+                qclient.create_collection(
+                    collection_name=COLLECTION,
+                    vectors_config=VectorParams(size=expected_dim, distance=Distance.COSINE),
+                )
+                print(f"[contextcut] Collection recreated with dim={expected_dim}")
+            else:
+                print(f"[contextcut] Qdrant collection dim={actual_dim} OK")
+        except Exception:
+            # Collection doesn't exist yet, create it
+            print(f"[contextcut] Creating Qdrant collection with dim={expected_dim}")
+            qclient.create_collection(
+                collection_name=COLLECTION,
+                vectors_config=VectorParams(size=expected_dim, distance=Distance.COSINE),
+            )
+    except Exception as e:
+        print(f"[contextcut] Collection dimension check warning: {e}")
 
 def qdrant_context(query: str) -> tuple[str, list[dict]]:
     try:
@@ -481,8 +713,18 @@ class ProxyHandler(_SuppressBrokenPipe, BaseHTTPRequestHandler):
     def log_message(self, fmt, *args): pass
 
     def _forward(self, method: str, raw_body: bytes, streaming: bool = False, session_id: str = None):
-        upstream_url = UPSTREAM + self.path
+        upstream = get_current_upstream()
+        
+        # Cloud providers use {base}/v1/chat/completions, Ollama uses {base}/v1/chat/completions too
+        upstream_url = upstream + self.path
+        
         req = urllib.request.Request(upstream_url, data=raw_body if method == "POST" else None, method=method)
+        
+        # Inject API key header for cloud providers
+        api_key = get_current_api_key()
+        if api_key:
+            req.add_header("Authorization", f"Bearer {api_key}")
+
         for k, v in self.headers.items():
             if k.lower() not in ("host", "content-length"):
                 req.add_header(k, v)
@@ -615,7 +857,8 @@ class ProxyHandler(_SuppressBrokenPipe, BaseHTTPRequestHandler):
             tok_after = count_body_tokens(body)
             pct = round(tok_after / CTX_LIMIT * 100, 1)
             ts  = datetime.now().strftime("%H:%M:%S")
-            print(f"[contextcut] {ts} | {tok_before}→{tok_after}/{CTX_LIMIT} ({pct}%) | hits:{len(hits_meta)} | {query[:60]}")
+            model_name = body.get("model", "?")
+            print(f"[contextcut] {ts} | model={model_name} | {tok_before}→{tok_after}/{CTX_LIMIT} ({pct}%) | hits:{len(hits_meta)} | {query[:60]}")
             record({"ts": ts, "query": query[:120], "tokens_before": tok_before,
                     "tokens_after": tok_after, "ctx_limit": CTX_LIMIT, "pct": pct, "hits": hits_meta})
 
@@ -655,6 +898,274 @@ def make_stats_json() -> dict:
     }
 
 def make_dashboard() -> str:
+    with _lock:
+        rows = list(_log)
+        s    = dict(_stats)
+
+    last_pct = rows[0]["pct"] if rows else 0
+    last_tok = rows[0]["tokens_after"] if rows else 0
+    bc       = pct_color(last_pct)
+
+    rows_html = ""
+    for r in rows:
+        p   = r["pct"]
+        col = pct_color(p)
+        hits_str = " ".join(
+            f'<span class="hit">{html.escape(h["source"].replace(".md",""))} <em>{h["score"]}</em></span>'
+            for h in r.get("hits", [])
+        ) or '<span style="color:#4b5563">—</span>'
+        bar = f'<div class="mini-bar"><div class="mini-fill" style="width:{min(p,100)}%;background:{col}"></div></div>'
+        rows_html += f"""<tr>
+          <td class="ts">{r['ts']}</td>
+          <td class="qcell">{html.escape(r['query'])}</td>
+          <td class="num">{r['tokens_before']}</td>
+          <td class="num">{r['tokens_after']}</td>
+          <td class="num" style="color:{col}">{p}%{bar}</td>
+          <td class="hitcell">{hits_str}</td>
+        </tr>"""
+
+    no_rows = '<tr><td colspan="6" class="empty">No requests yet — send a message below</td></tr>'
+
+    return f"""<!DOCTYPE html>
+"""
+
+def make_settings_page():
+    current_provider = _provider_name
+    current_url = _custom_base_url if current_provider == "Custom" else PROVIDERS.get(current_provider, {}).get("url", "")
+    ollama_input_url = _ollama_url if _ollama_url else UPSTREAM
+    has_key = bool(_api_key)
+    masked_key = "••••••••••••••••" if has_key else ""
+    provider_opts = "".join(f'<option value="{k}" {"selected" if k==current_provider else ""}>{k}</option>' for k in PROVIDERS.keys())
+    
+    return f"""<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>ContextCut-PRO — Settings</title>
+<link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;600&family=Syne:wght@400;700;800&display=swap" rel="stylesheet">
+<style>
+:root{{--bg:#080c14;--surf:#0d1420;--surf2:#111927;--border:#1e2d42;--text:#c9d8f0;--muted:#4a6080;--accent:#00d4ff;--green:#22c55e;--yellow:#f59e0b;--red:#ef4444;--r:6px}}
+*{{box-sizing:border-box;margin:0;padding:0}}
+body{{background:var(--bg);color:var(--text);font-family:'JetBrains Mono',monospace;font-size:13px;display:flex;flex-direction:column;height:100vh}}
+.header{{background:var(--surf);border-bottom:1px solid var(--border);padding:0 20px;display:flex;align-items:center;gap:14px;height:48px;flex-shrink:0}}
+.logo{{font-family:'Syne',sans-serif;font-size:20px;font-weight:800;color:var(--accent);letter-spacing:-.5px}}
+.logo span{{color:var(--text)}}
+.back-btn{{background:transparent;border:1px solid var(--border);color:var(--muted);border-radius:3px;padding:3px 10px;font-size:11px;cursor:pointer;font-family:'JetBrains Mono',monospace;margin-left:auto;text-decoration:none}}
+.back-btn:hover{{color:var(--text);border-color:var(--accent)}}
+.container{{flex:1;overflow-y:auto;padding:20px;display:flex;justify-content:center}}
+.card{{background:var(--surf);border:1px solid var(--border);border-radius:var(--r);padding:20px;width:100%;max-width:500px}}
+.card h2{{font-family:'Syne',sans-serif;font-size:18px;margin-bottom:16px;color:var(--accent)}}
+.form-group{{margin-bottom:16px}}
+.form-group label{{display:block;font-size:10px;color:var(--muted);text-transform:uppercase;letter-spacing:.1em;margin-bottom:6px}}
+.form-group select,.form-group input{{width:100%;background:var(--bg);border:1px solid var(--border);border-radius:var(--r);padding:8px 12px;color:var(--text);font-family:'JetBrains Mono',monospace;font-size:13px;outline:none}}
+.form-group select:focus,.form-group input:focus{{border-color:var(--accent)}}
+.form-group select{{cursor:pointer}}
+.form-group select option{{background:var(--surf);color:var(--text)}}
+.btn{{background:var(--accent);color:#000;border:none;border-radius:var(--r);padding:8px 16px;font-family:'Syne',sans-serif;font-weight:700;font-size:13px;cursor:pointer}}
+.btn:hover{{opacity:.85}}
+.btn:disabled{{opacity:.4;cursor:not-allowed}}
+.btn-secondary{{background:transparent;border:1px solid var(--border);color:var(--muted)}}
+.btn-secondary:hover{{color:var(--text);border-color:var(--accent)}}
+.btn-row{{display:flex;gap:8px;margin-top:8px}}
+#modelList{{max-height:200px;overflow-y:auto;background:var(--bg);border:1px solid var(--border);border-radius:var(--r);padding:8px;margin-top:8px;display:none}}
+#modelList.show{{display:block}}
+#modelList div{{padding:6px 8px;cursor:pointer;border-radius:3px;font-size:12px}}
+#modelList div:hover{{background:var(--surf2);color:var(--accent)}}
+.status{{font-size:11px;margin-top:8px;min-height:16px}}
+.status.ok{{color:var(--green)}}
+.status.err{{color:var(--red)}}
+.hidden{{display:none}}
+</style>
+</head>
+<body>
+<div class="header">
+  <div class="logo">ContextCut<span>-PRO</span></div>
+  <a href="/" class="back-btn">← Back to Dashboard</a>
+</div>
+<div class="container">
+  <div class="card">
+    <h2>LLM Provider Settings</h2>
+    
+    <div class="form-group">
+      <label>Provider</label>
+      <select id="providerSelect" onchange="onProviderChange()">
+        {provider_opts}
+      </select>
+    </div>
+
+    <div class="form-group hidden" id="ollamaUrlGroup">
+      <label>Ollama URL</label>
+      <input type="text" id="ollamaUrl" value="{ollama_input_url}" placeholder="http://localhost:11434">
+    </div>
+
+    <div class="form-group hidden" id="customUrlGroup">
+      <label>Base URL</label>
+      <input type="text" id="customUrl" placeholder="https://api.example.com/v1">
+    </div>
+
+    <div class="form-group">
+      <label>API Key</label>
+      <input type="password" id="apiKey" value="{masked_key}" placeholder="Enter your API key">
+      <div style="font-size:10px;color:var(--muted);margin-top:4px">Stored encrypted on disk. Only your machine can decrypt it.</div>
+    </div>
+
+    <div class="form-group hidden" id="ollamaLocalGroup">
+      <label style="cursor:pointer;display:flex;align-items:center;gap:8px">
+        <input type="checkbox" id="ollamaLocalOnly" style="width:auto;accent-color:var(--accent)"{" checked" if _local_only else ""}>
+        Local models only (exclude cloud)
+      </label>
+    </div>
+
+    <div class="form-group hidden" id="freeOnlyGroup">
+      <label style="cursor:pointer;display:flex;align-items:center;gap:8px">
+        <input type="checkbox" id="freeOnly" style="width:auto;accent-color:var(--accent)"{" checked" if _free_only else ""}>
+        Only free models (OpenRouter)
+      </label>
+    </div>
+
+    <div class="form-group">
+      <label>Available Models</label>
+      <div class="btn-row">
+        <button class="btn" id="fetchBtn" onclick="fetchModels()">Fetch Models</button>
+        <span class="status" id="fetchStatus"></span>
+      </div>
+      <div id="modelList"></div>
+      <div id="selectedModel" style="font-size:12px;color:var(--accent);margin-top:6px"></div>
+    </div>
+
+    <div class="btn-row">
+      <button class="btn" id="saveBtn" onclick="saveSettings()">Save & Switch</button>
+      <span class="status" id="saveStatus"></span>
+    </div>
+  </div>
+</div>
+
+<script>
+let selectedModelName = null;
+
+function onProviderChange() {{
+  const p = document.getElementById('providerSelect').value;
+  const o = document.getElementById('ollamaUrlGroup');
+  const l = document.getElementById('ollamaLocalGroup');
+  const c = document.getElementById('customUrlGroup');
+  const f = document.getElementById('freeOnlyGroup');
+  const k = document.getElementById('apiKey');
+  if (p === 'Ollama') {{
+    o.classList.remove('hidden');
+    l.classList.remove('hidden');
+    c.classList.add('hidden');
+    f.classList.add('hidden');
+    k.placeholder = 'Not required for local Ollama';
+  }} else {{
+    o.classList.add('hidden');
+    l.classList.add('hidden');
+    if (p === 'Custom') c.classList.remove('hidden');
+    else c.classList.add('hidden');
+    if (p === 'OpenRouter') f.classList.remove('hidden');
+    else f.classList.add('hidden');
+    k.placeholder = 'Enter your API key';
+  }}
+  hideModelList();
+}}
+
+function hideModelList() {{
+  document.getElementById('modelList').classList.remove('show');
+  document.getElementById('modelList').innerHTML = '';
+  document.getElementById('fetchStatus').textContent = '';
+  document.getElementById('selectedModel').textContent = '';
+  selectedModelName = null;
+}}
+
+async function fetchModels() {{
+  const status = document.getElementById('fetchStatus');
+  status.textContent = 'Fetching...';
+  status.className = 'status';
+  try {{
+    const provider = document.getElementById('providerSelect').value;
+    const apiKey = document.getElementById('apiKey').value;
+    const customUrl = document.getElementById('customUrl').value;
+    const ollamaUrl = document.getElementById('ollamaUrl').value;
+    const freeOnly = document.getElementById('freeOnly').checked;
+    const localOnly = document.getElementById('ollamaLocalOnly').checked;
+    const resp = await fetch('/api/settings/models', {{
+      method: 'POST',
+      headers: {{'Content-Type': 'application/json'}},
+      body: JSON.stringify({{provider, api_key: apiKey, custom_url: customUrl, ollama_url: ollamaUrl, free_only: freeOnly, local_only: localOnly}})
+    }});
+    const data = await resp.json();
+    if (data.error) {{
+      status.textContent = 'Error: ' + data.error;
+      status.className = 'status err';
+      return;
+    }}
+    const list = document.getElementById('modelList');
+    if (data.models && data.models.length) {{
+      list.innerHTML = data.models.map(m => `<div onclick="selectModel('${{m}}')">${{m}}</div>`).join('');
+      list.classList.add('show');
+      status.textContent = `${{data.models.length}} models found`;
+      status.className = 'status ok';
+    }} else {{
+      list.innerHTML = '<div style="color:var(--muted)">No models found</div>';
+      list.classList.add('show');
+    }}
+  }} catch(e) {{
+    status.textContent = 'Failed: ' + e.message;
+    status.className = 'status err';
+  }}
+}}
+
+function selectModel(name) {{
+  selectedModelName = name;
+  document.getElementById('modelList').classList.remove('show');
+  document.getElementById('selectedModel').textContent = 'Selected: ' + name;
+}}
+
+async function saveSettings() {{
+  const btn = document.getElementById('saveBtn');
+  const status = document.getElementById('saveStatus');
+  btn.disabled = true;
+  status.textContent = 'Saving...';
+  status.className = 'status';
+  try {{
+    const provider = document.getElementById('providerSelect').value;
+    const apiKey = document.getElementById('apiKey').value;
+    const customUrl = document.getElementById('customUrl').value;
+    const ollamaUrl = document.getElementById('ollamaUrl').value;
+    const freeOnly = document.getElementById('freeOnly').checked;
+    const localOnly = document.getElementById('ollamaLocalOnly').checked;
+    const resp = await fetch('/api/settings/provider', {{
+      method: 'POST',
+      headers: {{'Content-Type': 'application/json'}},
+      body: JSON.stringify({{provider, api_key: apiKey, custom_url: customUrl, ollama_url: ollamaUrl, free_only: freeOnly, local_only: localOnly, model: selectedModelName}})
+    }});
+    const data = await resp.json();
+    if (data.ok) {{
+      if (selectedModelName) localStorage.setItem('contextcut_model', selectedModelName);
+      if (typeof sessionId !== 'undefined' && sessionId) localStorage.setItem('contextcut_session', sessionId);
+      const msgs = document.getElementById('messages');
+      if (msgs) localStorage.setItem('contextcut_msgs', msgs.innerHTML);
+      status.textContent = 'Saved! Switching to dashboard...';
+      status.className = 'status ok';
+      setTimeout(() => {{ window.location.href = '/'; }}, 500);
+    }} else {{
+      status.textContent = 'Error saving';
+      status.className = 'status err';
+    }}
+  }} catch(e) {{
+    status.textContent = 'Failed: ' + e.message;
+    status.className = 'status err';
+  }} finally {{
+    btn.disabled = false;
+  }}
+}}
+
+onProviderChange();
+</script>
+</body>
+</html>"""
+
+def make_dashboard():
     with _lock:
         rows = list(_log)
         s    = dict(_stats)
@@ -786,6 +1297,8 @@ tr:hover td{{background:var(--surf2)}}
 .settings-toggle:hover{{color:var(--text);border-color:var(--accent)}}
 .settings-panel{{display:none;background:var(--surf);border-top:1px solid var(--border);padding:8px 10px}}
 .settings-panel.open{{display:block}}
+.right.fullscreen{{position:fixed;top:48px;left:0;right:0;bottom:0;z-index:100;background:var(--bg);border-top:1px solid var(--border)}}
+.right.fullscreen .chat-input-bar{{position:fixed;bottom:0;left:0;right:0}}
 </style>
 </head>
 <body>
@@ -793,6 +1306,7 @@ tr:hover td{{background:var(--surf2)}}
 <div class="header">
   <div class="logo">ContextCut<span>-PRO</span></div>
   <div class="hinfo">{UPSTREAM} · Qdrant {QDRANT_HOST}:{QDRANT_PORT} · min_score={MIN_SCORE} · top_k={TOP_K}</div>
+  <a href="/settings" style="background:transparent;border:1px solid var(--border);color:var(--muted);border-radius:3px;padding:3px 10px;font-size:11px;cursor:pointer;font-family:'JetBrains Mono',monospace;text-decoration:none">Settings ⚙</a>
   <div class="live"><span class="dot"></span>live</div>
 </div>
 
@@ -809,9 +1323,16 @@ tr:hover td{{background:var(--surf2)}}
         <div class="card"><div class="card-label">Peak Tokens</div><div class="card-val {'red' if s['max_tokens_seen']>CTX_LIMIT*0.8 else ''}">{s['max_tokens_seen']:,}</div></div>
         <div class="card"><div class="card-label">CTX Limit</div><div class="card-val">{CTX_LIMIT:,}</div></div>
         <div class="card"><div class="card-label">Cache Hits</div><div class="card-val" style="font-size:13px" id="cardCache">{s.get('cache_hits',0)}</div></div>
-      </div>
+        </div>
       <div class="ctx-wrap">
-        <div class="ctx-label">Most Recent Context Usage</div>
+        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:7px">
+          <div class="ctx-label" style="margin-bottom:0">Most Recent Context Usage</div>
+          <div style="display:flex;gap:6px;align-items:center">
+            <span id="embedBadge" style="font-size:11px;color:#8b95a5;background:#1e2638;padding:3px 8px;border-radius:4px" title="Current embedding backend">—</span>
+            <button class="clear-btn" onclick="openEmbedSettings()" title="Configure embedding model">⚙ Embed</button>
+            <button class="clear-btn" onclick="clearContext()" title="Clear response cache">Clear Cache</button>
+          </div>
+        </div>
         <div class="ctx-track"><div class="ctx-fill" id="ctxBar"></div></div>
         <div class="ctx-info"><span id="ctxTok">{last_tok:,} / {CTX_LIMIT:,} tokens</span><strong style="color:{bc}" id="ctxPct">{last_pct}%</strong></div>
       </div>
@@ -829,6 +1350,7 @@ tr:hover td{{background:var(--surf2)}}
   <div class="right">
     <div class="chat-header" id="chatHeader">
       <span class="session-badge" id="sessionBadge">Session: new</span>
+      <button class="clear-btn" id="fsBtn" onclick="toggleFullscreen()" title="Toggle fullscreen (F11)" style="font-size:15px;padding:2px 8px;line-height:1">⛶</button>
       <button class="clear-btn" id="clearBtn" onclick="clearConversation()" title="Clear conversation (/clear)">Clear</button>
     </div>
     <div class="chat-messages" id="messages" role="log" aria-live="polite" aria-label="Chat messages">
@@ -924,6 +1446,14 @@ function updateSessionBadge() {{
 }}
 
 async function initSession() {{
+  const saved = localStorage.getItem('contextcut_session');
+  if (saved) {{
+    sessionId = saved;
+    localStorage.removeItem('contextcut_session');
+    updateSessionBadge();
+    restoreMessages();
+    return;
+  }}
   try {{
     const r = await fetch('/api/session/new');
     if (r.ok) {{
@@ -932,6 +1462,21 @@ async function initSession() {{
       updateSessionBadge();
     }}
   }} catch(e) {{}}
+}}
+
+function restoreMessages() {{
+  const saved = localStorage.getItem('contextcut_msgs');
+  if (!saved) return;
+  localStorage.removeItem('contextcut_msgs');
+  const msgs = document.getElementById('messages');
+  if (msgs) {{
+    msgs.innerHTML = saved;
+    msgs.querySelector('.bubble:last-of-type')?.scrollIntoView({{behavior:'instant', block:'end'}});
+  }}
+}}
+
+function toggleFullscreen() {{
+  document.querySelector('.right').classList.toggle('fullscreen');
 }}
 
 function toggleSettings() {{
@@ -982,6 +1527,17 @@ async function clearConversation() {{
       const d = await r.json();
       sessionId = d.session_id;
       updateSessionBadge();
+    }}
+  }} catch(e) {{}}
+}}
+
+async function clearContext() {{
+  try {{
+    const r = await fetch('/api/context/clear');
+    if (r.ok) {{
+      const tb = document.getElementById('tblBody');
+      if (tb) tb.innerHTML = '<tr><td colspan="6" class="empty">Cache cleared — send a message to see new results</td></tr>';
+      if (document.getElementById('cardCache')) document.getElementById('cardCache').textContent = '0';
     }}
   }} catch(e) {{}}
 }}
@@ -1069,7 +1625,13 @@ async function fetchModels() {{
     sel.innerHTML = '<option value="">▾</option>' +
       models.map(m=>`<option value="${{m}}">${{m}}</option>`).join('');
     const inp = document.getElementById('modelInput');
-    if (inp && !inp.value && models.length) inp.value = models[0];
+    if (!inp) return;
+    const savedModel = localStorage.getItem('contextcut_model');
+    if (savedModel) {{
+      if (models.includes(savedModel)) inp.value = savedModel;
+      else inp.value = models[0];
+      localStorage.removeItem('contextcut_model');
+    }}
   }} catch(e) {{}}
 }}
 
@@ -1220,9 +1782,14 @@ async function sendMessage() {{
           fullText += token;
           ensureBubble();
           bubble.innerHTML = esc(fullText);
-          assistantDiv.scrollIntoView({{behavior:'instant', block:'end'}});
         }} catch(e) {{}}
       }}
+    }}
+
+    const box = document.getElementById('messages');
+    const atBottom = box.scrollHeight - box.scrollTop - box.clientHeight < 100;
+    if (atBottom) {{
+      box.scrollTop = box.scrollHeight;
     }}
 
     ensureBubble();
@@ -1257,6 +1824,199 @@ async function sendMessage() {{
     input.focus();
   }}
 }}
+
+// ── Embed Settings Modal ─────────────────────────────────────────────────────
+let embedModalOpen = false;
+
+function openEmbedSettings() {{
+  if (embedModalOpen) return;
+  embedModalOpen = true;
+  fetch('/api/embed/config')
+    .then(r => r.json())
+    .then(cfg => {{
+      const overlay = document.createElement('div');
+      overlay.id = 'embedOverlay';
+      overlay.style.cssText = 'position:fixed;top:0;left:0;width:100%;height:100%;background:rgba(0,0,0,.55);z-index:9999;display:flex;align-items:center;justify-content:center';
+      overlay.onclick = (e) => {{ if (e.target === overlay) closeEmbedOverlay(overlay); }};
+
+      const isVoyage = cfg.mode === 'voyage';
+      const kbDir = cfg.kb_dir || '/knowledge';
+
+      const html = '<div style="background:#131a2b;border:1px solid var(--border);border-radius:8px;padding:24px;width:420px;max-width:90vw;font-family:JetBrains Mono,monospace;font-size:12px;color:var(--text)">' +
+        '<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:16px">' +
+          '<strong style="font-size:14px">\\u2699 Embed Model Settings</strong>' +
+          '<button id="emCloseBtn" style="background:none;border:none;color:var(--muted);font-size:18px;cursor:pointer">&times;</button>' +
+        '</div>' +
+        '<div style="background:#2a0a0a;border:1px solid #dc2626;border-radius:6px;padding:12px;margin-bottom:16px">' +
+          '<div style="color:#ef4444;font-weight:700;font-size:13px;margin-bottom:4px">\\u26a0 DANGER ZONE</div>' +
+          '<div style="color:#fca5a5;font-size:11px;line-height:1.5">Switching embedding models will <b>delete all existing vectors</b> in Qdrant. Your knowledge base will be wiped and you must re-ingest all files. This action cannot be undone.</div>' +
+        '</div>' +
+        '<label style="display:block;margin-bottom:4px;color:var(--muted);font-size:11px">Backend</label>' +
+        '<select id="emMode" style="width:100%;background:#0d1320;color:var(--text);border:1px solid var(--border);border-radius:4px;padding:7px 10px;font-family:inherit;font-size:12px;margin-bottom:4px">' +
+          '<option value="voyage" '+(isVoyage?'selected':'')+'>Voyage AI (voyage-3)</option>' +
+          '<option value="ollama" '+(!isVoyage?'selected':'')+'>Ollama Local</option>' +
+        '</select>' +
+        '<div id="emModeDesc" style="color:var(--muted);font-size:10px;margin-bottom:14px">'+(isVoyage?'Cloud \\u2014 highest quality, requires API key':'100% local \\u2014 nomic-embed-text, mxbai-embed-large, bge-m3, qwen3-embedding')+'</div>' +
+        '<div id="emVoyageFields" style="display:'+(isVoyage?'block':'none')+'">' +
+          '<label style="display:block;margin-bottom:4px;color:var(--muted);font-size:11px">Voyage API Key</label>' +
+          '<input id="emVoyageKey" type="password" value="'+(cfg.voyage_key||'')+'" placeholder="Paste your voyage-ai key" style="width:100%;background:#0d1320;color:var(--text);border:1px solid var(--border);border-radius:4px;padding:7px 10px;font-family:inherit;font-size:12px;margin-bottom:14px" />' +
+        '</div>' +
+        '<div id="emOllamaFields" style="display:'+(isVoyage?'none':'block')+'">' +
+          '<label style="display:block;margin-bottom:4px;color:var(--muted);font-size:11px">Ollama Embedding Model</label>' +
+          '<select id="emModel" style="width:100%;background:#0d1320;color:var(--text);border:1px solid var(--border);border-radius:4px;padding:7px 10px;font-family:inherit;font-size:12px;margin-bottom:14px">' +
+            '<option value="nomic-embed-text"'+(cfg.ollama_model==='nomic-embed-text'?' selected':'')+'>nomic-embed-text (274MB, 8K ctx)</option>' +
+            '<option value="mxbai-embed-large"'+(cfg.ollama_model==='mxbai-embed-large'?' selected':'')+'>mxbai-embed-large (670MB, 512 ctx)</option>' +
+            '<option value="bge-m3"'+(cfg.ollama_model==='bge-m3'?' selected':'')+'>bge-m3 (1.2GB, 8K ctx, multilingual)</option>' +
+            '<option value="qwen3-embedding:8b"'+(cfg.ollama_model==='qwen3-embedding:8b'?' selected':'')+'>qwen3-embedding:8b (4.9GB, best quality)</option>' +
+          '</select>' +
+          '<div style="color:var(--muted);font-size:10px;margin-bottom:14px">Ollama URL: '+(cfg.ollama_url||'http://localhost:11434')+'</div>' +
+        '</div>' +
+        '<div style="display:flex;gap:8px;justify-content:flex-end">' +
+          '<button id="emCancelBtn" style="background:transparent;border:1px solid var(--border);color:var(--muted);border-radius:4px;padding:6px 16px;font-size:11px;cursor:pointer;font-family:inherit">Cancel</button>' +
+          '<button id="emSaveBtn" onclick="saveEmbedConfig()" style="background:var(--accent);color:#000;border:none;border-radius:4px;padding:6px 16px;font-size:11px;cursor:pointer;font-family:inherit;font-weight:600">Save</button>' +
+        '</div>' +
+        '<div id="emMsg" style="margin-top:10px;font-size:11px;min-height:16px"></div>' +
+        '<label style="display:flex;align-items:flex-start;gap:8px;margin-top:12px;cursor:pointer">' +
+          '<input type="checkbox" id="emDangerCheck" style="margin-top:2px;accent-color:#ef4444;width:16px;height:16px" />' +
+          '<span style="color:#f87171;font-size:10px;line-height:1.4">I understand this will delete all existing embeddings and I will need to re-ingest my knowledge base.</span>' +
+        '</label>' +
+        '<div id="emReingestSection" style="display:none;margin-top:16px;padding-top:16px;border-top:1px solid var(--border)">' +
+          '<div style="color:var(--green);font-size:11px;margin-bottom:8px">\\u2713 Settings saved. Click below to re-ingest your knowledge base with the new embedding model.</div>' +
+          '<button id="emReingestBtn" onclick="reIngestKnowledgeBase()" style="width:100%;background:#16a34a;color:#fff;border:none;border-radius:4px;padding:8px 16px;font-size:12px;cursor:pointer;font-family:inherit;font-weight:600">Re-ingest '+kbDir+'</button>' +
+          '<div id="emReingestMsg" style="margin-top:8px;font-size:10px;color:var(--muted)"></div>' +
+        '</div>' +
+      '</div>';
+
+      overlay.innerHTML = html;
+      document.body.appendChild(overlay);
+
+      document.getElementById('emCloseBtn').onclick = function() {{ closeEmbedOverlay(overlay); }};
+      document.getElementById('emCancelBtn').onclick = function() {{ closeEmbedOverlay(overlay); }};
+
+      document.getElementById('emMode').onchange = function() {{
+        const v = this.value;
+        document.getElementById('emVoyageFields').style.display = v==='voyage'?'block':'none';
+        document.getElementById('emOllamaFields').style.display = v==='ollama'?'block':'none';
+        if (v === 'voyage')
+          document.getElementById('emModeDesc').textContent = 'Cloud \\u2014 highest quality, requires API key';
+        else
+          document.getElementById('emModeDesc').textContent = '100% local \\u2014 nomic-embed-text, mxbai-embed-large, bge-m3, qwen3-embedding';
+      }};
+    }})
+    .catch(e => {{
+      embedModalOpen = false;
+      alert('Failed to load embed config: ' + e.message);
+    }});
+}}
+
+function closeEmbedOverlay(el) {{
+  if (el) el.remove();
+  embedModalOpen = false;
+}}
+
+function saveEmbedConfig() {{
+  const chk = document.getElementById('emDangerCheck');
+  if (!chk || !chk.checked) {{
+    const msg = document.getElementById('emMsg');
+    msg.style.color = '#ef4444';
+    msg.textContent = '\\u26a0 You must check the confirmation box below first.';
+    return;
+  }}
+
+  const mode = document.getElementById('emMode').value;
+  const data = {{ mode }};
+  if (mode === 'voyage') {{
+    data.voyage_key = document.getElementById('emVoyageKey').value;
+  }} else {{
+    data.ollama_model = document.getElementById('emModel').value;
+  }}
+
+  const btn = document.getElementById('emSaveBtn');
+  const msg = document.getElementById('emMsg');
+  btn.disabled = true;
+  btn.textContent = 'Deleting & recreating...';
+  msg.textContent = '';
+
+  fetch('/api/embed/config', {{
+    method: 'POST',
+    headers: {{'Content-Type': 'application/json'}},
+    body: JSON.stringify(data)
+  }})
+  .then(r => r.json())
+  .then(resp => {{
+    if (resp.ok) {{
+      msg.style.color = 'var(--green)';
+      msg.textContent = '\\u2713 Saved! Embedding backend updated.';
+      loadEmbedBadge();
+      document.getElementById('emReingestSection').style.display = 'block';
+      document.getElementById('emDangerCheck').checked = false;
+    }} else {{
+      msg.style.color = 'var(--red)';
+      msg.textContent = 'Error: ' + (resp.error || 'Unknown');
+    }}
+  }})
+  .catch(e => {{
+    msg.style.color = 'var(--red)';
+    msg.textContent = 'Network error: ' + e.message;
+  }})
+  .finally(() => {{
+    btn.disabled = false;
+    btn.textContent = 'Save';
+  }});
+}}
+
+function reIngestKnowledgeBase() {{
+  const btn = document.getElementById('emReingestBtn');
+  const msg = document.getElementById('emReingestMsg');
+  btn.disabled = true;
+  btn.textContent = 'Ingesting...';
+  msg.textContent = '';
+
+  fetch('/api/embed/reingest', {{
+    method: 'POST',
+    headers: {{'Content-Type': 'application/json'}},
+    body: JSON.stringify({{}})
+  }})
+  .then(r => r.json())
+  .then(resp => {{
+    if (resp.ok) {{
+      btn.style.background = '#16a34a';
+      btn.textContent = '\\u2713 Done!';
+      msg.innerHTML = '<span style="color:var(--green)">Knowledge base re-ingested successfully.</span>';
+      setTimeout(() => {{
+        closeEmbedOverlay(document.getElementById('embedOverlay'));
+      }}, 1500);
+    }} else {{
+      msg.innerHTML = '<span style="color:var(--red)">Error: ' + (resp.error || 'Unknown') + '</span>';
+      btn.disabled = false;
+      btn.textContent = 'Re-ingest';
+    }}
+  }})
+  .catch(e => {{
+    msg.innerHTML = '<span style="color:var(--red)">Network error: ' + e.message + '</span>';
+    btn.disabled = false;
+    btn.textContent = 'Re-ingest';
+  }});
+}}
+
+function loadEmbedBadge() {{
+  fetch('/api/embed/config')
+    .then(r => r.json())
+    .then(cfg => {{
+      const badge = document.getElementById('embedBadge');
+      if (cfg.mode === 'voyage') {{
+        badge.textContent = '\u26a1 VoyageAI';
+        badge.title = 'Embedding: Voyage AI (voyage-3)';
+      }} else if (cfg.mode === 'ollama') {{
+        badge.textContent = 'Local ' + (cfg.ollama_model || 'ollama');
+        badge.title = 'Embedding: Ollama local — ' + (cfg.ollama_model || 'not set');
+      }} else {{
+        badge.textContent = cfg.mode || '\u2014';
+      }}
+    }})
+    .catch(() => {{}});
+}}
+loadEmbedBadge();
 </script>
 </body></html>"""
 
@@ -1277,20 +2037,61 @@ class DashboardHandler(_SuppressBrokenPipe, BaseHTTPRequestHandler):
             return
         if self.path == "/api/tags":
             try:
-                with urllib.request.urlopen(f"{UPSTREAM}/api/tags", timeout=5) as r:
-                    body = r.read()
+                upstream = get_current_upstream()
+                api_key = get_current_api_key()
+                
+                if _provider_name == "Ollama":
+                    req = urllib.request.Request(f"{upstream}/api/tags", method="GET")
+                    with urllib.request.urlopen(req, timeout=5) as r:
+                        data = json.loads(r.read().decode("utf-8"))
+                        if _local_only:
+                            models = [{"name": m["name"]} for m in data.get("models", []) if "cloud" not in m["name"].lower()]
+                        else:
+                            models = [{"name": m["name"]} for m in data.get("models", [])]
+                        body = json.dumps({"models": models}, ensure_ascii=True).encode("utf-8")
+                else:
+                    url = f"{upstream}/v1/models"
+                    req = urllib.request.Request(url, method="GET")
+                    if api_key:
+                        req.add_header("Authorization", f"Bearer {api_key}")
+                    req.add_header("Accept", "application/json")
+                    with urllib.request.urlopen(req, timeout=10) as r:
+                        raw = r.read()
+                        if r.headers.get("Content-Encoding") == "gzip":
+                            import gzip
+                            raw = gzip.decompress(raw)
+                        data = json.loads(raw.decode("utf-8"))
+                        raw_models = data.get("data", [])
+                        if _free_only:
+                            def _is_free(m):
+                                p = m.get("pricing", {})
+                                return p.get("prompt", "0") == "0" and p.get("completion", "0") == "0"
+                            models = [{"name": m.get("id", str(m))} for m in raw_models if _is_free(m)]
+                        else:
+                            models = [{"name": m.get("id", str(m))} for m in raw_models]
+                        models.sort(key=lambda x: x["name"])
+                        body = json.dumps({"models": models}, ensure_ascii=True).encode("utf-8")
+                
                 self.send_response(200)
                 self.send_header("Content-Type", "application/json")
                 self.send_header("Content-Length", str(len(body)))
                 self.end_headers()
                 self.wfile.write(body)
             except Exception as e:
-                err_body = str(e).encode()
-                self.send_response(502)
-                self.send_header("Content-Type", "text/plain")
+                safe_msg = str(e)[:100].encode("ascii", errors="replace").decode("ascii")
+                err_body = json.dumps({"models": [], "error": safe_msg}, ensure_ascii=True).encode("utf-8")
+                self.send_response(200)
+                self.send_header("Content-Type", "application/json")
                 self.send_header("Content-Length", str(len(err_body)))
                 self.end_headers()
                 self.wfile.write(err_body)
+            return
+
+        if self.path == "/api/settings/models":
+            # POST only — handled below in do_POST
+            self.send_response(405)
+            self.end_headers()
+            self.wfile.write(b"Method Not Allowed")
             return
         if self.path == "/api/session/new":
             sid = new_session()
@@ -1305,6 +2106,46 @@ class DashboardHandler(_SuppressBrokenPipe, BaseHTTPRequestHandler):
             with _lock:
                 sessions = {sid: {"msg_count": s["msg_count"], "created": s["created"]} for sid, s in _sessions.items()}
             body = json.dumps({"sessions": sessions}).encode()
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+            return
+        if self.path == "/api/context/clear":
+            global _response_cache, _stats
+            with _lock:
+                _response_cache.clear()
+                _stats = {
+                    "total_requests":  0,
+                    "total_saved":     0,
+                    "max_tokens_seen": 0,
+                    "last_seen":       None,
+                    "start_time":      datetime.now().isoformat(),
+                    "cache_hits":      0,
+                }
+                _log.clear()
+                _sessions.clear()
+            # Wipe session file on disk
+            if os.path.exists(SESSION_FILE):
+                os.remove(SESSION_FILE)
+            print("[contextcut] Context cache, sessions, and monitor history cleared")
+            resp = json.dumps({"ok": True}).encode()
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Length", str(len(resp)))
+            self.end_headers()
+            self.wfile.write(resp)
+            return
+        if self.path == "/api/embed/config":
+            cfg = {
+                "mode": _EMBED_MODE,
+                "voyage_key": _VK[:8] + "..." if _VK and _EMBED_MODE == "voyage" else "",
+                "ollama_model": _LOCAL_EMBED if _EMBED_MODE == "ollama" else "",
+                "ollama_url": UPSTREAM,
+                "kb_dir": str(KB_DIR),
+            }
+            body = json.dumps(cfg).encode()
             self.send_response(200)
             self.send_header("Content-Type", "application/json")
             self.send_header("Content-Length", str(len(body)))
@@ -1326,6 +2167,15 @@ class DashboardHandler(_SuppressBrokenPipe, BaseHTTPRequestHandler):
             self.send_header("Content-Length",str(len(body)))
             self.end_headers()
             self.wfile.write(body)
+            return
+        if self.path == "/settings":
+            page = make_settings_page().encode("utf-8")
+            self.send_response(200)
+            self.send_header("Content-Type", "text/html; charset=utf-8")
+            self.send_header("Content-Length", str(len(page)))
+            self.end_headers()
+            self.wfile.write(page)
+            return
         else:
             page = make_dashboard().encode()
             self.send_response(200)
@@ -1337,6 +2187,144 @@ class DashboardHandler(_SuppressBrokenPipe, BaseHTTPRequestHandler):
     def do_POST(self):
         length   = int(self.headers.get("Content-Length",0))
         raw_body = self.rfile.read(length)
+
+        # ── Settings endpoints ──
+        if self.path == "/api/settings/provider":
+            try:
+                body = json.loads(raw_body)
+                global _provider_name, _custom_base_url, _ollama_url, _api_key, _free_only, UPSTREAM
+                _provider_name = body.get("provider", "Ollama")
+                _custom_base_url = body.get("custom_url", "").strip()
+                incoming_key = body.get("api_key", "").strip()
+                ollama_url = body.get("ollama_url", "").strip()
+                _free_only = body.get("free_only", False)
+                _local_only = body.get("local_only", False)
+
+                # If frontend sent masked value, keep server-side key
+                if incoming_key and incoming_key != "••••••••••••••••":
+                    _api_key = incoming_key
+
+                if _provider_name == "Ollama" and ollama_url:
+                    _ollama_url = ollama_url
+
+                # Save securely to disk
+                CredentialManager.save("provider", _provider_name)
+                CredentialManager.save("custom_url", _custom_base_url)
+                CredentialManager.save("ollama_url", ollama_url)
+                CredentialManager.save("free_only", _free_only)
+                CredentialManager.save("local_only", _local_only)
+                if _api_key: CredentialManager.save("api_key", _api_key)
+
+                print(f"[contextcut] Provider switched to {_provider_name} | upstream: {UPSTREAM}")
+                resp = json.dumps({"ok": True, "upstream": UPSTREAM, "has_key": bool(_api_key)}).encode()
+                self.send_response(200)
+                self.send_header("Content-Type", "application/json")
+                self.send_header("Content-Length", str(len(resp)))
+                self.end_headers()
+                self.wfile.write(resp)
+                return
+            except Exception as e:
+                err = json.dumps({"error": str(e).encode("ascii", errors="replace").decode("ascii")}).encode()
+                self.send_response(400)
+                self.send_header("Content-Type", "application/json")
+                self.send_header("Content-Length", str(len(err)))
+                self.end_headers()
+                self.wfile.write(err)
+                return
+
+        if self.path == "/api/settings/models":
+            try:
+                body = json.loads(raw_body)
+                provider = body.get("provider", "Ollama")
+                api_key = body.get("api_key", "").strip()
+                custom_url = body.get("custom_url", "").strip()
+                ollama_url = body.get("ollama_url", "").strip()
+                free_only = body.get("free_only", False)
+                local_only = body.get("local_only", False)
+                
+                # If frontend sent masked value, use server-side stored key
+                if not api_key or api_key == "••••••••••••••••":
+                    api_key = _api_key
+                
+                if provider == "Ollama":
+                    # Ollama uses /api/tags, NOT /v1/models
+                    base = ollama_url if ollama_url else (_ollama_url or UPSTREAM or "http://localhost:11434")
+                    req = urllib.request.Request(f"{base}/api/tags", method="GET")
+                    with urllib.request.urlopen(req, timeout=5) as r:
+                        data = json.loads(r.read().decode("utf-8"))
+                        models = sorted([m["name"] for m in data.get("models", []) if not (local_only and "cloud" in m["name"].lower())])
+                elif provider == "Custom" and custom_url:
+                    base = custom_url.rstrip("/")
+                    req = urllib.request.Request(f"{base}/v1/models", method="GET")
+                    if api_key: req.add_header("Authorization", f"Bearer {api_key}")
+                    req.add_header("Accept", "application/json")
+                    with urllib.request.urlopen(req, timeout=15) as r:
+                        raw = r.read()
+                        if r.headers.get("Content-Encoding") == "gzip":
+                            import gzip
+                            raw = gzip.decompress(raw)
+                        data = json.loads(raw.decode("utf-8"))
+                        models = sorted([m.get("id", str(m)) for m in data.get("data", [])])
+                else:
+                    base = PROVIDERS.get(provider, {}).get("url", "")
+                    url = f"{base}/v1/models"
+                    req = urllib.request.Request(url, method="GET")
+                    if api_key: req.add_header("Authorization", f"Bearer {api_key}")
+                    req.add_header("Accept", "application/json")
+                    with urllib.request.urlopen(req, timeout=15) as r:
+                        raw = r.read()
+                        if r.headers.get("Content-Encoding") == "gzip":
+                            import gzip
+                            raw = gzip.decompress(raw)
+                        data = json.loads(raw.decode("utf-8"))
+                        if free_only:
+                            def is_free(m):
+                                p = m.get("pricing", {})
+                                return p.get("prompt", "0") == "0" and p.get("completion", "0") == "0"
+                            models = sorted([
+                                m.get("id", str(m)) for m in data.get("data", []) if is_free(m)
+                            ])
+                        else:
+                            models = sorted([m.get("id", str(m)) for m in data.get("data", [])])
+                
+                # Ensure ASCII-safe response
+                resp = json.dumps({"models": models}, ensure_ascii=True).encode("utf-8")
+                self.send_response(200)
+                self.send_header("Content-Type", "application/json; charset=utf-8")
+                self.send_header("Content-Length", str(len(resp)))
+                self.end_headers()
+                self.wfile.write(resp)
+                return
+            except (ConnectionRefusedError, OSError) as e:
+                err_msg = "Connection refused - is the service running?"
+                resp = json.dumps({"models": [], "error": err_msg}, ensure_ascii=True).encode("utf-8")
+                self.send_response(200)
+                self.send_header("Content-Type", "application/json; charset=utf-8")
+                self.send_header("Content-Length", str(len(resp)))
+                self.end_headers()
+                self.wfile.write(resp)
+                return
+            except urllib.error.HTTPError as e:
+                raw_err = e.read()
+                err_text = raw_err.decode("utf-8", errors="replace")[:200]
+                err_text = err_text.encode("ascii", errors="replace").decode("ascii")
+                err_msg = "HTTP %d: %s" % (e.code, err_text)
+                resp = json.dumps({"models": [], "error": err_msg}, ensure_ascii=True).encode("utf-8")
+                self.send_response(200)
+                self.send_header("Content-Type", "application/json; charset=utf-8")
+                self.send_header("Content-Length", str(len(resp)))
+                self.end_headers()
+                self.wfile.write(resp)
+                return
+            except Exception as e:
+                err_msg = str(e)[:200].encode("ascii", errors="replace").decode("ascii")
+                resp = json.dumps({"models": [], "error": err_msg}, ensure_ascii=True).encode("utf-8")
+                self.send_response(200)
+                self.send_header("Content-Type", "application/json; charset=utf-8")
+                self.send_header("Content-Length", str(len(resp)))
+                self.end_headers()
+                self.wfile.write(resp)
+                return
 
         # ── Settings endpoint: update global MIN_SCORE live ──
         if self.path == "/api/settings":
@@ -1357,6 +2345,146 @@ class DashboardHandler(_SuppressBrokenPipe, BaseHTTPRequestHandler):
             except Exception as e:
                 err = json.dumps({"error": str(e)}).encode()
                 self.send_response(400)
+                self.send_header("Content-Type", "application/json")
+                self.send_header("Content-Length", str(len(err)))
+                self.end_headers()
+                self.wfile.write(err)
+                return
+
+        # ── Embed model config ──
+        if self.path == "/api/embed/config":
+            try:
+                body = json.loads(raw_body)
+                global _EMBED_MODE, _VK, _LOCAL_EMBED, _VOYAGE_AVAILABLE, _voyage_mod
+                proposed_mode = body.get("mode", "voyage")
+
+                if proposed_mode == "voyage" and not _VOYAGE_AVAILABLE:
+                    print("[contextcut] voyageai not installed — attempting auto-install...")
+                    import subprocess
+                    pip_path = str(Path(sys.executable).parent / "pip")
+                    result = subprocess.run(
+                        [pip_path, "install", "voyageai", "-q"],
+                        capture_output=True, text=True, timeout=120
+                    )
+                    if result.returncode == 0:
+                        import importlib
+                        _voyage_mod = importlib.import_module("voyageai")
+                        globals()["_voyage_mod"] = _voyage_mod
+                        _VOYAGE_AVAILABLE = True
+                        print("[contextcut] voyageai installed successfully")
+                    else:
+                        raise RuntimeError(f"pip install failed: {result.stderr[:200]}")
+
+                _EMBED_MODE = proposed_mode
+                incoming_key = body.get("voyage_key", "").strip()
+                if incoming_key and incoming_key != "••••••••••••••••":
+                    _VK = incoming_key
+                _LOCAL_EMBED = body.get("ollama_model", "").strip()
+
+                CredentialManager.save("embed_mode", _EMBED_MODE)
+                if _VK: CredentialManager.save("voyage_key", _VK)
+                if _LOCAL_EMBED: CredentialManager.save("embed_model", _LOCAL_EMBED)
+
+                # Also update .env so ingest.py picks up the change on restart
+                try:
+                    env_path = Path(__file__).parent / ".env"
+                    env_lines = {}
+                    if env_path.exists():
+                        for line in env_path.read_text().splitlines():
+                            if "=" in line and not line.startswith("#"):
+                                k, v = line.split("=", 1)
+                                env_lines[k.strip()] = v.strip()
+                    env_lines["CONTEXTCUT_EMBED_MODE"] = _EMBED_MODE
+                    if _EMBED_MODE == "ollama":
+                        env_lines["CONTEXTCUT_EMBED_MODEL"] = _LOCAL_EMBED
+                    elif "CONTEXTCUT_EMBED_MODEL" in env_lines:
+                        del env_lines["CONTEXTCUT_EMBED_MODEL"]
+                    if _VK:
+                        env_lines["VOYAGE_API_KEY"] = _VK
+                    with open(env_path, "w") as f:
+                        for k, v in env_lines.items():
+                            f.write(f"{k}={v}\n")
+                except Exception as e:
+                    print(f"[contextcut] .env update warning: {e}")
+
+                # Check Qdrant collection dimension and recreate if needed
+                try:
+                    expected_dim = _get_embed_dim(_LOCAL_EMBED)
+                    qclient = QdrantClient(host=QDRANT_HOST, port=QDRANT_PORT)
+                    info = qclient.get_collection(COLLECTION)
+                    actual_dim = info.config.params.vectors.size
+                    if actual_dim != expected_dim:
+                        print(f"[contextcut] Dimension change: {actual_dim} → {expected_dim}. Recreating collection...")
+                        qclient.delete_collection(COLLECTION)
+                        import time
+                        time.sleep(2)
+                        qclient.create_collection(
+                            collection_name=COLLECTION,
+                            vectors_config=VectorParams(size=expected_dim, distance=Distance.COSINE),
+                        )
+                        print(f"[contextcut] Collection recreated with dim={expected_dim}")
+                except Exception as e:
+                    print(f"[contextcut] Dimension check warning: {e}")
+
+                print(f"[contextcut] Embed mode: {_EMBED_MODE} | model: {_LOCAL_EMBED or 'voyage-3'}")
+                resp = json.dumps({"ok": True, "mode": _EMBED_MODE}).encode()
+                self.send_response(200)
+                self.send_header("Content-Type", "application/json")
+                self.send_header("Content-Length", str(len(resp)))
+                self.end_headers()
+                self.wfile.write(resp)
+                return
+            except Exception as e:
+                err = json.dumps({"error": str(e).encode("ascii", errors="replace").decode("ascii")}).encode()
+                self.send_response(400)
+                self.send_header("Content-Type", "application/json")
+                self.send_header("Content-Length", str(len(err)))
+                self.end_headers()
+                self.wfile.write(err)
+                return
+
+        # ── Re-ingest endpoint ──
+        if self.path == "/api/embed/reingest":
+            try:
+                import subprocess
+                ingest_path = Path(__file__).parent / "ingest.py"
+                if not ingest_path.exists():
+                    raise FileNotFoundError(f"ingest.py not found at {ingest_path}")
+
+                env = os.environ.copy()
+                env["CONTEXTCUT_EMBED_MODE"] = _EMBED_MODE
+                if _EMBED_MODE == "voyage" and _VK:
+                    env["VOYAGE_API_KEY"] = _VK
+                if _EMBED_MODE == "ollama" and _LOCAL_EMBED:
+                    env["CONTEXTCUT_EMBED_MODEL"] = _LOCAL_EMBED
+                env["CONTEXTCUT_QDRANT_HOST"] = QDRANT_HOST
+                env["CONTEXTCUT_QDRANT_PORT"] = str(QDRANT_PORT)
+                env["CONTEXTCUT_KB_DIR"] = str(KB_DIR)
+                env["CONTEXTCUT_COLLECTION"] = COLLECTION
+
+                result = subprocess.run(
+                    [sys.executable, str(ingest_path)],
+                    env=env, capture_output=True, text=True, timeout=300
+                )
+                lines = result.stdout.strip().split('\n') if result.stdout.strip() else []
+                resp = json.dumps({"ok": True, "output": lines[-10:] if lines else ["No output"]}).encode()
+                self.send_response(200)
+                self.send_header("Content-Type", "application/json")
+                self.send_header("Content-Length", str(len(resp)))
+                self.end_headers()
+                self.wfile.write(resp)
+                return
+            except subprocess.TimeoutExpired:
+                err = json.dumps({"error": "Ingest timed out after 5 minutes"}).encode()
+                self.send_response(504)
+                self.send_header("Content-Type", "application/json")
+                self.send_header("Content-Length", str(len(err)))
+                self.end_headers()
+                self.wfile.write(err)
+                return
+            except Exception as e:
+                err = json.dumps({"error": str(e).encode("ascii", errors="replace").decode("ascii")}).encode()
+                self.send_response(500)
                 self.send_header("Content-Type", "application/json")
                 self.send_header("Content-Length", str(len(err)))
                 self.end_headers()
@@ -1405,22 +2533,80 @@ class DashboardHandler(_SuppressBrokenPipe, BaseHTTPRequestHandler):
 
 # ── Main ──────────────────────────────────────────────────────────────────────
 if __name__ == "__main__":
-    if not os.getenv("VOYAGE_API_KEY"):
-        print("ERROR: VOYAGE_API_KEY not set. Export it and retry.")
+    load_saved_credentials()
+
+    # Sync .env first so ingest.py reads correct settings
+    _sync_env_on_startup()
+
+    if _EMBED_MODE == "voyage" and _VK and _VOYAGE_AVAILABLE:
+        print(f"[contextcut] Embedding: Voyage AI (voyage-3)")
+    elif _EMBED_MODE == "ollama" and _LOCAL_EMBED:
+        print(f"[contextcut] Embedding: Ollama local ({_LOCAL_EMBED})")
+    elif _VK and _VOYAGE_AVAILABLE:
+        _EMBED_MODE = "voyage"
+        print(f"[contextcut] Embedding: Voyage AI (voyage-3)")
+    elif _LOCAL_EMBED:
+        _EMBED_MODE = "ollama"
+        print(f"[contextcut] Embedding: Ollama local ({_LOCAL_EMBED})")
+    else:
+        print("[contextcut] ERROR: No embedding backend configured")
         raise SystemExit(1)
+
+    ensure_collection_dim()
 
     load_sessions()
 
     if LICENSE_KEY:
         print("[contextcut] Validating license key...")
         if not validate_license():
-            print(f"ERROR: {_license_state['message']}")
-            raise SystemExit(1)
-        print(f"[contextcut] License: {_license_state.get('license_type','?')} | {_license_state['message']}")
-        threading.Thread(target=heartbeat_loop, daemon=True).start()
-        print(f"[contextcut] Heartbeat: every {HEARTBEAT_INTERVAL}s | grace: {GRACE_PERIOD}s")
+            msg = _license_state['message']
+            print(f"ERROR: {msg}")
+            if "limit reached" in msg.lower() or "seats" in msg.lower():
+                try:
+                    if sys.stdin.isatty():
+                        answer = input("\n  Release all license seats and retry? [y/N]: ").strip().lower()
+                        should_release = answer in ("y", "yes")
+                    else:
+                        print("[contextcut] Non-interactive mode — auto-releasing stale seats...")
+                        should_release = True
+                    if should_release:
+                        payload = json.dumps({"license_key": LICENSE_KEY}).encode()
+                        req = urllib.request.Request(
+                            f"{LICENSE_SERVER}/v1/license/reset",
+                            data=payload,
+                            headers={"Content-Type": "application/json"},
+                            method="POST",
+                        )
+                        with urllib.request.urlopen(req, timeout=10) as resp:
+                            result = json.loads(resp.read().decode())
+                        print(f"[contextcut] {result.get('message', 'Seats reset')}")
+                        print("[contextcut] Retrying license validation...")
+                        time.sleep(1)
+                        if validate_license():
+                            print(f"[contextcut] License: {_license_state.get('license_type','?')} | {_license_state['message']}")
+                            threading.Thread(target=heartbeat_loop, daemon=True).start()
+                            print(f"[contextcut] Heartbeat: every {HEARTBEAT_INTERVAL}s | grace: {GRACE_PERIOD}s")
+                        else:
+                            print(f"ERROR: {_license_state['message']}")
+                            raise SystemExit(1)
+                    else:
+                        print("Exiting. Release seats manually or wait 30 minutes.")
+                        raise SystemExit(1)
+                except Exception as e:
+                    print(f"ERROR: Failed to release seats: {e}")
+                    raise SystemExit(1)
+            else:
+                raise SystemExit(1)
+        else:
+            print(f"[contextcut] License: {_license_state.get('license_type','?')} | {_license_state['message']}")
+            threading.Thread(target=heartbeat_loop, daemon=True).start()
+            print(f"[contextcut] Heartbeat: every {HEARTBEAT_INTERVAL}s | grace: {GRACE_PERIOD}s")
     else:
         print("[contextcut] WARNING: No license key set. Set CONTEXTCUT_LICENSE_KEY.")
+
+    # Write ready marker so start.sh knows we're initialized
+    _READY_FILE = Path(__file__).parent / ".proxy_ready"
+    _READY_FILE.write_text("ready\n")
 
     dash = ReusableHTTPServer(("0.0.0.0", DASHBOARD_PORT), DashboardHandler)
     threading.Thread(target=dash.serve_forever, daemon=True).start()

@@ -28,12 +28,20 @@ Notes:
 import os
 import sys
 import time
-import argparse
-import hashlib
+import json
 import random
+import hashlib
+import urllib.request
+import argparse
 from pathlib import Path
 
-import voyageai
+VOYAGE_AVAILABLE = False
+try:
+    import voyageai
+    VOYAGE_AVAILABLE = True
+except ImportError:
+    pass
+
 from qdrant_client import QdrantClient
 from qdrant_client.models import Distance, VectorParams, PointStruct
 
@@ -42,28 +50,78 @@ QDRANT_HOST  = os.getenv("CONTEXTCUT_QDRANT_HOST", "localhost")
 QDRANT_PORT  = int(os.getenv("CONTEXTCUT_QDRANT_PORT", "6333"))
 COLLECTION   = os.getenv("CONTEXTCUT_COLLECTION",  "contextcut")
 KB_DIR       = Path(os.getenv("CONTEXTCUT_KB_DIR", str(Path.home() / "contextcut" / "knowledge"))).expanduser()
+VOYAGE_API_KEY = os.environ.get("VOYAGE_API_KEY", "").strip().strip('"').strip("'")
+OLLAMA_EMBED   = os.environ.get("CONTEXTCUT_EMBED_MODEL", "").strip().strip('"').strip("'")
+EMBED_MODE     = os.environ.get("CONTEXTCUT_EMBED_MODE", "").strip().strip('"').strip("'")
+OLLAMA_URL     = os.environ.get("CONTEXTCUT_UPSTREAM", "http://localhost:11434")
 VOYAGE_MODEL = "voyage-3"
-EMBED_DIM    = 1024
-VOYAGE_API_KEY = os.environ.get("VOYAGE_API_KEY", "")
+
+def _get_embed_dim():
+    """Return embedding dimension based on active mode and model."""
+    if EMBED_MODE == "voyage" and VOYAGE_API_KEY:
+        return 1024
+    if OLLAMA_EMBED:
+        dims = {
+            "nomic-embed-text": 768,
+            "nomic-embed-text-v1.5": 768,
+            "nomic-embed-text-v2-moe": 768,
+            "mxbai-embed-large": 1024,
+            "bge-m3": 1024,
+            "qwen3-embedding:0.6b": 4096,
+            "qwen3-embedding:4b": 4096,
+            "qwen3-embedding:8b": 4096,
+            "snowflake-arctic-embed-l": 1024,
+            "all-minilm": 384,
+        }
+        base = OLLAMA_EMBED.split(":")[0]
+        return dims.get(OLLAMA_EMBED, dims.get(base, 1024))
+    return 1024
+
+EMBED_DIM = _get_embed_dim()
 
 # Files to never ingest
 EXCLUDE_FILES = {"MEMORY.md"}
 
-last_embed_time = 0  # used to remain below the voayageai RPM threshold of 3 RPM.
+last_embed_time = 0
 
 # ── Clients ───────────────────────────────────────────────────────────────────
-vc = voyageai.Client(api_key=VOYAGE_API_KEY)
+vc = voyageai.Client(api_key=VOYAGE_API_KEY) if (VOYAGE_API_KEY and VOYAGE_AVAILABLE) else None
 qc = QdrantClient(host=QDRANT_HOST, port=QDRANT_PORT)
+
+def _ollama_embed(texts, model):
+    """Embed using Ollama's /api/embed endpoint."""
+    payloads = []
+    for t in texts:
+        payload = json.dumps({"model": model, "input": t}).encode()
+        req = urllib.request.Request(f"{OLLAMA_URL}/api/embed", data=payload, method="POST")
+        req.add_header("Content-Type", "application/json")
+        with urllib.request.urlopen(req, timeout=60) as resp:
+            data = json.loads(resp.read().decode("utf-8"))
+        embeddings = data.get("embeddings", [])
+        if embeddings:
+            payloads.append(embeddings[0])
+    return payloads
 
 # ── Collection ────────────────────────────────────────────────────────────────
 def ensure_collection():
     existing = [c.name for c in qc.get_collections().collections]
     if COLLECTION not in existing:
-        qc.create_collection(
-            collection_name=COLLECTION,
-            vectors_config=VectorParams(size=EMBED_DIM, distance=Distance.COSINE),
-        )
-        print(f"[+] Created collection '{COLLECTION}'")
+        try:
+            qc.create_collection(
+                collection_name=COLLECTION,
+                vectors_config=VectorParams(size=EMBED_DIM, distance=Distance.COSINE),
+            )
+            print(f"[+] Created collection '{COLLECTION}' (dim={EMBED_DIM})")
+        except Exception:
+            # Already exists (race with another process)
+            pass
+    else:
+        info = qc.get_collection(COLLECTION)
+        actual_dim = info.config.params.vectors.size
+        if actual_dim != EMBED_DIM:
+            print(f"[!] Dimension mismatch: Qdrant has {actual_dim}, model needs {EMBED_DIM}")
+            print(f"[!] Fix: update CONTEXTCUT_EMBED_MODE/CONTEXTCUT_EMBED_MODEL in .env or use the dashboard Settings")
+            raise SystemExit(1)
 
 # ── Ingest ────────────────────────────────────────────────────────────────────
 def file_id(path: Path) -> str:
@@ -117,16 +175,30 @@ def ingest_file(path: Path):
 
 def safe_embed(texts, model, input_type):
     global last_embed_time
+
+    # Use Ollama embed if mode is ollama or if Voyage is unavailable
+    if (EMBED_MODE == "ollama" and OLLAMA_EMBED) or (not VOYAGE_API_KEY or not VOYAGE_AVAILABLE):
+        if OLLAMA_EMBED:
+            try:
+                vectors = _ollama_embed(texts, OLLAMA_EMBED)
+                class EmbedResult:
+                    pass
+                result = EmbedResult()
+                result.embeddings = vectors
+                return result
+            except Exception as e:
+                print(f" [!] Ollama embed error: {e}")
+                raise
+
     elapsed = time.time() - last_embed_time
     if elapsed < 22:
         time.sleep(22 - elapsed)
-    
+
     try:
         result = vc.embed(texts, model=model, input_type=input_type)
         last_embed_time = time.time()
         return result
     except voyageai.error.RateLimitError:
-        # Increase sleep and add jitter to clear the rate limit state
         wait_time = 60 + random.uniform(5, 15)
         print(f" [!] Rate limit hit, backing off for {wait_time:.1f}s...")
         time.sleep(wait_time)
@@ -211,9 +283,18 @@ def watch():
 
 # ── Main ──────────────────────────────────────────────────────────────────────
 if __name__ == "__main__":
-    if not VOYAGE_API_KEY:
-        print("ERROR: VOYAGE_API_KEY environment variable not set.")
+    if EMBED_MODE == "voyage" and VOYAGE_API_KEY:
+        print(f"[ingest] Embedding: Voyage AI (voyage-3)")
+    elif EMBED_MODE == "ollama" and OLLAMA_EMBED:
+        print(f"[ingest] Embedding: Ollama ({OLLAMA_EMBED})")
+    elif VOYAGE_API_KEY:
+        print(f"[ingest] Embedding: Voyage AI (voyage-3)")
+    elif OLLAMA_EMBED:
+        print(f"[ingest] Embedding: Ollama ({OLLAMA_EMBED})")
+    else:
+        print("ERROR: Neither VOYAGE_API_KEY nor CONTEXTCUT_EMBED_MODEL set.")
         print("  export VOYAGE_API_KEY=your-key-here")
+        print("  export CONTEXTCUT_EMBED_MODEL=nomic-embed-text")
         sys.exit(1)
 
     if not KB_DIR.exists():
