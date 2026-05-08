@@ -1780,6 +1780,7 @@ function openEmbedSettings() {{
       overlay.onclick = (e) => {{ if (e.target === overlay) closeEmbedOverlay(overlay); }};
 
       const isVoyage = cfg.mode === 'voyage';
+      const kbDir = cfg.kb_dir || '/knowledge';
 
       const html = '<div style="background:#131a2b;border:1px solid var(--border);border-radius:8px;padding:24px;width:420px;max-width:90vw;font-family:JetBrains Mono,monospace;font-size:12px;color:var(--text)">' +
         '<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:16px">' +
@@ -1819,6 +1820,11 @@ function openEmbedSettings() {{
           '<input type="checkbox" id="emDangerCheck" style="margin-top:2px;accent-color:#ef4444;width:16px;height:16px" />' +
           '<span style="color:#f87171;font-size:10px;line-height:1.4">I understand this will delete all existing embeddings and I will need to re-ingest my knowledge base.</span>' +
         '</label>' +
+        '<div id="emReingestSection" style="display:none;margin-top:16px;padding-top:16px;border-top:1px solid var(--border)">' +
+          '<div style="color:var(--green);font-size:11px;margin-bottom:8px">\\u2713 Settings saved. Click below to re-ingest your knowledge base with the new embedding model.</div>' +
+          '<button id="emReingestBtn" onclick="reIngestKnowledgeBase()" style="width:100%;background:#16a34a;color:#fff;border:none;border-radius:4px;padding:8px 16px;font-size:12px;cursor:pointer;font-family:inherit;font-weight:600">Re-ingest '+kbDir+'</button>' +
+          '<div id="emReingestMsg" style="margin-top:8px;font-size:10px;color:var(--muted)"></div>' +
+        '</div>' +
       '</div>';
 
       overlay.innerHTML = html;
@@ -1880,9 +1886,10 @@ function saveEmbedConfig() {{
   .then(resp => {{
     if (resp.ok) {{
       msg.style.color = 'var(--green)';
-      msg.textContent = '\u2713 Saved! Embedding backend updated.';
+      msg.textContent = '\\u2713 Saved! Embedding backend updated.';
       loadEmbedBadge();
-      setTimeout(() => closeEmbedOverlay(document.getElementById('embedOverlay')), 800);
+      document.getElementById('emReingestSection').style.display = 'block';
+      document.getElementById('emDangerCheck').checked = false;
     }} else {{
       msg.style.color = 'var(--red)';
       msg.textContent = 'Error: ' + (resp.error || 'Unknown');
@@ -1895,6 +1902,40 @@ function saveEmbedConfig() {{
   .finally(() => {{
     btn.disabled = false;
     btn.textContent = 'Save';
+  }});
+}}
+
+function reIngestKnowledgeBase() {{
+  const btn = document.getElementById('emReingestBtn');
+  const msg = document.getElementById('emReingestMsg');
+  btn.disabled = true;
+  btn.textContent = 'Ingesting...';
+  msg.textContent = '';
+
+  fetch('/api/embed/reingest', {{
+    method: 'POST',
+    headers: {{'Content-Type': 'application/json'}},
+    body: JSON.stringify({{}})
+  }})
+  .then(r => r.json())
+  .then(resp => {{
+    if (resp.ok) {{
+      btn.style.background = '#16a34a';
+      btn.textContent = '\\u2713 Done!';
+      msg.innerHTML = '<span style="color:var(--green)">Knowledge base re-ingested successfully.</span>';
+      setTimeout(() => {{
+        closeEmbedOverlay(document.getElementById('embedOverlay'));
+      }}, 1500);
+    }} else {{
+      msg.innerHTML = '<span style="color:var(--red)">Error: ' + (resp.error || 'Unknown') + '</span>';
+      btn.disabled = false;
+      btn.textContent = 'Re-ingest';
+    }}
+  }})
+  .catch(e => {{
+    msg.innerHTML = '<span style="color:var(--red)">Network error: ' + e.message + '</span>';
+    btn.disabled = false;
+    btn.textContent = 'Re-ingest';
   }});
 }}
 
@@ -2030,6 +2071,7 @@ class DashboardHandler(_SuppressBrokenPipe, BaseHTTPRequestHandler):
                 "voyage_key": _VK[:8] + "..." if _VK and _EMBED_MODE == "voyage" else "",
                 "ollama_model": _LOCAL_EMBED if _EMBED_MODE == "ollama" else "",
                 "ollama_url": UPSTREAM,
+                "kb_dir": str(KB_DIR),
             }
             body = json.dumps(cfg).encode()
             self.send_response(200)
@@ -2282,6 +2324,51 @@ class DashboardHandler(_SuppressBrokenPipe, BaseHTTPRequestHandler):
             except Exception as e:
                 err = json.dumps({"error": str(e).encode("ascii", errors="replace").decode("ascii")}).encode()
                 self.send_response(400)
+                self.send_header("Content-Type", "application/json")
+                self.send_header("Content-Length", str(len(err)))
+                self.end_headers()
+                self.wfile.write(err)
+                return
+
+        # ── Re-ingest endpoint ──
+        if self.path == "/api/embed/reingest":
+            try:
+                import subprocess
+                ingest_path = Path(__file__).parent / "ingest.py"
+                if not ingest_path.exists():
+                    raise FileNotFoundError(f"ingest.py not found at {ingest_path}")
+
+                env = os.environ.copy()
+                env["VOYAGE_API_KEY"] = _VK
+                env["CONTEXTCUT_EMBED_MODEL"] = _LOCAL_EMBED
+                env["CONTEXTCUT_QDRANT_HOST"] = QDRANT_HOST
+                env["CONTEXTCUT_QDRANT_PORT"] = str(QDRANT_PORT)
+                env["CONTEXTCUT_KB_DIR"] = str(KB_DIR)
+                env["CONTEXTCUT_COLLECTION"] = COLLECTION
+
+                result = subprocess.run(
+                    [sys.executable, str(ingest_path)],
+                    env=env, capture_output=True, text=True, timeout=300
+                )
+                lines = result.stdout.strip().split('\n') if result.stdout.strip() else []
+                resp = json.dumps({"ok": True, "output": lines[-10:] if lines else ["No output"]}).encode()
+                self.send_response(200)
+                self.send_header("Content-Type", "application/json")
+                self.send_header("Content-Length", str(len(resp)))
+                self.end_headers()
+                self.wfile.write(resp)
+                return
+            except subprocess.TimeoutExpired:
+                err = json.dumps({"error": "Ingest timed out after 5 minutes"}).encode()
+                self.send_response(504)
+                self.send_header("Content-Type", "application/json")
+                self.send_header("Content-Length", str(len(err)))
+                self.end_headers()
+                self.wfile.write(err)
+                return
+            except Exception as e:
+                err = json.dumps({"error": str(e).encode("ascii", errors="replace").decode("ascii")}).encode()
+                self.send_response(500)
                 self.send_header("Content-Type", "application/json")
                 self.send_header("Content-Length", str(len(err)))
                 self.end_headers()
