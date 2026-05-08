@@ -587,6 +587,27 @@ def _safe_embed(query: str, input_type: str) -> list[float] | None:
     print("[contextcut] WARNING: No embedding backend configured")
     return None
 
+def _sync_env_on_startup():
+    """Write current embed settings to .env so ingest.py matches."""
+    try:
+        env_path = Path(__file__).parent / ".env"
+        env_lines = {}
+        if env_path.exists():
+            for line in env_path.read_text().splitlines():
+                if "=" in line and not line.startswith("#"):
+                    k, v = line.split("=", 1)
+                    env_lines[k.strip()] = v.strip()
+        env_lines["CONTEXTCUT_EMBED_MODE"] = _EMBED_MODE
+        env_lines["CONTEXTCUT_EMBED_MODEL"] = _LOCAL_EMBED
+        if _VK:
+            env_lines["VOYAGE_API_KEY"] = _VK
+        with open(env_path, "w") as f:
+            for k, v in env_lines.items():
+                f.write(f"{k}={v}\n")
+        print(f"[contextcut] .env synced: mode={_EMBED_MODE} model={_LOCAL_EMBED or 'voyage-3'}")
+    except Exception as e:
+        print(f"[contextcut] .env sync warning: {e}")
+
 def ensure_collection_dim():
     """Check Qdrant collection dimension matches current embed model; recreate if needed."""
     try:
@@ -2505,6 +2526,7 @@ if __name__ == "__main__":
         raise SystemExit(1)
 
     ensure_collection_dim()
+    _sync_env_on_startup()
 
     load_sessions()
 

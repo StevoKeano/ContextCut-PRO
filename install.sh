@@ -329,6 +329,20 @@ set +a
 
 INST="$(dirname "$0")"
 
+# ── Start proxy first (it ensures correct collection dimension) ──
+PROXY_PIDFILE="$INST/.proxy.pid"
+if [ -f "$PROXY_PIDFILE" ] && kill -0 $(cat "$PROXY_PIDFILE") 2>/dev/null; then
+  echo "Proxy already running (PID $(cat "$PROXY_PIDFILE")). Stop it first with ./stop.sh"
+  exit 1
+fi
+source "$INST/.env"
+"$INST/venv/bin/python" "$INST/qdrant_proxy_final.py" &
+echo $! > "$PROXY_PIDFILE"
+
+# Wait for proxy to initialize and fix collection dimension
+echo "Waiting for proxy to initialize..."
+sleep 5
+
 # ── Start watcher ──
 WATCHER_PIDFILE="$INST/.ingest.pid"
 if [ -f "$WATCHER_PIDFILE" ] && kill -0 $(cat "$WATCHER_PIDFILE") 2>/dev/null; then
@@ -338,16 +352,6 @@ else
   echo $! > "$WATCHER_PIDFILE"
   echo "Watcher started. PID: $(cat "$WATCHER_PIDFILE")"
 fi
-
-# ── Start proxy ──
-PROXY_PIDFILE="$INST/.proxy.pid"
-if [ -f "$PROXY_PIDFILE" ] && kill -0 $(cat "$PROXY_PIDFILE") 2>/dev/null; then
-  echo "Proxy already running (PID $(cat "$PROXY_PIDFILE")). Stop it first with ./stop.sh"
-  exit 1
-fi
-source "$INST/.env"
-"$INST/venv/bin/python" "$INST/qdrant_proxy_final.py" &
-echo $! > "$PROXY_PIDFILE"
 echo "ContextCut started. Dashboard: http://localhost:${CONTEXTCUT_DASHBOARD_PORT}"
 STARTEOF
   chmod +x "$INSTALL_DIR/start.sh"
