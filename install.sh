@@ -2,7 +2,7 @@
 # ContextCut installer — macOS / Linux
 # https://github.com/StevoKeano/ContextCut
 
-REPO="https://raw.githubusercontent.com/StevoKeano/ContextCut-PRO/feature/Settings-page"
+REPO="https://raw.githubusercontent.com/StevoKeano/ContextCut-PRO/main"
 INSTALL_DIR="$HOME/contextcut"
 LOG_DIR="$HOME/.contextcut/logs"
 PLIST_PROXY="$HOME/Library/LaunchAgents/ai.contextcut.proxy.plist"
@@ -218,8 +218,10 @@ curl -sf "$REPO/qdrant_proxy_final.py" -o "$INSTALL_DIR/qdrant_proxy_final.py"
 curl -sf "$REPO/ingest.py"       -o "$INSTALL_DIR/ingest.py"
 
 # ── Write env file ────────────────────────────────────────────────────────────
+INSTANCE_ID=$(python3 -c "import uuid; print(uuid.uuid4())")
 cat > "$INSTALL_DIR/.env" << EOF
 CONTEXTCUT_LICENSE_KEY=$LICENSE_KEY
+CONTEXTCUT_INSTANCE_ID=$INSTANCE_ID
 CONTEXTCUT_LICENSE_SERVER=https://contextcut-license.ppsel03.workers.dev
 VOYAGE_API_KEY=$VOYAGE_KEY
 CONTEXTCUT_EMBED_MODE=$EMBED_MODE
@@ -406,6 +408,19 @@ if [ -f "$WATCHER_PIDFILE" ]; then
     echo "Watcher stopped."
   fi
   rm -f "$WATCHER_PIDFILE"
+fi
+
+# Release license seat before stopping proxy
+ENV_FILE="$INST/.env"
+SECRET_FILE="$HOME/.contextcut/instance_secret"
+if [ -f "$ENV_FILE" ] && [ -f "$SECRET_FILE" ]; then
+  KEY=$(grep "^CONTEXTCUT_LICENSE_KEY=" "$ENV_FILE" | cut -d= -f2- | tr -d '"'"')
+  INSTANCE_ID=$(grep "^CONTEXTCUT_INSTANCE_ID=" "$ENV_FILE" | cut -d= -f2- | tr -d '"'"')
+  SECRET=$(cat "$SECRET_FILE")
+  if [ -n "$KEY" ] && [ -n "$INSTANCE_ID" ] && [ -n "$SECRET" ]; then
+    echo "Releasing license seat..."
+    curl -sf -X POST "https://contextcut-license.ppsel03.workers.dev/v1/license/release"       -H "Content-Type: application/json"       -d "{"license_key":"$KEY","instance_id":"$INSTANCE_ID","instance_secret":"$SECRET"}"       > /dev/null 2>&1 && echo "Seat released." || echo "Release failed (seat expires in 30 min)."
+  fi
 fi
 
 # Stop proxy

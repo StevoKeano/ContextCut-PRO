@@ -350,9 +350,16 @@ def release_license():
     if not LICENSE_KEY or not _license_state.get("valid"):
         return
     try:
+        secret = _license_state.get("instance_secret")
+        if not secret:
+            secret_path = os.path.join(os.path.expanduser("~"), ".contextcut", "instance_secret")
+            if os.path.exists(secret_path):
+                with open(secret_path) as f:
+                    secret = f.read().strip()
         payload = json.dumps({
-            "license_key": LICENSE_KEY,
-            "instance_id": _instance_id,
+            "license_key":     LICENSE_KEY,
+            "instance_id":     _instance_id,
+            "instance_secret": secret or "",
         }).encode()
         req = urllib.request.Request(
             f"{LICENSE_SERVER}/v1/license/release",
@@ -385,17 +392,18 @@ HEARTBEAT_INTERVAL = int(os.getenv("CONTEXTCUT_HEARTBEAT_SEC", "900"))
 GRACE_PERIOD    = int(os.getenv("CONTEXTCUT_GRACE_SEC", "3600"))
 
 _license_state = {
-    "valid":        False,
-    "activated_at": None,
-    "last_heartbeat": None,
-    "expires_at":   None,
-    "license_type": None,
-    "seats":        0,
-    "message":      "",
-    "grace_since":  None,
+    "valid":           False,
+    "activated_at":    None,
+    "last_heartbeat":  None,
+    "expires_at":      None,
+    "license_type":    None,
+    "seats":           0,
+    "message":         "",
+    "grace_since":     None,
+    "instance_secret": None,
 }
 
-_instance_id = str(uuid.uuid4())
+_instance_id = os.getenv("CONTEXTCUT_INSTANCE_ID") or str(uuid.uuid4())
 
 def get_fingerprint() -> dict:
     import platform
@@ -435,14 +443,22 @@ def validate_license() -> bool:
         with urllib.request.urlopen(req, timeout=15) as resp:
             data = json.loads(resp.read().decode())
         if data.get("valid"):
+            secret = data.get("instance_secret")
             _license_state.update({
-                "valid":        True,
-                "activated_at": data.get("activated_at"),
-                "license_type": data.get("license_type", "single"),
-                "seats":        data.get("seats", 1),
-                "expires_at":   data.get("expires_at"),
-                "message":      data.get("message", "License validated"),
+                "valid":           True,
+                "activated_at":    data.get("activated_at"),
+                "license_type":    data.get("license_type", "single"),
+                "seats":           data.get("seats", 1),
+                "expires_at":      data.get("expires_at"),
+                "message":         data.get("message", "License validated"),
+                "instance_secret": secret,
             })
+            if secret:
+                secret_path = os.path.join(os.path.expanduser("~"), ".contextcut", "instance_secret")
+                os.makedirs(os.path.dirname(secret_path), exist_ok=True)
+                with open(secret_path, "w") as f:
+                    f.write(secret)
+                os.chmod(secret_path, 0o600)
             return True
         else:
             _license_state["message"] = data.get("error", "License invalid")

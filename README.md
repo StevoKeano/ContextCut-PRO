@@ -6,16 +6,6 @@ ContextCut-PRO is the commercial edition of ContextCut — a transparent semanti
 
 ---
 
-## Quick Install
-
-```bash
-curl -fsSL https://raw.githubusercontent.com/StevoKeano/ContextCut/main/install.sh -o /tmp/install.sh
-chmod +x /tmp/install.sh
-bash /tmp/install.sh
-```
-
----
-
 ## Free vs PRO
 
 | Feature                        | Free | PRO |
@@ -55,19 +45,43 @@ Most RAG implementations stuff your entire knowledge base into every prompt. Con
 - [Voyage AI API key](https://dash.voyageai.com) (free tier works)
 - [Qdrant](https://qdrant.tech) running locally or on your LAN
 - Ollama or any OpenAI-compatible LLM endpoint
-- See [LICENSE-PRO.md](LICENSE-PRO.md) for full terms
+- Valid PRO license key (delivered via email at purchase)
 
 ---
 
 ## Install
 
+Your purchase confirmation email contains a personalized install link. Run the single command from that email:
+
 ```bash
-curl -fsSL https://raw.githubusercontent.com/StevoKeano/ContextCut/main/install.sh -o /tmp/install.sh
-chmod +x /tmp/install.sh
-bash /tmp/install.sh
+curl -fsSL "https://contextcut-license.ppsel03.workers.dev/install/CC-PRO-your-key-here" | bash
 ```
 
-Enter your PRO license key when prompted. On macOS, services are registered as launchd agents and start automatically on login. On Linux, a `start.sh` script is generated.
+This downloads the installer with your license key pre-loaded. Follow the prompts for Voyage AI key, Ollama host, Qdrant host, and ports.
+
+### Manual Install
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/StevoKeano/ContextCut-PRO/main/install.sh -o /tmp/cc-install.sh
+chmod +x /tmp/cc-install.sh
+bash /tmp/cc-install.sh
+```
+
+When prompted, paste your license key from the purchase email.
+
+On macOS, services are registered as launchd agents and start automatically on login.  
+On Linux, a `start.sh` script is generated.
+
+---
+
+## Uninstall
+
+```bash
+cd ~
+bash ~/contextcut/stop.sh
+rm -rf ~/contextcut
+rm -f ~/.contextcut_sessions.json
+```
 
 ---
 
@@ -132,13 +146,12 @@ Start at `0.30` and adjust for your domain.
 
 **Pro License – $29.88 one-time per seat**
 
-ContextCut PRO is proprietary software. Purchase grants a single-seat commercial license.
+ContextCut PRO is proprietary software. Purchase grants a single-seat commercial license. See [LICENSE.md](LICENSE.md) for full terms.
 
 - Lifetime commercial usage rights
 - Priority support
 - Advanced context-cutting rules & presets
 - Pro dashboard features
-- See [LICENSE-PRO.md](LICENSE.md) for full terms
 
 [Buy Pro License →](https://5984630877416.gumroad.com/l/ContextCut-Pro)
 
