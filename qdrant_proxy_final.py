@@ -34,6 +34,7 @@ import base64
 import urllib.request
 import urllib.error
 from collections import deque
+from pathlib import Path
 from datetime import datetime
 from http.server import HTTPServer, BaseHTTPRequestHandler
 from socketserver import ThreadingMixIn
@@ -130,6 +131,7 @@ UPSTREAM       = os.getenv("CONTEXTCUT_UPSTREAM",        "http://localhost:11434
 QDRANT_HOST    = os.getenv("CONTEXTCUT_QDRANT_HOST",     "localhost")
 QDRANT_PORT    = int(os.getenv("CONTEXTCUT_QDRANT_PORT", "6333"))
 COLLECTION     = os.getenv("CONTEXTCUT_COLLECTION",      "contextcut")
+KB_DIR         = Path(os.getenv("CONTEXTCUT_KB_DIR", str(Path.home() / "contextcut" / "knowledge"))).expanduser()
 LISTEN_PORT    = int(os.getenv("CONTEXTCUT_PROXY_PORT",     "18788"))
 DASHBOARD_PORT = int(os.getenv("CONTEXTCUT_DASHBOARD_PORT", "18787"))
 CTX_LIMIT      = int(os.getenv("CONTEXTCUT_CTX_LIMIT",   "8192"))
