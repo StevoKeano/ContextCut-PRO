@@ -2,7 +2,7 @@ const HEARTBEAT_TIMEOUT = 30 * 60 * 1000;
 
 async function uuidv4() {
   return "xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx".replace(/[xy]/g, (c) => {
-    const r = (crypto.getRandomValues(new Uint8Array(1))[0] & 15);
+    const r = crypto.getRandomValues(new Uint8Array(1))[0] & 15;
     return c === "x" ? r.toString(16) : ((r & 3) | 8).toString(16);
   });
 }
@@ -12,7 +12,11 @@ async function handleWebhook(request, env) {
   const eventType = body.get("event_type");
   const product = body.get("product_name");
 
-  if (eventType !== "sale_completed" || !product || !product.includes("ContextCut")) {
+  if (
+    eventType !== "sale_completed" ||
+    !product ||
+    !product.includes("ContextCut")
+  ) {
     return json(200, { ok: true, skipped: true });
   }
 
@@ -36,7 +40,7 @@ async function handleWebhook(request, env) {
     await fetch("https://api.resend.com/emails", {
       method: "POST",
       headers: {
-        "Authorization": `Bearer ${env.RESEND_API_KEY}`,
+        Authorization: `Bearer ${env.RESEND_API_KEY}`,
         "Content-Type": "application/json",
       },
       body: JSON.stringify({
@@ -44,24 +48,29 @@ async function handleWebhook(request, env) {
         to: [email],
         subject: "Your ContextCut PRO License Key & Install Link",
         html: `
-          <h2>Welcome to ContextCut PRO</h2>
-          <p>Thank you for your purchase. Here is your license information:</p>
-          <p><strong>License Key:</strong> <code>${licenseKey}</code></p>
-          <p><strong>Concurrent Seats:</strong> ${maxSeats}</p>
-           <p><strong>Quick Install (Recommended)</strong></p>
-           <p>Run this command in your terminal:</p>
-           <pre><code>curl -fsSL "${installUrl}" | bash</code></pre>
-          <h3>Manual Install</h3>
-          <pre><code>curl -fsSL https://raw.githubusercontent.com/StevoKeano/ContextCut-PRO/main/install.sh | bash</code></pre>
-          <p>When prompted, paste your license key: <code>${licenseKey}</code></p>
-          <hr>
-          <p>Need help? Reply to this email or check the <a href="https://github.com/StevoKeano/ContextCut-PRO">setup guide</a>.</p>
-        `,
+              <h2>Welcome to ContextCut PRO</h2>
+              <p>Thank you for your purchase. Here is your license information:</p>
+              <p><strong>License Key:</strong> <code>${licenseKey}</code></p>
+              <p><strong>Concurrent Seats:</strong> ${maxSeats}</p>
+               <p><strong>Quick Install</strong></p>
+               <p>Run this single command in your terminal:</p>
+               <pre><code>curl -fsSL "${installUrl}" | bash</code></pre>
+               <p>When prompted, leave the API key blank for 100% local mode, or paste your Voyage AI key.</p>
+              <h3>Manual Install</h3>
+              <pre><code>curl -fsSL https://raw.githubusercontent.com/StevoKeano/ContextCut-PRO/install.sh -o /tmp/cc-install.sh && bash /tmp/cc-install.sh</code></pre>
+              <p>When prompted, paste your license key: <code>${licenseKey}</code></p>
+              <hr>
+              <p>Need help? Reply to this email or check the <a href="https://github.com/StevoKeano/ContextCut-PRO">setup guide</a>.</p>
+            `,
       }),
     });
   }
 
-  return json(200, { ok: true, license_key: licenseKey, install_url: installUrl });
+  return json(200, {
+    ok: true,
+    license_key: licenseKey,
+    install_url: installUrl,
+  });
 }
 
 async function handleInstallLink(request, env, licenseKey) {
@@ -75,12 +84,12 @@ async function handleInstallLink(request, env, licenseKey) {
   const installScript = `#!/bin/bash
 set -e
 export CONTEXTCUT_LICENSE_KEY="${licenseKey}"
-SCRIPT_URL="https://raw.githubusercontent.com/StevoKeano/ContextCut-PRO/main/install.sh"
+SCRIPT_URL="https://raw.githubusercontent.com/StevoKeano/ContextCut-PRO/install.sh"
 echo "  Downloading ContextCut PRO installer..."
 curl -fsSL "$SCRIPT_URL" -o /tmp/contextcut-install.sh
 chmod +x /tmp/contextcut-install.sh
 echo "  Running installer with your license key pre-loaded..."
-bash /tmp/contextcut-install.sh < /dev/tty
+bash /tmp/contextcut-install.sh
 rm -f /tmp/contextcut-install.sh
 `;
 
@@ -103,8 +112,8 @@ async function handleValidate(request, env) {
   const instances = JSON.parse(stored);
   const MAX_SEATS = 3;
 
-  const activeInstances = Object.keys(instances).filter(id => {
-    return (Date.now() - instances[id].last_heartbeat) < HEARTBEAT_TIMEOUT;
+  const activeInstances = Object.keys(instances).filter((id) => {
+    return Date.now() - instances[id].last_heartbeat < HEARTBEAT_TIMEOUT;
   });
 
   if (!instances[instance_id] && activeInstances.length >= MAX_SEATS) {
@@ -238,5 +247,5 @@ export default {
     }
 
     return new Response("Not found", { status: 404 });
-  }
+  },
 };

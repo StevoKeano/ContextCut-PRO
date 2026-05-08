@@ -2,7 +2,7 @@
 # ContextCut installer — macOS / Linux
 # https://github.com/StevoKeano/ContextCut
 
-REPO="https://raw.githubusercontent.com/StevoKeano/ContextCut-PRO/feature/Settings-page"
+REPO="https://raw.githubusercontent.com/StevoKeano/ContextCut-PRO/main"
 INSTALL_DIR="$HOME/contextcut"
 LOG_DIR="$HOME/.contextcut/logs"
 PLIST_PROXY="$HOME/Library/LaunchAgents/ai.contextcut.proxy.plist"
