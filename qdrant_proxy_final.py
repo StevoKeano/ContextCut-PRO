@@ -40,8 +40,10 @@ from http.server import HTTPServer, BaseHTTPRequestHandler
 from socketserver import ThreadingMixIn
 
 _VOYAGE_AVAILABLE = False
+_voyage_mod = None
 try:
     import voyageai
+    _voyage_mod = voyageai
     _VOYAGE_AVAILABLE = True
 except ImportError:
     pass
@@ -524,7 +526,7 @@ def get_clients():
     global _vc, _qclient
     if _vc is None and _VK and _VOYAGE_AVAILABLE:
         print(f"[contextcut] Voyage API key loaded: {_VK[:8]}...")
-        _vc = voyageai.Client(api_key=_VK)
+        _vc = _voyage_mod.Client(api_key=_VK)
     if _qclient is None:
         _qclient = QdrantClient(host=QDRANT_HOST, port=QDRANT_PORT)
     return _vc, _qclient
@@ -2285,7 +2287,7 @@ class DashboardHandler(_SuppressBrokenPipe, BaseHTTPRequestHandler):
         if self.path == "/api/embed/config":
             try:
                 body = json.loads(raw_body)
-                global _EMBED_MODE, _VK, _LOCAL_EMBED, _VOYAGE_AVAILABLE
+                global _EMBED_MODE, _VK, _LOCAL_EMBED, _VOYAGE_AVAILABLE, _voyage_mod
                 proposed_mode = body.get("mode", "voyage")
 
                 if proposed_mode == "voyage" and not _VOYAGE_AVAILABLE:
@@ -2297,7 +2299,9 @@ class DashboardHandler(_SuppressBrokenPipe, BaseHTTPRequestHandler):
                         capture_output=True, text=True, timeout=120
                     )
                     if result.returncode == 0:
-                        import voyageai
+                        import importlib
+                        _voyage_mod = importlib.import_module("voyageai")
+                        globals()["_voyage_mod"] = _voyage_mod
                         _VOYAGE_AVAILABLE = True
                         print("[contextcut] voyageai installed successfully")
                     else:
