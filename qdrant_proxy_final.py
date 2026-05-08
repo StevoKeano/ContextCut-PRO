@@ -2285,8 +2285,25 @@ class DashboardHandler(_SuppressBrokenPipe, BaseHTTPRequestHandler):
         if self.path == "/api/embed/config":
             try:
                 body = json.loads(raw_body)
-                global _EMBED_MODE, _VK, _LOCAL_EMBED
-                _EMBED_MODE = body.get("mode", "voyage")
+                global _EMBED_MODE, _VK, _LOCAL_EMBED, _VOYAGE_AVAILABLE
+                proposed_mode = body.get("mode", "voyage")
+
+                if proposed_mode == "voyage" and not _VOYAGE_AVAILABLE:
+                    print("[contextcut] voyageai not installed — attempting auto-install...")
+                    import subprocess
+                    pip_path = str(Path(sys.executable).parent / "pip")
+                    result = subprocess.run(
+                        [pip_path, "install", "voyageai", "-q"],
+                        capture_output=True, text=True, timeout=120
+                    )
+                    if result.returncode == 0:
+                        import voyageai
+                        _VOYAGE_AVAILABLE = True
+                        print("[contextcut] voyageai installed successfully")
+                    else:
+                        raise RuntimeError(f"pip install failed: {result.stderr[:200]}")
+
+                _EMBED_MODE = proposed_mode
                 incoming_key = body.get("voyage_key", "").strip()
                 if incoming_key and incoming_key != "••••••••••••••••":
                     _VK = incoming_key
