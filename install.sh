@@ -142,6 +142,33 @@ else
 fi
 
 echo ""
+echo "  ── Summary ──"
+if [ -n "$VOYAGE_KEY" ]; then
+  echo "  Embed mode  : Voyage AI (voyage-3)"
+else
+  echo "  Embed mode  : Ollama local ($EMBED_MODEL)"
+fi
+echo "  Install dir : $INSTALL_DIR"
+echo "  Qdrant      : $QDRANT_HOST:$QDRANT_PORT"
+echo "  Ollama      : $OLLAMA_HOST:$OLLAMA_PORT"
+echo "  Dashboard   : port $DASH_PORT"
+echo "  Proxy       : port $PROXY_PORT"
+echo ""
+
+if $AUTO_INSTALL; then
+  read -p "  Proceed with install? [Y/n]: " ANSWER
+  if echo "$ANSWER" | grep -qi "^n"; then
+    echo ""
+    echo "  Install aborted."
+    echo ""
+    echo "  To restart the install:"
+    echo "    bash $0"
+    echo ""
+    exit 0
+  fi
+fi
+
+echo ""
 echo "  Installing to $INSTALL_DIR ..."
 
 # ── Create directories ────────────────────────────────────────────────────────

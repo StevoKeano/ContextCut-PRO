@@ -598,13 +598,19 @@ def _sync_env_on_startup():
                     k, v = line.split("=", 1)
                     env_lines[k.strip()] = v.strip()
         env_lines["CONTEXTCUT_EMBED_MODE"] = _EMBED_MODE
-        env_lines["CONTEXTCUT_EMBED_MODEL"] = _LOCAL_EMBED
+        if _EMBED_MODE == "ollama":
+            env_lines["CONTEXTCUT_EMBED_MODEL"] = _LOCAL_EMBED
+        elif "CONTEXTCUT_EMBED_MODEL" in env_lines:
+            del env_lines["CONTEXTCUT_EMBED_MODEL"]
         if _VK:
             env_lines["VOYAGE_API_KEY"] = _VK
         with open(env_path, "w") as f:
             for k, v in env_lines.items():
                 f.write(f"{k}={v}\n")
-        print(f"[contextcut] .env synced: mode={_EMBED_MODE} model={_LOCAL_EMBED or 'voyage-3'}")
+        if _EMBED_MODE == "voyage":
+            print(f"[contextcut] .env synced: mode=voyage (voyage-3)")
+        else:
+            print(f"[contextcut] .env synced: mode=ollama model={_LOCAL_EMBED}")
     except Exception as e:
         print(f"[contextcut] .env sync warning: {e}")
 
@@ -2377,7 +2383,10 @@ class DashboardHandler(_SuppressBrokenPipe, BaseHTTPRequestHandler):
                                 k, v = line.split("=", 1)
                                 env_lines[k.strip()] = v.strip()
                     env_lines["CONTEXTCUT_EMBED_MODE"] = _EMBED_MODE
-                    env_lines["CONTEXTCUT_EMBED_MODEL"] = _LOCAL_EMBED
+                    if _EMBED_MODE == "ollama":
+                        env_lines["CONTEXTCUT_EMBED_MODEL"] = _LOCAL_EMBED
+                    elif "CONTEXTCUT_EMBED_MODEL" in env_lines:
+                        del env_lines["CONTEXTCUT_EMBED_MODEL"]
                     if _VK:
                         env_lines["VOYAGE_API_KEY"] = _VK
                     with open(env_path, "w") as f:
