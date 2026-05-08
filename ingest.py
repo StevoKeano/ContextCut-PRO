@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-ContextCut — Qdrant ingest + file watcher
+ContextCut  — Qdrant ingest + file watcher
 
 Embeds your markdown knowledge base into Qdrant using Voyage AI.
 

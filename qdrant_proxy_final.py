@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-ContextCut-PRO — Qdrant-enriching reverse proxy for any local LLM endpoint.
+ContextCut-PRO  —  Qdrant-enriching reverse proxy for any local LLM endpoint.
 
   Proxy port    (CONTEXTCUT_PROXY_PORT)      — receives requests, injects context, forwards to LLM
   Dashboard port (CONTEXTCUT_DASHBOARD_PORT)  — Chat interface + real-time monitor

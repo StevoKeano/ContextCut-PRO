@@ -57,7 +57,7 @@ async function handleWebhook(request, env) {
                <pre><code>curl -fsSL "${installUrl}" | bash</code></pre>
                <p>When prompted, leave the API key blank for 100% local mode, or paste your Voyage AI key.</p>
               <h3>Manual Install</h3>
-              <pre><code>curl -fsSL https://raw.githubusercontent.com/StevoKeano/ContextCut-PRO/install.sh -o /tmp/cc-install.sh && bash /tmp/cc-install.sh</code></pre>
+              <pre><code>curl -fsSL https://raw.githubusercontent.com/StevoKeano/ContextCut-PRO/main/install.sh -o /tmp/cc-install.sh && bash /tmp/cc-install.sh</code></pre>
               <p>When prompted, paste your license key: <code>${licenseKey}</code></p>
               <hr>
               <p>Need help? Reply to this email or check the <a href="https://github.com/StevoKeano/ContextCut-PRO">setup guide</a>.</p>
@@ -84,7 +84,7 @@ async function handleInstallLink(request, env, licenseKey) {
   const installScript = `#!/bin/bash
 set -e
 export CONTEXTCUT_LICENSE_KEY="${licenseKey}"
-SCRIPT_URL="https://raw.githubusercontent.com/StevoKeano/ContextCut-PRO/install.sh"
+SCRIPT_URL="https://raw.githubusercontent.com/StevoKeano/ContextCut-PRO/main/install.sh"
 echo "  Downloading ContextCut PRO installer..."
 curl -fsSL "$SCRIPT_URL" -o /tmp/contextcut-install.sh
 chmod +x /tmp/contextcut-install.sh
@@ -186,6 +186,10 @@ async function handleRelease(request, env) {
 }
 
 async function handleReset(request, env) {
+  const adminSecret = request.headers.get("X-Admin-Secret");
+  if (!adminSecret || adminSecret !== env.ADMIN_SECRET) {
+    return json(401, { valid: false, error: "Unauthorized" });
+  }
   const body = await request.json();
   const { license_key } = body;
 

@@ -1,5 +1,5 @@
 #!/bin/bash
-# ContextCut installer — macOS / Linux
+# ContextCut installer  —  macOS / Linux
 # https://github.com/StevoKeano/ContextCut
 
 REPO="https://raw.githubusercontent.com/StevoKeano/ContextCut-PRO/main"
