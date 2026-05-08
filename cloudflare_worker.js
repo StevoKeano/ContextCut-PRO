@@ -44,7 +44,7 @@ async function handleWebhook(request, env) {
         "Content-Type": "application/json",
       },
       body: JSON.stringify({
-        from: "ContextCut PRO <noreply@contextcut.com>",
+        from: "ContextCut PRO <noreply@contextcut.thehangarsatspicewood.com>",
         to: [email],
         subject: "Your ContextCut PRO License Key & Install Link",
         html: `
