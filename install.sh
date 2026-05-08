@@ -39,8 +39,11 @@ if $AUTO_INSTALL; then
 
   if [ -z "$VOYAGE_KEY" ]; then
     echo "  100% local mode — using Ollama for embeddings."
+    EMBED_MODE="ollama"
     read -p "  Embedding model [nomic-embed-text]: " EMBED_MODEL
     EMBED_MODEL="${EMBED_MODEL:-nomic-embed-text}"
+  else
+    EMBED_MODE="voyage"
   fi
 
   read -p "  Ollama host [localhost]: " OLLAMA_HOST
@@ -103,8 +106,11 @@ else
 
   if [ -z "$VOYAGE_KEY" ]; then
     echo "  100% local mode — using Ollama for embeddings."
+    EMBED_MODE="ollama"
     read -p "  Embedding model [nomic-embed-text]: " EMBED_MODEL
     EMBED_MODEL="${EMBED_MODEL:-nomic-embed-text}"
+  else
+    EMBED_MODE="voyage"
   fi
 
   read -p "  Ollama host [localhost]: " OLLAMA_HOST
@@ -189,6 +195,7 @@ cat > "$INSTALL_DIR/.env" << EOF
 CONTEXTCUT_LICENSE_KEY=$LICENSE_KEY
 CONTEXTCUT_LICENSE_SERVER=https://contextcut-license.ppsel03.workers.dev
 VOYAGE_API_KEY=$VOYAGE_KEY
+CONTEXTCUT_EMBED_MODE=$EMBED_MODE
 CONTEXTCUT_EMBED_MODEL=$EMBED_MODEL
 CONTEXTCUT_UPSTREAM=http://$OLLAMA_HOST:$OLLAMA_PORT
 CONTEXTCUT_QDRANT_HOST=$QDRANT_HOST
@@ -422,6 +429,7 @@ else
 fi
 echo ""
 export VOYAGE_API_KEY="$VOYAGE_KEY"
+export CONTEXTCUT_EMBED_MODE="$EMBED_MODE"
 export CONTEXTCUT_EMBED_MODEL="$EMBED_MODEL"
 export CONTEXTCUT_QDRANT_HOST="$QDRANT_HOST"
 export CONTEXTCUT_QDRANT_PORT="$QDRANT_PORT"

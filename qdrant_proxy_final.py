@@ -2317,6 +2317,25 @@ class DashboardHandler(_SuppressBrokenPipe, BaseHTTPRequestHandler):
                 if _VK: CredentialManager.save("voyage_key", _VK)
                 if _LOCAL_EMBED: CredentialManager.save("embed_model", _LOCAL_EMBED)
 
+                # Also update .env so ingest.py picks up the change on restart
+                try:
+                    env_path = Path(__file__).parent / ".env"
+                    env_lines = {}
+                    if env_path.exists():
+                        for line in env_path.read_text().splitlines():
+                            if "=" in line and not line.startswith("#"):
+                                k, v = line.split("=", 1)
+                                env_lines[k.strip()] = v.strip()
+                    env_lines["CONTEXTCUT_EMBED_MODE"] = _EMBED_MODE
+                    env_lines["CONTEXTCUT_EMBED_MODEL"] = _LOCAL_EMBED
+                    if _VK:
+                        env_lines["VOYAGE_API_KEY"] = _VK
+                    with open(env_path, "w") as f:
+                        for k, v in env_lines.items():
+                            f.write(f"{k}={v}\n")
+                except Exception as e:
+                    print(f"[contextcut] .env update warning: {e}")
+
                 # Check Qdrant collection dimension and recreate if needed
                 try:
                     expected_dim = _get_embed_dim(_LOCAL_EMBED)

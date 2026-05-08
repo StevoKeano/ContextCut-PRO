@@ -52,11 +52,14 @@ COLLECTION   = os.getenv("CONTEXTCUT_COLLECTION",  "contextcut")
 KB_DIR       = Path(os.getenv("CONTEXTCUT_KB_DIR", str(Path.home() / "contextcut" / "knowledge"))).expanduser()
 VOYAGE_API_KEY = os.environ.get("VOYAGE_API_KEY", "").strip().strip('"').strip("'")
 OLLAMA_EMBED   = os.environ.get("CONTEXTCUT_EMBED_MODEL", "").strip().strip('"').strip("'")
+EMBED_MODE     = os.environ.get("CONTEXTCUT_EMBED_MODE", "").strip().strip('"').strip("'")
 OLLAMA_URL     = os.environ.get("CONTEXTCUT_UPSTREAM", "http://localhost:11434")
 VOYAGE_MODEL = "voyage-3"
 
 def _get_embed_dim():
-    """Return embedding dimension based on active model."""
+    """Return embedding dimension based on active mode and model."""
+    if EMBED_MODE == "voyage" and VOYAGE_API_KEY:
+        return 1024
     if OLLAMA_EMBED:
         dims = {
             "nomic-embed-text": 768,
@@ -82,7 +85,7 @@ EXCLUDE_FILES = {"MEMORY.md"}
 last_embed_time = 0
 
 # ── Clients ───────────────────────────────────────────────────────────────────
-vc = voyageai.Client(api_key=VOYAGE_API_KEY) if VOYAGE_API_KEY else None
+vc = voyageai.Client(api_key=VOYAGE_API_KEY) if (VOYAGE_API_KEY and VOYAGE_AVAILABLE) else None
 qc = QdrantClient(host=QDRANT_HOST, port=QDRANT_PORT)
 
 def _ollama_embed(texts, model):
@@ -183,17 +186,19 @@ def ingest_file(path: Path):
 def safe_embed(texts, model, input_type):
     global last_embed_time
 
-    if OLLAMA_EMBED and not VOYAGE_API_KEY:
-        try:
-            vectors = _ollama_embed(texts, OLLAMA_EMBED)
-            class EmbedResult:
-                pass
-            result = EmbedResult()
-            result.embeddings = vectors
-            return result
-        except Exception as e:
-            print(f" [!] Ollama embed error: {e}")
-            raise
+    # Use Ollama embed if mode is ollama or if Voyage is unavailable
+    if (EMBED_MODE == "ollama" and OLLAMA_EMBED) or (not VOYAGE_API_KEY or not VOYAGE_AVAILABLE):
+        if OLLAMA_EMBED:
+            try:
+                vectors = _ollama_embed(texts, OLLAMA_EMBED)
+                class EmbedResult:
+                    pass
+                result = EmbedResult()
+                result.embeddings = vectors
+                return result
+            except Exception as e:
+                print(f" [!] Ollama embed error: {e}")
+                raise
 
     elapsed = time.time() - last_embed_time
     if elapsed < 22:
