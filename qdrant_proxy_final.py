@@ -587,6 +587,35 @@ def _safe_embed(query: str, input_type: str) -> list[float] | None:
     print("[contextcut] WARNING: No embedding backend configured")
     return None
 
+def ensure_collection_dim():
+    """Check Qdrant collection dimension matches current embed model; recreate if needed."""
+    try:
+        expected_dim = _get_embed_dim(_LOCAL_EMBED if _EMBED_MODE == "ollama" else "")
+        qclient = QdrantClient(host=QDRANT_HOST, port=QDRANT_PORT)
+        try:
+            info = qclient.get_collection(COLLECTION)
+            actual_dim = info.config.params.vectors.size
+            if actual_dim != expected_dim:
+                print(f"[contextcut] Dimension mismatch: collection={actual_dim}, model={expected_dim}. Recreating...")
+                qclient.delete_collection(COLLECTION)
+                time.sleep(2)
+                qclient.create_collection(
+                    collection_name=COLLECTION,
+                    vectors_config=VectorParams(size=expected_dim, distance=Distance.COSINE),
+                )
+                print(f"[contextcut] Collection recreated with dim={expected_dim}")
+            else:
+                print(f"[contextcut] Qdrant collection dim={actual_dim} OK")
+        except Exception:
+            # Collection doesn't exist yet, create it
+            print(f"[contextcut] Creating Qdrant collection with dim={expected_dim}")
+            qclient.create_collection(
+                collection_name=COLLECTION,
+                vectors_config=VectorParams(size=expected_dim, distance=Distance.COSINE),
+            )
+    except Exception as e:
+        print(f"[contextcut] Collection dimension check warning: {e}")
+
 def qdrant_context(query: str) -> tuple[str, list[dict]]:
     try:
         emb = _safe_embed(query, input_type="query")
@@ -2474,6 +2503,8 @@ if __name__ == "__main__":
     else:
         print("[contextcut] ERROR: No embedding backend configured")
         raise SystemExit(1)
+
+    ensure_collection_dim()
 
     load_sessions()
 
