@@ -2116,8 +2116,20 @@ class DashboardHandler(_SuppressBrokenPipe, BaseHTTPRequestHandler):
             global _response_cache, _stats
             with _lock:
                 _response_cache.clear()
-                _stats["cache_hits"] = 0
-            print("[contextcut] Context cache cleared")
+                _stats = {
+                    "total_requests":  0,
+                    "total_saved":     0,
+                    "max_tokens_seen": 0,
+                    "last_seen":       None,
+                    "start_time":      datetime.now().isoformat(),
+                    "cache_hits":      0,
+                }
+                _log.clear()
+                _sessions.clear()
+            # Wipe session file on disk
+            if os.path.exists(SESSION_FILE):
+                os.remove(SESSION_FILE)
+            print("[contextcut] Context cache, sessions, and monitor history cleared")
             resp = json.dumps({"ok": True}).encode()
             self.send_response(200)
             self.send_header("Content-Type", "application/json")
