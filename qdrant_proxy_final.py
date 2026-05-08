@@ -2440,8 +2440,11 @@ class DashboardHandler(_SuppressBrokenPipe, BaseHTTPRequestHandler):
                     raise FileNotFoundError(f"ingest.py not found at {ingest_path}")
 
                 env = os.environ.copy()
-                env["VOYAGE_API_KEY"] = _VK
-                env["CONTEXTCUT_EMBED_MODEL"] = _LOCAL_EMBED
+                env["CONTEXTCUT_EMBED_MODE"] = _EMBED_MODE
+                if _EMBED_MODE == "voyage" and _VK:
+                    env["VOYAGE_API_KEY"] = _VK
+                if _EMBED_MODE == "ollama" and _LOCAL_EMBED:
+                    env["CONTEXTCUT_EMBED_MODEL"] = _LOCAL_EMBED
                 env["CONTEXTCUT_QDRANT_HOST"] = QDRANT_HOST
                 env["CONTEXTCUT_QDRANT_PORT"] = str(QDRANT_PORT)
                 env["CONTEXTCUT_KB_DIR"] = str(KB_DIR)

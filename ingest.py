@@ -283,16 +283,19 @@ def watch():
 
 # ── Main ──────────────────────────────────────────────────────────────────────
 if __name__ == "__main__":
-    if not VOYAGE_API_KEY and not OLLAMA_EMBED:
+    if EMBED_MODE == "voyage" and VOYAGE_API_KEY:
+        print(f"[ingest] Embedding: Voyage AI (voyage-3)")
+    elif EMBED_MODE == "ollama" and OLLAMA_EMBED:
+        print(f"[ingest] Embedding: Ollama ({OLLAMA_EMBED})")
+    elif VOYAGE_API_KEY:
+        print(f"[ingest] Embedding: Voyage AI (voyage-3)")
+    elif OLLAMA_EMBED:
+        print(f"[ingest] Embedding: Ollama ({OLLAMA_EMBED})")
+    else:
         print("ERROR: Neither VOYAGE_API_KEY nor CONTEXTCUT_EMBED_MODEL set.")
         print("  export VOYAGE_API_KEY=your-key-here")
         print("  export CONTEXTCUT_EMBED_MODEL=nomic-embed-text")
         sys.exit(1)
-
-    if VOYAGE_API_KEY:
-        print(f"[ingest] Embedding: Voyage AI (voyage-3)")
-    else:
-        print(f"[ingest] Embedding: Ollama ({OLLAMA_EMBED})")
 
     if not KB_DIR.exists():
         print(f"ERROR: Knowledge base directory not found: {KB_DIR}")
