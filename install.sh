@@ -329,6 +329,9 @@ set +a
 
 INST="$(dirname "$0")"
 
+# Clean stale ready file
+rm -f "$INST/.proxy_ready"
+
 # ── Start proxy first (it ensures correct collection dimension) ──
 PROXY_PIDFILE="$INST/.proxy.pid"
 if [ -f "$PROXY_PIDFILE" ] && kill -0 $(cat "$PROXY_PIDFILE") 2>/dev/null; then
@@ -339,10 +342,10 @@ source "$INST/.env"
 "$INST/venv/bin/python" "$INST/qdrant_proxy_final.py" &
 echo $! > "$PROXY_PIDFILE"
 
-# Wait for proxy to initialize and fix collection dimension
+# Wait for proxy ready marker (means .env synced + collection fixed)
 echo "Waiting for proxy to initialize..."
 for i in $(seq 1 60); do
-  if nc -z 127.0.0.1 "${CONTEXTCUT_DASHBOARD_PORT}" 2>/dev/null; then
+  if [ -f "$INST/.proxy_ready" ]; then
     echo "Proxy ready."
     break
   fi
@@ -389,13 +392,8 @@ if [ -f "$PROXY_PIDFILE" ]; then
     echo "Proxy stopped."
   fi
   rm -f "$PROXY_PIDFILE"
-else
-  echo "No PID files found. Attempting pkill..."
-  pkill -f ingest.py 2>/dev/null
-  pkill -f qdrant_proxy_final.py 2>/dev/null
-  sleep 1
+  rm -f "$INST/.proxy_ready"
 fi
-echo "Done."
 STOPEOF
   chmod +x "$INSTALL_DIR/stop.sh"
 

@@ -2511,6 +2511,9 @@ class DashboardHandler(_SuppressBrokenPipe, BaseHTTPRequestHandler):
 if __name__ == "__main__":
     load_saved_credentials()
 
+    # Sync .env first so ingest.py reads correct settings
+    _sync_env_on_startup()
+
     if _EMBED_MODE == "voyage" and _VK and _VOYAGE_AVAILABLE:
         print(f"[contextcut] Embedding: Voyage AI (voyage-3)")
     elif _EMBED_MODE == "ollama" and _LOCAL_EMBED:
@@ -2524,9 +2527,6 @@ if __name__ == "__main__":
     else:
         print("[contextcut] ERROR: No embedding backend configured")
         raise SystemExit(1)
-
-    # Sync .env immediately so ingest.py sees correct settings when started after us
-    _sync_env_on_startup()
 
     ensure_collection_dim()
 
@@ -2579,6 +2579,10 @@ if __name__ == "__main__":
             print(f"[contextcut] Heartbeat: every {HEARTBEAT_INTERVAL}s | grace: {GRACE_PERIOD}s")
     else:
         print("[contextcut] WARNING: No license key set. Set CONTEXTCUT_LICENSE_KEY.")
+
+    # Write ready marker so start.sh knows we're initialized
+    _READY_FILE = Path(__file__).parent / ".proxy_ready"
+    _READY_FILE.write_text("ready\n")
 
     dash = ReusableHTTPServer(("0.0.0.0", DASHBOARD_PORT), DashboardHandler)
     threading.Thread(target=dash.serve_forever, daemon=True).start()
