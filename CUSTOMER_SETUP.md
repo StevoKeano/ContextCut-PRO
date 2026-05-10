@@ -10,7 +10,7 @@ After purchasing on Gumroad, you'll receive an email with your license key and a
 
 **One-command install (recommended):**
 ```bash
-curl -fsSL "https://contextcut-license.ppsel03.workers.dev/install/CC-PRO-YOUR-UUID" | bash
+curl -fsSL "https://api.contextcut-pro.com/install/CC-PRO-YOUR-UUID" | bash
 ```
 This downloads the installer with your license key pre-set. You'll be prompted for your Voyage AI API key during setup.
 
@@ -40,7 +40,7 @@ pip install voyageai qdrant-client
 # Required
 export VOYAGE_API_KEY="your-voyage-api-key"
 export CONTEXTCUT_LICENSE_KEY="YOUR-PRO-LICENSE-KEY"
-export CONTEXTCUT_LICENSE_SERVER="https://contextcut-license.ppsel03.workers.dev"
+export CONTEXTCUT_LICENSE_SERVER="https://api.contextcut-pro.com"
 
 # Optional (defaults shown)
 export CONTEXTCUT_UPSTREAM="http://localhost:11434"
@@ -91,7 +91,7 @@ Your license supports **concurrent instances** (check your purchase for seat cou
 |---|---|
 | `License limit reached` | You exceeded your concurrent seat limit. Stop an existing instance, or wait 30 min for a stale seat to expire |
 | `Invalid license key` | Double-check your key. If it still fails, contact support |
-| `HTTP 403 / 1010` | Network or firewall issue. Ensure you can reach `https://contextcut-license.ppsel03.workers.dev` |
+| `HTTP 403 / 1010` | Network or firewall issue. Ensure you can reach `https://api.contextcut-pro.com` |
 
 ### Reset Your Seats
 

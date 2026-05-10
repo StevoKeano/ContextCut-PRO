@@ -386,7 +386,7 @@ import atexit
 atexit.register(shutdown_hook)
 
 # ── License Validation ────────────────────────────────────────────────────────
-LICENSE_SERVER  = os.getenv("CONTEXTCUT_LICENSE_SERVER", "https://api.contextcut.pro")
+LICENSE_SERVER  = os.getenv("CONTEXTCUT_LICENSE_SERVER", "https://api.contextcut-pro.com")
 LICENSE_KEY     = os.getenv("CONTEXTCUT_LICENSE_KEY", "")
 HEARTBEAT_INTERVAL = int(os.getenv("CONTEXTCUT_HEARTBEAT_SEC", "900"))
 GRACE_PERIOD    = int(os.getenv("CONTEXTCUT_GRACE_SEC", "3600"))

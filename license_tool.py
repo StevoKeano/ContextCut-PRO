@@ -8,7 +8,7 @@ Usage:
   python license_tool.py release --key YOUR_LICENSE_KEY --id INSTANCE_ID   Release one seat
 
 Environment:
-  CONTEXTCUT_LICENSE_SERVER  https://contextcut-license.ppsel03.workers.dev
+  CONTEXTCUT_LICENSE_SERVER  https://api.contextcut-pro.com
 """
 
 import os
@@ -19,7 +19,7 @@ import urllib.request
 
 LICENSE_SERVER = os.getenv(
     "CONTEXTCUT_LICENSE_SERVER",
-    "https://contextcut-license.ppsel03.workers.dev"
+    "https://api.contextcut-pro.com"
 )
 
 HEADERS = {

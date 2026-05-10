@@ -54,7 +54,7 @@ Most RAG implementations stuff your entire knowledge base into every prompt. Con
 Your purchase confirmation email contains a personalized install link. Run the single command from that email:
 
 ```bash
-curl -fsSL "https://contextcut-license.ppsel03.workers.dev/install/CC-PRO-your-key-here" | bash
+curl -fsSL "https://api.contextcut-pro.com/install/CC-PRO-your-key-here" | bash
 ```
 
 This downloads the installer with your license key pre-loaded. Follow the prompts for Voyage AI key, Ollama host, Qdrant host, and ports.

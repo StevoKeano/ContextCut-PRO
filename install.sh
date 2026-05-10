@@ -222,7 +222,7 @@ INSTANCE_ID=$(python3 -c "import uuid; print(uuid.uuid4())")
 cat > "$INSTALL_DIR/.env" << EOF
 CONTEXTCUT_LICENSE_KEY=$LICENSE_KEY
 CONTEXTCUT_INSTANCE_ID=$INSTANCE_ID
-CONTEXTCUT_LICENSE_SERVER=https://contextcut-license.ppsel03.workers.dev
+CONTEXTCUT_LICENSE_SERVER=https://api.contextcut-pro.com
 VOYAGE_API_KEY=$VOYAGE_KEY
 CONTEXTCUT_EMBED_MODE=$EMBED_MODE
 CONTEXTCUT_EMBED_MODEL=$EMBED_MODEL
@@ -254,7 +254,7 @@ if [ -z "$KEY" ]; then
   exit 1
 fi
 echo "Resetting license: ${KEY:0:16}..."
-RESULT=$(curl -sf -X POST "https://contextcut-license.ppsel03.workers.dev/v1/license/reset" \
+RESULT=$(curl -sf -X POST "https://api.contextcut-pro.com/v1/license/reset" \
   -H "Content-Type: application/json" \
   -d "{\"license_key\": \"${KEY}\"}")
 if [ $? -eq 0 ] && echo "$RESULT" | grep -q '"valid"'; then
@@ -292,7 +292,7 @@ RESETEOF
     <key>HOME</key><string>$HOME</string>
     <key>PATH</key><string>$INSTALL_DIR/venv/bin:/usr/local/bin:/usr/bin:/bin</string>
     <key>CONTEXTCUT_LICENSE_KEY</key><string>$LICENSE_KEY</string>
-    <key>CONTEXTCUT_LICENSE_SERVER</key><string>https://contextcut-license.ppsel03.workers.dev</string>
+    <key>CONTEXTCUT_LICENSE_SERVER</key><string>https://api.contextcut-pro.com</string>
     <key>VOYAGE_API_KEY</key><string>$VOYAGE_KEY</string>
     <key>CONTEXTCUT_EMBED_MODEL</key><string>$EMBED_MODEL</string>
     <key>CONTEXTCUT_UPSTREAM</key><string>http://$OLLAMA_HOST:$OLLAMA_PORT</string>
@@ -419,7 +419,7 @@ if [ -f "$ENV_FILE" ] && [ -f "$SECRET_FILE" ]; then
   SECRET=$(cat "$SECRET_FILE")
   if [ -n "$KEY" ] && [ -n "$INSTANCE_ID" ] && [ -n "$SECRET" ]; then
     echo "Releasing license seat..."
-    curl -sf -X POST "https://contextcut-license.ppsel03.workers.dev/v1/license/release"       -H "Content-Type: application/json"       -d "{"license_key":"$KEY","instance_id":"$INSTANCE_ID","instance_secret":"$SECRET"}"       > /dev/null 2>&1 && echo "Seat released." || echo "Release failed (seat expires in 30 min)."
+    curl -sf -X POST "https://api.contextcut-pro.com/v1/license/release"       -H "Content-Type: application/json"       -d "{"license_key":"$KEY","instance_id":"$INSTANCE_ID","instance_secret":"$SECRET"}"       > /dev/null 2>&1 && echo "Seat released." || echo "Release failed (seat expires in 30 min)."
   fi
 fi
 
@@ -452,7 +452,7 @@ if [ -z "$KEY" ]; then
   exit 1
 fi
 echo "Resetting license: ${KEY:0:16}..."
-RESULT=$(curl -sf -X POST "https://contextcut-license.ppsel03.workers.dev/v1/license/reset" \
+RESULT=$(curl -sf -X POST "https://api.contextcut-pro.com/v1/license/reset" \
   -H "Content-Type: application/json" \
   -d "{\"license_key\": \"${KEY}\"}")
 if [ $? -eq 0 ] && echo "$RESULT" | grep -q '"valid"'; then

@@ -9,11 +9,11 @@ async function uuidv4() {
 
 async function handleWebhook(request, env) {
   const body = await request.formData();
-  const eventType = body.get("event_type");
+  const eventType = body.get("resource_name");
   const product = body.get("product_name");
 
   if (
-    eventType !== "sale_completed" ||
+    eventType !== "sale" ||
     !product ||
     !product.includes("ContextCut")
   ) {
@@ -21,7 +21,7 @@ async function handleWebhook(request, env) {
   }
 
   const email = body.get("email");
-  const orderId = body.get("order_id");
+  const orderId = body.get("order_number");
   const maxSeats = 3;
 
   const existingCheck = await env.LICENSE_KV.get(`order:${orderId}`);
@@ -34,10 +34,10 @@ async function handleWebhook(request, env) {
   await env.LICENSE_KV.put(key, "{}");
   await env.LICENSE_KV.put(`order:${orderId}`, licenseKey);
 
-  const installUrl = `https://contextcut-license.ppsel03.workers.dev/install/${licenseKey}`;
-
+  const installUrl = `https://api.contextcut-pro.com/install/${licenseKey}`;
+  console.log("Webhook fields:", JSON.stringify({ email, orderId, eventType, product }));
   if (env.RESEND_API_KEY && email) {
-    await fetch("https://api.resend.com/emails", {
+    const resendRes = await fetch("https://api.resend.com/emails", {
       method: "POST",
       headers: {
         Authorization: `Bearer ${env.RESEND_API_KEY}`,
@@ -64,6 +64,8 @@ async function handleWebhook(request, env) {
             `,
       }),
     });
+    const resendBody = await resendRes.json();
+    console.log("Resend response:", resendRes.status, JSON.stringify(resendBody));
   }
 
   return json(200, {
