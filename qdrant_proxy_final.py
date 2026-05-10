@@ -2439,6 +2439,37 @@ class DashboardHandler(_SuppressBrokenPipe, BaseHTTPRequestHandler):
                             vectors_config=VectorParams(size=expected_dim, distance=Distance.COSINE),
                         )
                         print(f"[contextcut] Collection recreated with dim={expected_dim}")
+                        # Auto trigger re-ingest
+                        print(f"[contextcut] Triggering re-ingest with new embedding config...")
+                        try:
+                            import subprocess
+                            ingest_path = Path(__file__).parent / "ingest.py"
+                            if ingest_path.exists():
+                                env = os.environ.copy()
+                                env["CONTEXTCUT_EMBED_MODE"] = _EMBED_MODE
+                                if _EMBED_MODE == "voyage" and _VK:
+                                    env["VOYAGE_API_KEY"] = _VK
+                                if _EMBED_MODE == "ollama" and _LOCAL_EMBED:
+                                    env["CONTEXTCUT_EMBED_MODEL"] = _LOCAL_EMBED
+                                env["CONTEXTCUT_QDRANT_HOST"] = QDRANT_HOST
+                                env["CONTEXTCUT_QDRANT_PORT"] = str(QDRANT_PORT)
+                                env["CONTEXTCUT_KB_DIR"] = str(KB_DIR)
+                                env["CONTEXTCUT_COLLECTION"] = COLLECTION
+                                result = subprocess.run(
+                                    [sys.executable, str(ingest_path)],
+                                    env=env, capture_output=True, text=True, timeout=300
+                                )
+                                for line in result.stdout.strip().split('\n'):
+                                    print(f"  [re-ingest] {line}")
+                                if result.stderr.strip():
+                                    for line in result.stderr.strip().split('\n'):
+                                        print(f"  [re-ingest:err] {line}")
+                            else:
+                                print(f"[contextcut] ingest.py not found at {ingest_path}")
+                        except subprocess.TimeoutExpired:
+                            print(f"[contextcut] Re-ingest timed out after 5 minutes")
+                        except Exception as e:
+                            print(f"[contextcut] Re-ingest error: {e}")
                 except Exception as e:
                     print(f"[contextcut] Dimension check warning: {e}")
 
