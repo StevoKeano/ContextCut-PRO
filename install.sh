@@ -352,10 +352,6 @@ else
   # Linux — write start/stop scripts
   cat > "$INSTALL_DIR/start.sh" << 'STARTEOF'
 #!/bin/bash
-set -a
-source "$(dirname "$0")/.env"
-set +a
-
 INST="$(dirname "$0")"
 
 # Clean stale ready file
@@ -367,6 +363,7 @@ if [ -f "$PROXY_PIDFILE" ] && kill -0 $(cat "$PROXY_PIDFILE") 2>/dev/null; then
   echo "Proxy already running (PID $(cat "$PROXY_PIDFILE")). Stop it first with ./stop.sh"
   exit 1
 fi
+# Source env for proxy (uses pre-existing values; proxy will sync .env after starting)
 source "$INST/.env"
 "$INST/venv/bin/python" "$INST/qdrant_proxy_final.py" &
 echo $! > "$PROXY_PIDFILE"
@@ -380,6 +377,11 @@ for i in $(seq 1 60); do
   fi
   sleep 1
 done
+
+# Re-source .env after proxy syncs it, then export so ingest gets correct settings
+set -a
+source "$INST/.env"
+set +a
 
 # ── Start watcher ──
 WATCHER_PIDFILE="$INST/.ingest.pid"
@@ -419,7 +421,10 @@ if [ -f "$ENV_FILE" ] && [ -f "$SECRET_FILE" ]; then
   SECRET=$(cat "$SECRET_FILE")
   if [ -n "$KEY" ] && [ -n "$INSTANCE_ID" ] && [ -n "$SECRET" ]; then
     echo "Releasing license seat..."
-    curl -sf -X POST "https://api.contextcut-pro.com/v1/license/release"       -H "Content-Type: application/json"       -d "{"license_key":"$KEY","instance_id":"$INSTANCE_ID","instance_secret":"$SECRET"}"       > /dev/null 2>&1 && echo "Seat released." || echo "Release failed (seat expires in 30 min)."
+    curl -sf -X POST 'https://api.contextcut-pro.com/v1/license/release' \
+      -H 'Content-Type: application/json' \
+      -d '{"license_key":"'"$KEY"'","instance_id":"'"$INSTANCE_ID"'","instance_secret":"'"$SECRET"'"}' \
+      > /dev/null 2>&1 && echo "Seat released." || echo "Release failed (seat expires in 30 min)."
   fi
 fi
 
