@@ -620,7 +620,9 @@ def _safe_embed(query: str, input_type: str) -> list[float] | None:
     return None
 
 def _sync_env_on_startup():
-    """Write current embed settings to .env so ingest.py matches."""
+    """Sync embed settings between .env and runtime variables.
+    On fresh install, .env (set by install.sh) is authoritative for ingest.py.
+    Runtime creds (from dashboard settings) take precedence when set."""
     try:
         env_path = Path(__file__).parent / ".env"
         env_lines = {}
@@ -629,6 +631,17 @@ def _sync_env_on_startup():
                 if "=" in line and not line.startswith("#"):
                     k, v = line.split("=", 1)
                     env_lines[k.strip()] = v.strip()
+
+        # If runtime embed mode is empty, pull from .env (fresh install path)
+        global _EMBED_MODE, _LOCAL_EMBED, _VK
+        if not _EMBED_MODE:
+            _EMBED_MODE = env_lines.get("CONTEXTCUT_EMBED_MODE", "")
+        if not _LOCAL_EMBED:
+            _LOCAL_EMBED = env_lines.get("CONTEXTCUT_EMBED_MODEL", "")
+        if not _VK:
+            _VK = env_lines.get("VOYAGE_API_KEY", "")
+
+        # Now sync runtime -> .env so ingest.py subprocess picks them up
         env_lines["CONTEXTCUT_EMBED_MODE"] = _EMBED_MODE
         if _EMBED_MODE == "ollama":
             env_lines["CONTEXTCUT_EMBED_MODEL"] = _LOCAL_EMBED
@@ -636,6 +649,7 @@ def _sync_env_on_startup():
             del env_lines["CONTEXTCUT_EMBED_MODEL"]
         if _VK:
             env_lines["VOYAGE_API_KEY"] = _VK
+
         with open(env_path, "w") as f:
             for k, v in env_lines.items():
                 f.write(f"{k}={v}\n")
