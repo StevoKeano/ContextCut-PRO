@@ -36,6 +36,7 @@ async function handleWebhook(request, env) {
 
   const installUrl = `https://api.contextcut-pro.com/install/${licenseKey}`;
   console.log("Webhook fields:", JSON.stringify({ email, orderId, eventType, product }));
+
   if (env.RESEND_API_KEY && email) {
     const resendRes = await fetch("https://api.resend.com/emails", {
       method: "POST",
@@ -47,21 +48,89 @@ async function handleWebhook(request, env) {
         from: "ContextCut PRO <noreply@contextcut.thehangarsatspicewood.com>",
         to: [email],
         subject: "Your ContextCut PRO License Key & Install Link",
-        html: `
-              <h2>Welcome to ContextCut PRO</h2>
-              <p>Thank you for your purchase. Here is your license information:</p>
-              <p><strong>License Key:</strong> <code>${licenseKey}</code></p>
-              <p><strong>Concurrent Seats:</strong> ${maxSeats}</p>
-               <p><strong>Quick Install</strong></p>
-               <p>Run this single command in your terminal:</p>
-               <pre><code>curl -fsSL "${installUrl}" | bash</code></pre>
-               <p>When prompted, leave the API key blank for 100% local mode, or paste your Voyage AI key.</p>
-              <h3>Manual Install</h3>
-              <pre><code>curl -fsSL https://raw.githubusercontent.com/StevoKeano/ContextCut-PRO/main/install.sh -o /tmp/cc-install.sh && bash /tmp/cc-install.sh</code></pre>
-              <p>When prompted, paste your license key: <code>${licenseKey}</code></p>
-              <hr>
-              <p>Need help? Reply to this email or check the <a href="https://github.com/StevoKeano/ContextCut-PRO">setup guide</a>.</p>
-            `,
+        html: `<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1.0">
+<title>Welcome to ContextCut PRO</title>
+</head>
+<body style="margin:0;padding:0;background:#F8FAFC;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Arial,sans-serif;">
+<table width="100%" cellpadding="0" cellspacing="0" style="background:#F8FAFC;padding:40px 0;">
+<tr><td align="center">
+<table width="560" cellpadding="0" cellspacing="0" style="max-width:560px;width:100%;">
+
+  <tr><td style="background:#0F172A;border-radius:12px 12px 0 0;padding:32px 36px 24px;">
+    <p style="margin:0 0 10px;font-size:11px;font-weight:700;letter-spacing:3px;color:#0EA5E9;text-transform:uppercase;">ContextCut PRO</p>
+    <h1 style="margin:0;font-size:24px;font-weight:700;color:#F8FAFC;line-height:1.3;">Your AI privacy layer<br>is ready to install.</h1>
+  </td></tr>
+
+  <tr><td style="background:#FFFFFF;padding:32px 36px;">
+    <p style="margin:0 0 20px;font-size:15px;color:#334155;line-height:1.7;">
+      Thank you for your purchase. ContextCut PRO sits silently between your AI tools and your local LLM &mdash;
+      injecting only what matters, keeping everything on your machine.
+    </p>
+
+    <table width="100%" cellpadding="0" cellspacing="0" style="margin:0 0 28px;">
+    <tr><td style="background:#F1F5F9;border:1px solid #E2E8F0;border-radius:8px;padding:18px 22px;">
+      <p style="margin:0 0 4px;font-size:10px;font-weight:700;letter-spacing:2px;color:#64748B;text-transform:uppercase;">Your License Key</p>
+      <p style="margin:0 0 8px;font-size:13px;font-family:'Courier New',monospace;color:#0F172A;word-break:break-all;">${licenseKey}</p>
+      <p style="margin:0;font-size:12px;color:#94A3B8;">${maxSeats} concurrent seats &nbsp;&middot;&nbsp; Lifetime license &nbsp;&middot;&nbsp; Keep this email</p>
+    </td></tr>
+    </table>
+
+    <table width="100%" cellpadding="0" cellspacing="0" style="margin:0 0 28px;">
+    <tr><td align="center">
+      <a href="${installUrl}"
+         style="display:inline-block;background:#0EA5E9;color:#FFFFFF;font-size:15px;font-weight:700;text-decoration:none;padding:15px 36px;border-radius:8px;">
+        Get Started &rarr;
+      </a>
+      <p style="margin:10px 0 0;font-size:12px;color:#94A3B8;">Opens your personal install page &nbsp;&middot;&nbsp; No account needed</p>
+    </td></tr>
+    </table>
+
+    <table width="100%" cellpadding="0" cellspacing="0" style="margin:0 0 24px;">
+    <tr><td style="border-left:3px solid #0EA5E9;padding:4px 0 4px 18px;">
+      <p style="margin:0 0 4px;font-size:11px;font-weight:700;letter-spacing:1px;color:#94A3B8;text-transform:uppercase;">What happens when you click</p>
+      <p style="margin:0 0 6px;font-size:14px;color:#334155;line-height:1.7;"><span style="color:#0EA5E9;font-weight:700;">1&nbsp;</span> Your install page opens in the browser</p>
+      <p style="margin:0 0 6px;font-size:14px;color:#334155;line-height:1.7;"><span style="color:#0EA5E9;font-weight:700;">2&nbsp;</span> Choose macOS or Linux &mdash; one command installs everything</p>
+      <p style="margin:0 0 6px;font-size:14px;color:#334155;line-height:1.7;"><span style="color:#0EA5E9;font-weight:700;">3&nbsp;</span> Answer a few prompts (Ollama address, ports &mdash; defaults work)</p>
+      <p style="margin:0;font-size:14px;color:#334155;line-height:1.7;"><span style="color:#0EA5E9;font-weight:700;">4&nbsp;</span> Dashboard opens at <span style="font-family:monospace;color:#0EA5E9;">http://localhost:18787</span></p>
+    </td></tr>
+    </table>
+
+    <table width="100%" cellpadding="0" cellspacing="0" style="margin:0 0 24px;">
+    <tr><td style="background:#F0FDF4;border:1px solid #BBF7D0;border-radius:8px;padding:14px 18px;">
+      <p style="margin:0;font-size:13px;color:#166534;line-height:1.6;">
+        <strong>100% local.</strong> Your documents, queries, and AI responses never leave your machine.
+        No cloud. No telemetry. No subscriptions.
+      </p>
+    </td></tr>
+    </table>
+
+    <p style="margin:0;font-size:14px;color:#334155;line-height:1.7;">
+      Questions? Just reply to this email &mdash; you will reach a human.
+    </p>
+  </td></tr>
+
+  <tr><td style="background:#F8FAFC;border:1px solid #E2E8F0;border-top:none;border-radius:0 0 12px 12px;padding:18px 36px;">
+    <p style="margin:0 0 4px;font-size:11px;font-weight:700;letter-spacing:1px;color:#94A3B8;text-transform:uppercase;">Technical reference</p>
+    <p style="margin:0 0 4px;font-size:12px;color:#94A3B8;font-family:monospace;word-break:break-all;">Install URL: ${installUrl}</p>
+    <p style="margin:0;font-size:12px;color:#94A3B8;">Docs: <a href="https://github.com/StevoKeano/ContextCut-PRO" style="color:#0EA5E9;">github.com/StevoKeano/ContextCut-PRO</a></p>
+  </td></tr>
+
+  <tr><td style="padding:20px 36px 0;">
+    <p style="margin:0;font-size:12px;color:#94A3B8;text-align:center;line-height:1.6;">
+      ContextCut PRO &nbsp;&middot;&nbsp; One-time purchase &nbsp;&middot;&nbsp; ${maxSeats} seats<br>
+      <a href="mailto:stevekean@gmail.com" style="color:#94A3B8;">stevekean@gmail.com</a>
+    </p>
+  </td></tr>
+
+</table>
+</td></tr>
+</table>
+</body>
+</html>`,
       }),
     });
     const resendBody = await resendRes.json();
@@ -83,6 +152,11 @@ async function handleInstallLink(request, env, licenseKey) {
     return new Response("Invalid or expired license key.", { status: 401 });
   }
 
+  const ua = request.headers.get("User-Agent") || "";
+  const isBrowser = ua.includes("Mozilla") || ua.includes("Chrome") || ua.includes("Safari");
+
+  const installUrl = `https://api.contextcut-pro.com/install/${licenseKey}`;
+
   const installScript = `#!/bin/bash
 set -e
 export CONTEXTCUT_LICENSE_KEY="${licenseKey}"
@@ -95,9 +169,108 @@ bash /tmp/contextcut-install.sh
 rm -f /tmp/contextcut-install.sh
 `;
 
-  return new Response(installScript, {
-    headers: { "Content-Type": "text/x-sh" },
+  if (!isBrowser) {
+    return new Response(installScript, { headers: { "Content-Type": "text/x-sh" } });
+  }
+
+  const html = `<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1.0">
+<title>Install ContextCut PRO</title>
+<style>
+*{box-sizing:border-box;margin:0;padding:0}
+body{background:#0F172A;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Arial,sans-serif;min-height:100vh;display:flex;align-items:center;justify-content:center;padding:24px}
+.card{background:#1E293B;border:1px solid #334155;border-radius:16px;max-width:640px;width:100%;overflow:hidden}
+.hdr{background:#0EA5E9;padding:28px 36px}
+.hdr h1{color:#fff;font-size:22px;font-weight:700;margin-bottom:4px}
+.hdr p{color:#E0F2FE;font-size:14px}
+.bdy{padding:32px 36px}
+.key-box{background:#0F172A;border:1px solid #334155;border-radius:8px;padding:16px 20px;margin-bottom:28px}
+.kl{font-size:10px;font-weight:700;letter-spacing:2px;color:#64748B;text-transform:uppercase;margin-bottom:6px}
+.kv{font-family:'Courier New',monospace;font-size:13px;color:#7DD3FC;word-break:break-all}
+.steps{border-left:3px solid #0EA5E9;padding:4px 0 4px 20px;margin-bottom:24px}
+.step{font-size:14px;color:#CBD5E1;line-height:1.8;margin-bottom:4px}
+.step b{color:#0EA5E9}
+.tabs{display:flex;gap:8px;margin-bottom:16px}
+.tab{flex:1;padding:11px;border:2px solid #334155;border-radius:8px;background:transparent;color:#94A3B8;font-size:14px;font-weight:600;cursor:pointer;transition:all .15s}
+.tab.active{border-color:#0EA5E9;background:#0EA5E9;color:#fff}
+.cmd-box{background:#0F172A;border:1px solid #334155;border-radius:8px;padding:16px 20px;margin-bottom:8px;position:relative}
+.cmd{font-family:'Courier New',monospace;font-size:13px;color:#7DD3FC;word-break:break-all;line-height:1.6;padding-right:80px}
+.copy{position:absolute;top:12px;right:12px;background:#1E293B;border:1px solid #334155;border-radius:6px;color:#94A3B8;font-size:12px;padding:6px 12px;cursor:pointer;transition:all .15s}
+.copy:hover{background:#334155;color:#fff}
+.copy.ok{background:#22C55E;border-color:#22C55E;color:#fff}
+.hint{font-size:12px;color:#64748B;line-height:1.6;margin-bottom:24px}
+.priv{background:#0F172A;border:1px solid #1E3A2E;border-radius:8px;padding:14px 18px;margin-bottom:24px}
+.priv p{font-size:13px;color:#4ADE80;line-height:1.6}
+.foot{font-size:13px;color:#64748B;text-align:center}
+.foot a{color:#0EA5E9;text-decoration:none}
+code{color:#7DD3FC}
+</style>
+</head>
+<body>
+<div class="card">
+  <div class="hdr">
+    <h1>Install ContextCut PRO</h1>
+    <p>Your license is verified &mdash; follow the steps below.</p>
+  </div>
+  <div class="bdy">
+    <div class="key-box">
+      <div class="kl">Your License Key</div>
+      <div class="kv">${licenseKey}</div>
+    </div>
+    <div class="steps">
+      <div class="step"><b>1 &nbsp;</b>Open Terminal &mdash; press <kbd style="background:#334155;color:#fff;padding:2px 6px;border-radius:4px;font-size:12px">&#x2318; Space</kbd> type <em>Terminal</em>, press Enter</div>
+      <div class="step"><b>2 &nbsp;</b>Select your OS below, click <strong>Copy</strong>, paste into Terminal, press Enter</div>
+      <div class="step"><b>3 &nbsp;</b>Answer the prompts (Ollama address, ports &mdash; defaults work for most setups)</div>
+      <div class="step"><b>4 &nbsp;</b>Dashboard opens at <code>http://localhost:18787</code></div>
+    </div>
+    <div class="tabs">
+      <button class="tab active" id="tab-mac" onclick="show('mac')">&#63743;&nbsp; macOS</button>
+      <button class="tab" id="tab-linux" onclick="show('linux')">&#x1F427;&nbsp; Linux</button>
+    </div>
+    <div id="blk-mac">
+      <div class="cmd-box">
+        <div class="cmd" id="cmd-mac">curl -fsSL "${installUrl}" | bash</div>
+        <button class="copy" onclick="cp('cmd-mac',this)">Copy</button>
+      </div>
+      <p class="hint">Your license key is pre-loaded &mdash; no need to type it separately.</p>
+    </div>
+    <div id="blk-linux" style="display:none">
+      <div class="cmd-box">
+        <div class="cmd" id="cmd-linux">curl -fsSL "${installUrl}" | bash</div>
+        <button class="copy" onclick="cp('cmd-linux',this)">Copy</button>
+      </div>
+      <p class="hint">Your license key is pre-loaded &mdash; no need to type it separately.</p>
+    </div>
+    <div class="priv">
+      <p><strong>100% local.</strong> Your documents and queries never leave your machine. No cloud, no telemetry, no subscriptions.</p>
+    </div>
+    <div class="foot">
+      Need help? &nbsp;<a href="mailto:stevekean@gmail.com">Reply to your purchase email</a> &nbsp;&middot;&nbsp; <a href="https://github.com/StevoKeano/ContextCut-PRO">Documentation</a>
+    </div>
+  </div>
+</div>
+<script>
+function show(os){
+  document.getElementById('blk-mac').style.display=os==='mac'?'':'none';
+  document.getElementById('blk-linux').style.display=os==='linux'?'':'none';
+  document.getElementById('tab-mac').className='tab'+(os==='mac'?' active':'');
+  document.getElementById('tab-linux').className='tab'+(os==='linux'?' active':'');
+}
+function cp(id,btn){
+  navigator.clipboard.writeText(document.getElementById(id).innerText).then(()=>{
+    btn.textContent='Copied!';btn.classList.add('ok');
+    setTimeout(()=>{btn.textContent='Copy';btn.classList.remove('ok');},2000);
   });
+}
+if(navigator.platform.toLowerCase().includes('linux'))show('linux');
+</script>
+</body>
+</html>`;
+
+  return new Response(html, { headers: { "Content-Type": "text/html;charset=UTF-8" } });
 }
 
 async function handleValidate(request, env) {
@@ -125,11 +298,13 @@ async function handleValidate(request, env) {
     });
   }
 
+  const instance_secret = crypto.randomUUID();
   instances[instance_id] = {
     fingerprint,
     activated_at: new Date().toISOString(),
     last_heartbeat: Date.now(),
     hostname: fingerprint?.hostname || "unknown",
+    instance_secret,
   };
 
   await env.LICENSE_KV.put(key, JSON.stringify(instances));
@@ -140,6 +315,7 @@ async function handleValidate(request, env) {
     seats: MAX_SEATS,
     message: "License activated",
     activated_at: instances[instance_id].activated_at,
+    instance_secret,
   });
 }
 
@@ -168,7 +344,11 @@ async function handleHeartbeat(request, env) {
 
 async function handleRelease(request, env) {
   const body = await request.json();
-  const { license_key, instance_id } = body;
+  const { license_key, instance_id, instance_secret } = body;
+
+  if (!instance_secret) {
+    return json(400, { valid: false, error: "instance_secret required" });
+  }
 
   const key = `license:${license_key}`;
   const stored = await env.LICENSE_KV.get(key);
@@ -179,10 +359,16 @@ async function handleRelease(request, env) {
 
   const instances = JSON.parse(stored);
 
-  if (instances[instance_id]) {
-    delete instances[instance_id];
-    await env.LICENSE_KV.put(key, JSON.stringify(instances));
+  if (!instances[instance_id]) {
+    return json(404, { valid: false, error: "Instance not found" });
   }
+
+  if (instances[instance_id].instance_secret !== instance_secret) {
+    return json(403, { valid: false, error: "Unauthorized" });
+  }
+
+  delete instances[instance_id];
+  await env.LICENSE_KV.put(key, JSON.stringify(instances));
 
   return json(200, { valid: true, message: "Seat released" });
 }

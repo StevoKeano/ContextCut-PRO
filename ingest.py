@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-ContextCut  — Qdrant ingest + file watcher
+ContextCut — Qdrant ingest + file watcher
 
 Embeds your markdown knowledge base into Qdrant using Voyage AI.
 
@@ -43,7 +43,7 @@ except ImportError:
     pass
 
 from qdrant_client import QdrantClient
-from qdrant_client.models import Distance, VectorParams, PointStruct
+from qdrant_client.models import Distance, VectorParams, PointStruct, PointIdsList
 
 # ── Config ────────────────────────────────────────────────────────────────────
 QDRANT_HOST  = os.getenv("CONTEXTCUT_QDRANT_HOST", "localhost")
@@ -267,6 +267,19 @@ def watch():
             p = Path(event.src_path)
             if should_ingest(p) and self._debounce(event.src_path):
                 ingest_file(p)
+
+        def on_deleted(self, event):
+            p = Path(event.src_path)
+            if should_ingest(p) and self._debounce(event.src_path):
+                fid = int(file_id(p)[:8], 16)
+                try:
+                    qc.delete(
+                        collection_name=COLLECTION,
+                        points_selector=PointIdsList(points=[fid])
+                    )
+                    print(f"  [del] {p.name} — removed from Qdrant")
+                except Exception as e:
+                    print(f"  [!] Failed to remove {p.name} from Qdrant: {e}")
 
     ensure_collection()
     ingest_all()

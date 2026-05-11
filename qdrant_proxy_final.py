@@ -49,7 +49,7 @@ except ImportError:
     pass
 
 from qdrant_client import QdrantClient
-from qdrant_client.models import Distance, VectorParams
+from qdrant_client.models import Distance, VectorParams, PointIdsList
 
 EMBED_DIM_MAP = {
     "nomic-embed-text": 768,
@@ -69,6 +69,22 @@ def _get_embed_dim(model: str) -> int:
         return 1024
     base = model.split(":")[0]
     return EMBED_DIM_MAP.get(model, EMBED_DIM_MAP.get(base, 1024))
+
+def _file_id(path: Path) -> str:
+    return hashlib.md5(str(path).encode()).hexdigest()
+
+def _remove_qdrant_point(path: Path):
+    try:
+        qc = QdrantClient(host=QDRANT_HOST, port=QDRANT_PORT)
+        fid = int(_file_id(path)[:8], 16)
+        qc.delete(
+            collection_name=COLLECTION,
+            points_selector=PointIdsList(points=[fid])
+        )
+        return True
+    except Exception as e:
+        print(f"[contextcut] Qdrant delete error for {path.name}: {e}")
+        return False
 
 # ── Secure Credential Manager (Machine-bound encryption) ─────────────────────
 class CredentialManager:
@@ -1270,6 +1286,8 @@ tr:hover td{{background:var(--surf2)}}
 .session-badge{{font-size:11px;color:var(--muted);background:var(--surf2);border:1px solid var(--border);border-radius:3px;padding:3px 8px;font-family:'JetBrains Mono',monospace}}
 .clear-btn{{background:transparent;border:1px solid var(--border);color:var(--muted);border-radius:3px;padding:3px 10px;font-size:11px;cursor:pointer;font-family:'JetBrains Mono',monospace}}
 .clear-btn:hover{{color:var(--text);border-color:var(--accent)}}
+.fb-file:hover{{background:var(--hover,#1e293b)}}
+.fb-file:active{{background:var(--active,#0f172a)}}
 .chat-messages{{flex:1;overflow-y:auto;padding:14px;display:flex;flex-direction:column;gap:10px}}
 .chat-messages::-webkit-scrollbar{{width:4px}}.chat-messages::-webkit-scrollbar-thumb{{background:var(--border);border-radius:2px}}
 .msg{{max-width:88%}}
@@ -1323,6 +1341,7 @@ tr:hover td{{background:var(--surf2)}}
   <div class="logo">ContextCut<span>-PRO</span></div>
   <div class="hinfo">{UPSTREAM} · Qdrant {QDRANT_HOST}:{QDRANT_PORT} · min_score={MIN_SCORE} · top_k={TOP_K}</div>
   <a href="/settings" style="background:transparent;border:1px solid var(--border);color:var(--muted);border-radius:3px;padding:3px 10px;font-size:11px;cursor:pointer;font-family:'JetBrains Mono',monospace;text-decoration:none">Settings ⚙</a>
+  <button onclick="openFileBrowser()" style="background:transparent;border:1px solid var(--border);color:var(--muted);border-radius:3px;padding:3px 10px;font-size:11px;cursor:pointer;font-family:'JetBrains Mono',monospace">Browse Files 📂</button>
   <div class="live"><span class="dot"></span>live</div>
 </div>
 
@@ -2033,6 +2052,163 @@ function loadEmbedBadge() {{
     .catch(() => {{}});
 }}
 loadEmbedBadge();
+
+// ── File Browser Modal ─────────────────────────────────────────────────────────
+let fbOpen = false;
+function openFileBrowser() {{
+  if (fbOpen) return;
+  fbOpen = true;
+  fetch('/api/knowledge/files')
+    .then(r => r.json())
+    .then(data => {{
+      const overlay = document.createElement('div');
+      overlay.id = 'fbOverlay';
+      overlay.style.cssText = 'position:fixed;top:0;left:0;width:100%;height:100%;background:rgba(0,0,0,.55);z-index:9999;display:flex;align-items:center;justify-content:center';
+      overlay.onclick = (e) => {{ if (e.target === overlay) closeFB(overlay); }};
+
+      let listHtml = data.files.map(f =>
+        '<div class="fb-file" data-path="'+escAttr(f.path)+'" onclick="fbOpenFile(this)" style="padding:6px 10px;cursor:pointer;border-radius:4px;display:flex;justify-content:space-between">' +
+          '<span>'+esc(f.name)+'</span>' +
+          '<span style="color:var(--muted);font-size:10px">'+(f.size||0)+'B</span>' +
+        '</div>'
+      ).join('') || '<div style="color:var(--muted);padding:20px;text-align:center">No .md files found</div>';
+
+      overlay.innerHTML =
+        '<div style="background:#131a2b;border:1px solid var(--border);border-radius:8px;width:700px;max-width:95vw;max-height:85vh;display:flex;flex-direction:column;font-family:JetBrains Mono,monospace;font-size:12px;color:var(--text)">' +
+          '<div style="display:flex;justify-content:space-between;align-items:center;padding:16px 20px;border-bottom:1px solid var(--border)">' +
+            '<strong style="font-size:14px">📂 Knowledge Files</strong>' +
+            '<div style="display:flex;gap:8px;align-items:center">' +
+              '<button onclick="fbUploadFile()" style="background:var(--accent);color:#000;border:none;border-radius:4px;padding:4px 12px;font-size:11px;cursor:pointer;font-family:inherit;font-weight:600">+ New</button>' +
+              '<button id="fbCloseBtn" style="background:none;border:none;color:var(--muted);font-size:18px;cursor:pointer">&times;</button>' +
+            '</div>' +
+          '</div>' +
+          '<div style="display:flex;flex:1;min-height:0">' +
+            '<div id="fbFileList" style="width:220px;min-width:180px;overflow-y:auto;border-right:1px solid var(--border);padding:6px 0">'+listHtml+'</div>' +
+            '<div id="fbEditor" style="flex:1;display:flex;flex-direction:column;min-width:0">' +
+              '<div id="fbEditorPlaceholder" style="flex:1;display:flex;align-items:center;justify-content:center;color:var(--muted);font-size:12px">Select a file to edit</div>' +
+              '<div id="fbEditorContent" style="display:none;flex:1;flex-direction:column;min-height:0">' +
+                '<div id="fbFileName" style="padding:8px 14px;font-size:11px;color:var(--accent);border-bottom:1px solid var(--border)"></div>' +
+                '<textarea id="fbTextArea" style="flex:1;background:#0d1320;color:var(--text);border:none;padding:12px 14px;font-family:JetBrains Mono,monospace;font-size:12px;resize:none;outline:none" spellcheck="false"></textarea>' +
+                '<div style="display:flex;gap:8px;justify-content:flex-end;padding:8px 14px;border-top:1px solid var(--border)">' +
+                  '<button id="fbDeleteBtn" onclick="fbDeleteFile()" style="background:#7f1d1d;color:#fca5a5;border:1px solid #dc2626;border-radius:4px;padding:5px 14px;font-size:11px;cursor:pointer;font-family:inherit">Delete</button>' +
+                  '<button id="fbSaveBtn" onclick="fbSaveFile()" style="background:var(--accent);color:#000;border:none;border-radius:4px;padding:5px 14px;font-size:11px;cursor:pointer;font-family:inherit;font-weight:600">Save</button>' +
+                '</div>' +
+              '</div>' +
+            '</div>' +
+          '</div>' +
+          '<div id="fbMsg" style="padding:6px 20px;font-size:10px;min-height:16px;color:var(--muted);border-top:1px solid var(--border)"></div>' +
+        '</div>';
+
+      document.body.appendChild(overlay);
+      document.getElementById('fbCloseBtn').onclick = () => closeFB(overlay);
+    }});
+}}
+
+function closeFB(overlay) {{
+  fbOpen = false;
+  overlay.remove();
+}}
+
+function escAttr(s) {{ return (s||'').replace(/&/g,'&amp;').replace(/"/g,'&quot;').replace(/'/g,'&#39;').replace(/</g,'&lt;').replace(/>/g,'&gt;'); }}
+
+let _fbCurrentPath = '';
+
+function fbOpenFile(el) {{
+  document.querySelectorAll('.fb-file').forEach(e => e.style.background = '');
+  el.style.background = '#1e293b';
+  _fbCurrentPath = el.dataset.path;
+  const name = el.querySelector('span').textContent;
+  document.getElementById('fbFileName').textContent = name;
+  document.getElementById('fbEditorPlaceholder').style.display = 'none';
+  document.getElementById('fbEditorContent').style.display = 'flex';
+  document.getElementById('fbTextArea').value = 'Loading...';
+  document.getElementById('fbTextArea').disabled = true;
+  document.getElementById('fbMsg').textContent = '';
+  fetch('/api/knowledge/read?path='+encodeURIComponent(_fbCurrentPath))
+    .then(r => r.json())
+    .then(d => {{
+      if (d.error) {{ document.getElementById('fbTextArea').value = 'Error: '+d.error; return; }}
+      document.getElementById('fbTextArea').value = d.content;
+      document.getElementById('fbTextArea').disabled = false;
+      document.getElementById('fbTextArea').focus();
+    }})
+    .catch(() => {{ document.getElementById('fbTextArea').value = 'Network error'; }});
+}}
+
+function fbSaveFile() {{
+  const content = document.getElementById('fbTextArea').value;
+  const btn = document.getElementById('fbSaveBtn');
+  btn.disabled = true;
+  btn.textContent = 'Saving...';
+  fetch('/api/knowledge/save', {{
+    method: 'POST',
+    headers: {{'Content-Type':'application/json'}},
+    body: JSON.stringify({{path: _fbCurrentPath, content: content}})
+  }})
+  .then(r => r.json())
+  .then(d => {{
+    const msg = document.getElementById('fbMsg');
+    if (d.ok) {{ msg.innerHTML = '<span style="color:#4ade80">Saved</span>'; }}
+    else {{ msg.innerHTML = '<span style="color:#f87171">Error: '+(d.error||'')+'</span>'; }}
+    btn.disabled = false;
+    btn.textContent = 'Save';
+  }})
+  .catch(e => {{
+    document.getElementById('fbMsg').innerHTML = '<span style="color:#f87171">Network error</span>';
+    btn.disabled = false;
+    btn.textContent = 'Save';
+  }});
+}}
+
+function fbDeleteFile() {{
+  if (!confirm('Delete this file? The Qdrant vector will also be removed.')) return;
+  const btn = document.getElementById('fbDeleteBtn');
+  btn.disabled = true;
+  btn.textContent = 'Deleting...';
+  fetch('/api/knowledge/delete', {{
+    method: 'POST',
+    headers: {{'Content-Type':'application/json'}},
+    body: JSON.stringify({{path: _fbCurrentPath}})
+  }})
+  .then(r => r.json())
+  .then(d => {{
+    if (d.ok) {{
+      closeFB(document.getElementById('fbOverlay'));
+      openFileBrowser();
+    }} else {{
+      document.getElementById('fbMsg').innerHTML = '<span style="color:#f87171">Error: '+(d.error||'')+'</span>';
+      btn.disabled = false;
+      btn.textContent = 'Delete';
+    }}
+  }})
+  .catch(e => {{
+    document.getElementById('fbMsg').innerHTML = '<span style="color:#f87171">Network error</span>';
+    btn.disabled = false;
+    btn.textContent = 'Delete';
+  }});
+}}
+
+function fbUploadFile() {{
+  const name = prompt('New .md filename:', '');
+  if (!name) return;
+  if (!name.endsWith('.md')) {{ alert('Only .md files allowed.'); return; }}
+  if (name.includes('/') || name.includes('\\\\')) {{ alert('Invalid filename.'); return; }}
+  fetch('/api/knowledge/upload', {{
+    method: 'POST',
+    headers: {{'Content-Type':'application/json'}},
+    body: JSON.stringify({{name: name, content: ''}})
+  }})
+  .then(r => r.json())
+  .then(d => {{
+    if (d.ok) {{
+      closeFB(document.getElementById('fbOverlay'));
+      openFileBrowser();
+    }} else {{
+      alert('Upload failed: '+(d.error||''));
+    }}
+  }})
+  .catch(e => {{ alert('Network error: '+e.message); }});
+}}
 </script>
 </body></html>"""
 
@@ -2165,6 +2341,63 @@ class DashboardHandler(_SuppressBrokenPipe, BaseHTTPRequestHandler):
             self.send_response(200)
             self.send_header("Content-Type", "application/json")
             self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+            return
+        if self.path == "/api/knowledge/files":
+            import glob as _glob
+            md_files = sorted(KB_DIR.glob("*.md"))
+            files = []
+            for f in md_files:
+                files.append({
+                    "name": f.name,
+                    "path": str(f),
+                    "size": f.stat().st_size,
+                    "modified": datetime.fromtimestamp(f.stat().st_mtime).isoformat(),
+                })
+            body = json.dumps({"files": files}).encode()
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Length", str(len(body)))
+            self.send_header("Cache-Control", "no-cache")
+            self.end_headers()
+            self.wfile.write(body)
+            return
+        if self.path.startswith("/api/knowledge/read"):
+            from urllib.parse import urlparse, parse_qs
+            qs = parse_qs(urlparse(self.path).query)
+            fp = qs.get("path", [None])[0]
+            if not fp:
+                body = json.dumps({"error": "path required"}).encode()
+                self.send_response(400)
+                self.send_header("Content-Type", "application/json")
+                self.send_header("Content-Length", str(len(body)))
+                self.end_headers()
+                self.wfile.write(body)
+                return
+            fpath = Path(fp)
+            if not fpath.suffix == ".md" or not fpath.resolve().absolute().as_posix().startswith(KB_DIR.resolve().absolute().as_posix()):
+                body = json.dumps({"error": "Forbidden"}).encode()
+                self.send_response(403)
+                self.send_header("Content-Type", "application/json")
+                self.send_header("Content-Length", str(len(body)))
+                self.end_headers()
+                self.wfile.write(body)
+                return
+            if not fpath.exists():
+                body = json.dumps({"error": "Not found"}).encode()
+                self.send_response(404)
+                self.send_header("Content-Type", "application/json")
+                self.send_header("Content-Length", str(len(body)))
+                self.end_headers()
+                self.wfile.write(body)
+                return
+            content = fpath.read_text(encoding="utf-8", errors="replace")
+            body = json.dumps({"name": fpath.name, "content": content}).encode()
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Length", str(len(body)))
+            self.send_header("Cache-Control", "no-cache")
             self.end_headers()
             self.wfile.write(body)
             return
@@ -2532,6 +2765,99 @@ class DashboardHandler(_SuppressBrokenPipe, BaseHTTPRequestHandler):
             except Exception as e:
                 err = json.dumps({"error": str(e).encode("ascii", errors="replace").decode("ascii")}).encode()
                 self.send_response(500)
+                self.send_header("Content-Type", "application/json")
+                self.send_header("Content-Length", str(len(err)))
+                self.end_headers()
+                self.wfile.write(err)
+                return
+
+        # ── Knowledge: save file ──
+        if self.path == "/api/knowledge/save":
+            try:
+                body = json.loads(raw_body)
+                fp = body.get("path", "")
+                content = body.get("content", "")
+                fpath = Path(fp)
+                if not fpath.suffix == ".md" or not fpath.resolve().absolute().as_posix().startswith(KB_DIR.resolve().absolute().as_posix()):
+                    resp = json.dumps({"error": "Forbidden"}).encode()
+                    self.send_response(403)
+                else:
+                    fpath.write_text(content, encoding="utf-8")
+                    print(f"[contextcut] File saved: {fpath.name}")
+                    resp = json.dumps({"ok": True}).encode()
+                    self.send_response(200)
+                self.send_header("Content-Type", "application/json")
+                self.send_header("Content-Length", str(len(resp)))
+                self.end_headers()
+                self.wfile.write(resp)
+                return
+            except Exception as e:
+                err = json.dumps({"error": str(e)}).encode()
+                self.send_response(400)
+                self.send_header("Content-Type", "application/json")
+                self.send_header("Content-Length", str(len(err)))
+                self.end_headers()
+                self.wfile.write(err)
+                return
+
+        # ── Knowledge: upload new file ──
+        if self.path == "/api/knowledge/upload":
+            try:
+                body = json.loads(raw_body)
+                name = body.get("name", "").strip()
+                content = body.get("content", "")
+                if not name.endswith(".md"):
+                    resp = json.dumps({"error": "Only .md files allowed"}).encode()
+                    self.send_response(400)
+                elif "/" in name or "\\" in name:
+                    resp = json.dumps({"error": "Invalid filename"}).encode()
+                    self.send_response(400)
+                else:
+                    fpath = KB_DIR / name
+                    fpath.write_text(content, encoding="utf-8")
+                    print(f"[contextcut] File created: {fpath.name}")
+                    resp = json.dumps({"ok": True, "path": str(fpath)}).encode()
+                    self.send_response(200)
+                self.send_header("Content-Type", "application/json")
+                self.send_header("Content-Length", str(len(resp)))
+                self.end_headers()
+                self.wfile.write(resp)
+                return
+            except Exception as e:
+                err = json.dumps({"error": str(e)}).encode()
+                self.send_response(400)
+                self.send_header("Content-Type", "application/json")
+                self.send_header("Content-Length", str(len(err)))
+                self.end_headers()
+                self.wfile.write(err)
+                return
+
+        # ── Knowledge: delete file + Qdrant vector ──
+        if self.path == "/api/knowledge/delete":
+            try:
+                body = json.loads(raw_body)
+                fp = body.get("path", "")
+                fpath = Path(fp)
+                if not fpath.suffix == ".md" or not fpath.resolve().absolute().as_posix().startswith(KB_DIR.resolve().absolute().as_posix()):
+                    resp = json.dumps({"error": "Forbidden"}).encode()
+                    self.send_response(403)
+                elif not fpath.exists():
+                    resp = json.dumps({"error": "Not found"}).encode()
+                    self.send_response(404)
+                else:
+                    _remove_qdrant_point(fpath)
+                    fpath.unlink()
+                    print(f"[contextcut] File deleted: {fpath.name}")
+                    resp = json.dumps({"ok": True}).encode()
+                    self.send_response(200)
+                self.send_header("Content-Type", "application/json")
+                self.send_header("Content-Length", str(len(resp)))
+                self.end_headers()
+                self.wfile.write(resp)
+                return
+            except Exception as e:
+                err = json.dumps({"error": str(e)}).encode()
+                self.send_response(400)
                 self.send_header("Content-Type", "application/json")
                 self.send_header("Content-Length", str(len(err)))
                 self.end_headers()
