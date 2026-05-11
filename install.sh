@@ -2,7 +2,7 @@
 # ContextCut installer — macOS / Linux
 # https://github.com/StevoKeano/ContextCut
 
-REPO="https://raw.githubusercontent.com/StevoKeano/ContextCut-PRO/main"
+REPO="${REPO_OVERRIDE:-https://raw.githubusercontent.com/StevoKeano/ContextCut-PRO/main}"
 INSTALL_DIR="$HOME/contextcut"
 LOG_DIR="$HOME/.contextcut/logs"
 PLIST_PROXY="$HOME/Library/LaunchAgents/ai.contextcut.proxy.plist"
@@ -364,7 +364,10 @@ if [ -f "$PROXY_PIDFILE" ] && kill -0 $(cat "$PROXY_PIDFILE") 2>/dev/null; then
   exit 1
 fi
 # Source env for proxy (uses pre-existing values; proxy will sync .env after starting)
+# Source and export env for proxy (proxy reads from os.environ)
+set -a
 source "$INST/.env"
+set +a
 "$INST/venv/bin/python" "$INST/qdrant_proxy_final.py" &
 echo $! > "$PROXY_PIDFILE"
 

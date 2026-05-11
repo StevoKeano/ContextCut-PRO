@@ -638,6 +638,9 @@ def _sync_env_on_startup():
             _EMBED_MODE = env_lines.get("CONTEXTCUT_EMBED_MODE", "")
         if not _LOCAL_EMBED:
             _LOCAL_EMBED = env_lines.get("CONTEXTCUT_EMBED_MODEL", "")
+        # Default local embed model if mode is ollama but no model specified
+        if _EMBED_MODE == "ollama" and not _LOCAL_EMBED:
+            _LOCAL_EMBED = "nomic-embed-text"
         if not _VK:
             _VK = env_lines.get("VOYAGE_API_KEY", "")
 
