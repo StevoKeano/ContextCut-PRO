@@ -182,38 +182,53 @@ rm -f /tmp/contextcut-install.sh
 <style>
 *{box-sizing:border-box;margin:0;padding:0}
 body{background:#0F172A;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Arial,sans-serif;min-height:100vh;display:flex;align-items:center;justify-content:center;padding:24px}
-.card{background:#1E293B;border:1px solid #334155;border-radius:16px;max-width:640px;width:100%;overflow:hidden}
+.card{background:#1E293B;border:1px solid #334155;border-radius:16px;max-width:680px;width:100%;overflow:hidden}
 .hdr{background:#0EA5E9;padding:28px 36px}
 .hdr h1{color:#fff;font-size:22px;font-weight:700;margin-bottom:4px}
 .hdr p{color:#E0F2FE;font-size:14px}
 .bdy{padding:32px 36px}
-.key-box{background:#0F172A;border:1px solid #334155;border-radius:8px;padding:16px 20px;margin-bottom:28px}
-.kl{font-size:10px;font-weight:700;letter-spacing:2px;color:#64748B;text-transform:uppercase;margin-bottom:6px}
+.key-box{background:#0F172A;border:1px solid #334155;border-radius:8px;padding:14px 20px;margin-bottom:24px}
+.kl{font-size:10px;font-weight:700;letter-spacing:2px;color:#64748B;text-transform:uppercase;margin-bottom:4px}
 .kv{font-family:'Courier New',monospace;font-size:13px;color:#7DD3FC;word-break:break-all}
 .steps{border-left:3px solid #0EA5E9;padding:4px 0 4px 20px;margin-bottom:24px}
 .step{font-size:14px;color:#CBD5E1;line-height:1.8;margin-bottom:4px}
 .step b{color:#0EA5E9}
-.tabs{display:flex;gap:8px;margin-bottom:16px}
-.tab{flex:1;padding:11px;border:2px solid #334155;border-radius:8px;background:transparent;color:#94A3B8;font-size:14px;font-weight:600;cursor:pointer;transition:all .15s}
-.tab.active{border-color:#0EA5E9;background:#0EA5E9;color:#fff}
-.cmd-box{background:#0F172A;border:1px solid #334155;border-radius:8px;padding:16px 20px;margin-bottom:8px;position:relative}
-.cmd{font-family:'Courier New',monospace;font-size:13px;color:#7DD3FC;word-break:break-all;line-height:1.6;padding-right:80px}
-.copy{position:absolute;top:12px;right:12px;background:#1E293B;border:1px solid #334155;border-radius:6px;color:#94A3B8;font-size:12px;padding:6px 12px;cursor:pointer;transition:all .15s}
-.copy:hover{background:#334155;color:#fff}
-.copy.ok{background:#22C55E;border-color:#22C55E;color:#fff}
-.hint{font-size:12px;color:#64748B;line-height:1.6;margin-bottom:24px}
+.form-grid{display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-bottom:20px}
+.fg{display:flex;flex-direction:column;gap:4px}
+.fg.full{grid-column:1/-1}
+.fg label{font-size:11px;font-weight:600;color:#64748B;text-transform:uppercase;letter-spacing:1px}
+.fg input{background:#0F172A;border:1px solid #334155;border-radius:6px;padding:10px 12px;color:#E2E8F0;font-size:13px;font-family:'Courier New',monospace;outline:none;transition:border-color .15s}
+.fg input:focus{border-color:#0EA5E9}
+.fg input::placeholder{color:#475569}
+.fg .hint{font-size:10px;color:#475569;margin-top:2px}
+.gen-btn{background:#0EA5E9;color:#fff;border:none;border-radius:8px;padding:14px 24px;font-size:15px;font-weight:700;cursor:pointer;width:100%;transition:background .15s;margin-bottom:8px}
+.gen-btn:hover{background:#0284C7}
+.gen-btn:disabled{opacity:.5;cursor:default}
+.term-box{background:#0F172A;border:1px solid #334155;border-radius:10px;overflow:hidden;margin-bottom:24px;display:none}
+.term-hdr{background:#1E293B;padding:10px 16px;display:flex;align-items:center;gap:8px;border-bottom:1px solid #334155}
+.term-dot{width:10px;height:10px;border-radius:50%}
+.term-dot.r{background:#EF4444}
+.term-dot.y{background:#EAB308}
+.term-dot.g{background:#22C55E}
+.term-title{font-size:12px;color:#64748B;flex:1}
+.term-body{padding:16px 20px;position:relative}
+.term-prompt{font-size:11px;color:#475569;margin-bottom:8px}
+.term-cmd{font-family:'Courier New',monospace;font-size:13px;color:#7DD3FC;word-break:break-all;line-height:1.7;padding-right:80px;white-space:pre-wrap}
+.term-copy{position:absolute;bottom:16px;right:20px;background:#1E293B;border:1px solid #334155;border-radius:6px;color:#94A3B8;font-size:12px;padding:6px 14px;cursor:pointer;transition:all .15s}
+.term-copy:hover{background:#334155;color:#fff}
+.term-copy.ok{background:#22C55E;border-color:#22C55E;color:#fff}
 .priv{background:#0F172A;border:1px solid #1E3A2E;border-radius:8px;padding:14px 18px;margin-bottom:24px}
 .priv p{font-size:13px;color:#4ADE80;line-height:1.6}
 .foot{font-size:13px;color:#64748B;text-align:center}
 .foot a{color:#0EA5E9;text-decoration:none}
-code{color:#7DD3FC}
+@media(max-width:560px){.form-grid{grid-template-columns:1fr}}
 </style>
 </head>
 <body>
 <div class="card">
   <div class="hdr">
     <h1>Install ContextCut PRO</h1>
-    <p>Your license is verified &mdash; follow the steps below.</p>
+    <p>Your license is verified &mdash; configure your setup below.</p>
   </div>
   <div class="bdy">
     <div class="key-box">
@@ -221,29 +236,79 @@ code{color:#7DD3FC}
       <div class="kv">${licenseKey}</div>
     </div>
     <div class="steps">
-      <div class="step"><b>1 &nbsp;</b>Open Terminal &mdash; press <kbd style="background:#334155;color:#fff;padding:2px 6px;border-radius:4px;font-size:12px">&#x2318; Space</kbd> type <em>Terminal</em>, press Enter</div>
-      <div class="step"><b>2 &nbsp;</b>Select your OS below, click <strong>Copy</strong>, paste into Terminal, press Enter</div>
-      <div class="step"><b>3 &nbsp;</b>Answer the prompts (Ollama address, ports &mdash; defaults work for most setups)</div>
+      <div class="step"><b>1 &nbsp;</b>Configure settings below &mdash; defaults work for most setups</div>
+      <div class="step"><b>2 &nbsp;</b>Click <strong>Generate Install Command</strong></div>
+      <div class="step"><b>3 &nbsp;</b>Copy the command, paste into Terminal, press Enter</div>
       <div class="step"><b>4 &nbsp;</b>Dashboard opens at <code>http://localhost:18787</code></div>
     </div>
-    <div class="tabs">
-      <button class="tab active" id="tab-mac" onclick="show('mac')">&#63743;&nbsp; macOS</button>
-      <button class="tab" id="tab-linux" onclick="show('linux')">&#x1F427;&nbsp; Linux</button>
-    </div>
-    <div id="blk-mac">
-      <div class="cmd-box">
-        <div class="cmd" id="cmd-mac">curl -fsSL "${installUrl}" | bash</div>
-        <button class="copy" onclick="cp('cmd-mac',this)">Copy</button>
+
+    <div class="form-grid">
+      <div class="fg full">
+        <label>Voyage AI API Key</label>
+        <input type="text" id="f-voyage" placeholder="leave blank for local Ollama embedding">
+        <span class="hint">Blank = 100% local with Ollama &nbsp;|&nbsp; Enter key = Voyage AI (cloud embeddings)</span>
       </div>
-      <p class="hint">Your license key is pre-loaded &mdash; no need to type it separately.</p>
-    </div>
-    <div id="blk-linux" style="display:none">
-      <div class="cmd-box">
-        <div class="cmd" id="cmd-linux">curl -fsSL "${installUrl}" | bash</div>
-        <button class="copy" onclick="cp('cmd-linux',this)">Copy</button>
+      <div class="fg" id="grp-model">
+        <label>Embedding Model</label>
+        <input type="text" id="f-model" value="nomic-embed-text" placeholder="nomic-embed-text">
+        <span class="hint">Only used when Voyage is blank</span>
       </div>
-      <p class="hint">Your license key is pre-loaded &mdash; no need to type it separately.</p>
+      <div class="fg">
+        <label>Ollama Host</label>
+        <input type="text" id="f-ollama-host" value="192.168.1.101">
+        <span class="hint">Your Ollama server address</span>
+      </div>
+      <div class="fg">
+        <label>Ollama Port</label>
+        <input type="text" id="f-ollama-port" value="11434">
+        <span class="hint">Default: 11434</span>
+      </div>
+      <div class="fg">
+        <label>Qdrant Host</label>
+        <input type="text" id="f-qdrant-host" value="localhost">
+        <span class="hint">Qdrant vector DB address</span>
+      </div>
+      <div class="fg">
+        <label>Qdrant Port</label>
+        <input type="text" id="f-qdrant-port" value="6333">
+        <span class="hint">Default: 6333</span>
+      </div>
+      <div class="fg">
+        <label>Proxy Port</label>
+        <input type="text" id="f-proxy-port" value="18788">
+      </div>
+      <div class="fg">
+        <label>Dashboard Port</label>
+        <input type="text" id="f-dash-port" value="18787">
+      </div>
+      <div class="fg">
+        <label>Context Limit</label>
+        <input type="text" id="f-ctx" value="8192">
+        <span class="hint">Max tokens per request</span>
+      </div>
+      <div class="fg">
+        <label>Min Relevance Score</label>
+        <input type="text" id="f-score" value="0.20">
+        <span class="hint">0.0 – 1.0 &nbsp;|&nbsp; Lower = more results</span>
+      </div>
     </div>
+
+    <button class="gen-btn" id="genBtn" onclick="generate()">Generate Install Command</button>
+
+    <div class="term-box" id="termBox">
+      <div class="term-hdr">
+        <span class="term-dot r"></span>
+        <span class="term-dot y"></span>
+        <span class="term-dot g"></span>
+        <span class="term-title">Terminal &mdash; bash</span>
+      </div>
+      <div class="term-body">
+        <div class="term-prompt">$ ▶</div>
+        <div class="term-cmd" id="termCmd"></div>
+        <button class="term-copy" id="copyBtn" onclick="copyCmd()">Copy</button>
+      </div>
+    </div>
+
     <div class="priv">
       <p><strong>100% local.</strong> Your documents and queries never leave your machine. No cloud, no telemetry, no subscriptions.</p>
     </div>
@@ -253,19 +318,51 @@ code{color:#7DD3FC}
   </div>
 </div>
 <script>
-function show(os){
-  document.getElementById('blk-mac').style.display=os==='mac'?'':'none';
-  document.getElementById('blk-linux').style.display=os==='linux'?'':'none';
-  document.getElementById('tab-mac').className='tab'+(os==='mac'?' active':'');
-  document.getElementById('tab-linux').className='tab'+(os==='linux'?' active':'');
+function esc(v){return v.replace(/"/g,'\\\\"').replace(/'/g,"\\\\'")}
+function generate(){
+  const voyage=document.getElementById('f-voyage').value;
+  const model=document.getElementById('f-model').value||'nomic-embed-text';
+  const ohost=document.getElementById('f-ollama-host').value||'localhost';
+  const oport=document.getElementById('f-ollama-port').value||'11434';
+  const qhost=document.getElementById('f-qdrant-host').value||'localhost';
+  const qport=document.getElementById('f-qdrant-port').value||'6333';
+  const pport=document.getElementById('f-proxy-port').value||'18788';
+  const dport=document.getElementById('f-dash-port').value||'18787';
+  const ctx=document.getElementById('f-ctx').value||'8192';
+  const score=document.getElementById('f-score').value||'0.20';
+
+  const lines=[
+    'curl -fsSL "'+esc('${installUrl}')+'" -o /tmp/cc-install.sh \\\\',
+    '  && VOYAGE_KEY="'+esc(voyage)+'" \\\\',
+    '  EMBED_MODEL="'+esc(model)+'" \\\\',
+    '  OLLAMA_HOST="'+esc(ohost)+'" \\\\',
+    '  OLLAMA_PORT="'+esc(oport)+'" \\\\',
+    '  QDRANT_HOST="'+esc(qhost)+'" \\\\',
+    '  QDRANT_PORT="'+esc(qport)+'" \\\\',
+    '  PROXY_PORT="'+esc(pport)+'" \\\\',
+    '  DASH_PORT="'+esc(dport)+'" \\\\',
+    '  CTX_LIMIT="'+esc(ctx)+'" \\\\',
+    '  MIN_SCORE="'+esc(score)+'" \\\\',
+    '  bash /tmp/cc-install.sh \\\\',
+    '  && rm -f /tmp/cc-install.sh'
+  ];
+  document.getElementById('termCmd').textContent=lines.join('\\n');
+  document.getElementById('termBox').style.display='';
+  document.getElementById('genBtn').textContent='Generate Install Command';
+  document.getElementById('genBtn').disabled=false;
 }
-function cp(id,btn){
-  navigator.clipboard.writeText(document.getElementById(id).innerText).then(()=>{
+function copyCmd(){
+  const txt=document.getElementById('termCmd').textContent;
+  navigator.clipboard.writeText(txt).then(()=>{
+    const btn=document.getElementById('copyBtn');
     btn.textContent='Copied!';btn.classList.add('ok');
     setTimeout(()=>{btn.textContent='Copy';btn.classList.remove('ok');},2000);
   });
 }
-if(navigator.platform.toLowerCase().includes('linux'))show('linux');
+document.getElementById('f-voyage').addEventListener('input',function(){
+  const grp=document.getElementById('grp-model');
+  grp.style.opacity=this.value?'0.3':'1';
+});
 </script>
 </body>
 </html>`;

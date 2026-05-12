@@ -16,129 +16,155 @@ echo "  Stop wasting tokens. Inject only what matters."
 echo "  ──────────────────────────────────────────────"
 echo ""
 
-# ── Detect auto-install mode (key pre-set by piped URL) ──────────────────────
+# ── Detect auto-install mode ─────────────────────────────────
 AUTO_INSTALL=false
+NONINTERACTIVE=false
 if [ -n "$CONTEXTCUT_LICENSE_KEY" ]; then
-  AUTO_INSTALL=true
   LICENSE_KEY="$CONTEXTCUT_LICENSE_KEY"
-  echo ""
-  echo "  ── ContextCut PRO License ──"
-  echo "  License key detected automatically: ${LICENSE_KEY:0:16}..."
-  # Reconnect stdin to terminal so read prompts work when piped via curl
-  exec < /dev/tty
+  # If VOYAGE_KEY is explicitly set (even empty), use full env-var config mode
+  if [ "${VOYAGE_KEY+set}" = "set" ]; then
+    NONINTERACTIVE=true
+    echo ""
+    echo "  ── ContextCut PRO License ──"
+    echo "  License key detected: ${LICENSE_KEY:0:16}..."
+    echo "  Configuration loaded from environment."
+    if [ -z "$VOYAGE_KEY" ]; then
+      EMBED_MODE="ollama"
+      EMBED_MODEL="${EMBED_MODEL:-nomic-embed-text}"
+    else
+      EMBED_MODE="voyage"
+    fi
+    OLLAMA_HOST="${OLLAMA_HOST:-localhost}"
+    OLLAMA_PORT="${OLLAMA_PORT:-11434}"
+    QDRANT_HOST="${QDRANT_HOST:-localhost}"
+    QDRANT_PORT="${QDRANT_PORT:-6333}"
+    KB_DIR="${KB_DIR:-$INSTALL_DIR/knowledge}"
+    PROXY_PORT="${PROXY_PORT:-18788}"
+    DASH_PORT="${DASH_PORT:-18787}"
+    CTX_LIMIT="${CTX_LIMIT:-8192}"
+    MIN_SCORE="${MIN_SCORE:-0.20}"
+  else
+    AUTO_INSTALL=true
+    echo ""
+    echo "  ── ContextCut PRO License ──"
+    echo "  License key detected automatically: ${LICENSE_KEY:0:16}..."
+    exec < /dev/tty
+  fi
 fi
 
-# ── Collect config ────────────────────────────────────────────────────────────
-if $AUTO_INSTALL; then
-  echo ""
-  echo "  ── Configuration ──"
-  echo "  Defaults shown in [brackets]. Press Enter to accept, or type a new value."
-  echo ""
+# ── Collect config (skip if env-var mode) ─────────────────────────────────────
+if ! $NONINTERACTIVE; then
+  if $AUTO_INSTALL; then
+    echo ""
+    echo "  ── Configuration ──"
+    echo "  Defaults shown in [brackets]. Press Enter to accept, or type a new value."
+    echo ""
 
-  read -p "  Voyage AI API key (leave blank for local Ollama embedding): " VOYAGE_KEY
+    read -p "  Voyage AI API key (leave blank for local Ollama embedding): " VOYAGE_KEY
 
-  if [ -z "$VOYAGE_KEY" ]; then
-    echo "  100% local mode — using Ollama for embeddings."
-    EMBED_MODE="ollama"
-    read -p "  Embedding model [nomic-embed-text]: " EMBED_MODEL
-    EMBED_MODEL="${EMBED_MODEL:-nomic-embed-text}"
+    if [ -z "$VOYAGE_KEY" ]; then
+      echo "  100% local mode — using Ollama for embeddings."
+      EMBED_MODE="ollama"
+      read -p "  Embedding model [nomic-embed-text]: " EMBED_MODEL
+      EMBED_MODEL="${EMBED_MODEL:-nomic-embed-text}"
+    else
+      EMBED_MODE="voyage"
+    fi
+
+    read -p "  Ollama host [localhost]: " OLLAMA_HOST
+    OLLAMA_HOST="${OLLAMA_HOST:-localhost}"
+
+    read -p "  Ollama port [11434]: " OLLAMA_PORT
+    OLLAMA_PORT="${OLLAMA_PORT:-11434}"
+
+    read -p "  Qdrant host [localhost]: " QDRANT_HOST
+    QDRANT_HOST="${QDRANT_HOST:-localhost}"
+
+    read -p "  Qdrant port [6333]: " QDRANT_PORT
+    QDRANT_PORT="${QDRANT_PORT:-6333}"
+
+    read -p "  Knowledge base dir [$INSTALL_DIR/knowledge]: " KB_DIR
+    KB_DIR="${KB_DIR:-$INSTALL_DIR/knowledge}"
+
+    read -p "  Proxy port [18788]: " PROXY_PORT
+    PROXY_PORT="${PROXY_PORT:-18788}"
+
+    read -p "  Dashboard port [18787]: " DASH_PORT
+    DASH_PORT="${DASH_PORT:-18787}"
+
+    read -p "  Model context limit [8192]: " CTX_LIMIT
+    CTX_LIMIT="${CTX_LIMIT:-8192}"
+
+    read -p "  Minimum relevance score 0.0-1.0 [0.20]: " MIN_SCORE
+    MIN_SCORE="${MIN_SCORE:-0.20}"
+
+    echo ""
+    echo "  ── Confirm Your Settings ──"
+    echo "  License key : ${LICENSE_KEY:0:16}..."
+    echo "  Voyage API  : ${VOYAGE_KEY:0:8}..."
+    echo "  Ollama      : $OLLAMA_HOST:$OLLAMA_PORT"
+    echo "  Qdrant      : $QDRANT_HOST:$QDRANT_PORT"
+    echo "  KB dir      : $KB_DIR"
+    echo "  Proxy       : http://localhost:$PROXY_PORT"
+    echo "  Dashboard   : http://localhost:$DASH_PORT"
+    echo "  CTX limit   : $CTX_LIMIT"
+    echo "  Min score   : $MIN_SCORE"
+    echo ""
+    read -p "  Proceed with these settings? [Y/n]: " CONFIRM
+    if [ "$CONFIRM" = "n" ] || [ "$CONFIRM" = "N" ]; then
+      echo "  Installation cancelled."
+      exit 1
+    fi
   else
-    EMBED_MODE="voyage"
+    echo ""
+    echo "  ── ContextCut PRO License ──"
+    echo "  Your license key was sent to your email after purchase on Gumroad."
+    echo "  It looks like: CC-PRO-xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx"
+    echo ""
+    read -p "  PRO License key: " LICENSE_KEY
+    if [ -z "$LICENSE_KEY" ]; then
+      echo "ERROR: License key is required. Purchase at https://5984630877416.gumroad.com/l/ContextCut-Pro"
+      exit 1
+    fi
+
+    read -p "  Voyage AI API key (leave blank for local Ollama embedding): " VOYAGE_KEY
+
+    if [ -z "$VOYAGE_KEY" ]; then
+      echo "  100% local mode — using Ollama for embeddings."
+      EMBED_MODE="ollama"
+      read -p "  Embedding model [nomic-embed-text]: " EMBED_MODEL
+      EMBED_MODEL="${EMBED_MODEL:-nomic-embed-text}"
+    else
+      EMBED_MODE="voyage"
+    fi
+
+    read -p "  Ollama host [localhost]: " OLLAMA_HOST
+    OLLAMA_HOST="${OLLAMA_HOST:-localhost}"
+
+    read -p "  Ollama port [11434]: " OLLAMA_PORT
+    OLLAMA_PORT="${OLLAMA_PORT:-11434}"
+
+    read -p "  Qdrant host [localhost]: " QDRANT_HOST
+    QDRANT_HOST="${QDRANT_HOST:-localhost}"
+
+    read -p "  Qdrant port [6333]: " QDRANT_PORT
+    QDRANT_PORT="${QDRANT_PORT:-6333}"
+
+    read -p "  Knowledge base dir [$INSTALL_DIR/knowledge]: " KB_DIR
+    KB_DIR="${KB_DIR:-$INSTALL_DIR/knowledge}"
+
+    read -p "  Proxy port [18788]: " PROXY_PORT
+    PROXY_PORT="${PROXY_PORT:-18788}"
+
+    read -p "  Dashboard port [18787]: " DASH_PORT
+    DASH_PORT="${DASH_PORT:-18787}"
+
+    read -p "  Model context limit [8192]: " CTX_LIMIT
+    CTX_LIMIT="${CTX_LIMIT:-8192}"
+
+    read -p "  Minimum relevance score 0.0-1.0 [0.20]: " MIN_SCORE
+    MIN_SCORE="${MIN_SCORE:-0.20}"
   fi
-
-  read -p "  Ollama host [localhost]: " OLLAMA_HOST
-  OLLAMA_HOST="${OLLAMA_HOST:-localhost}"
-
-  read -p "  Ollama port [11434]: " OLLAMA_PORT
-  OLLAMA_PORT="${OLLAMA_PORT:-11434}"
-
-  read -p "  Qdrant host [localhost]: " QDRANT_HOST
-  QDRANT_HOST="${QDRANT_HOST:-localhost}"
-
-  read -p "  Qdrant port [6333]: " QDRANT_PORT
-  QDRANT_PORT="${QDRANT_PORT:-6333}"
-
-  read -p "  Knowledge base dir [$INSTALL_DIR/knowledge]: " KB_DIR
-  KB_DIR="${KB_DIR:-$INSTALL_DIR/knowledge}"
-
-  read -p "  Proxy port [18788]: " PROXY_PORT
-  PROXY_PORT="${PROXY_PORT:-18788}"
-
-  read -p "  Dashboard port [18787]: " DASH_PORT
-  DASH_PORT="${DASH_PORT:-18787}"
-
-  read -p "  Model context limit [8192]: " CTX_LIMIT
-  CTX_LIMIT="${CTX_LIMIT:-8192}"
-
-  read -p "  Minimum relevance score 0.0-1.0 [0.20]: " MIN_SCORE
-  MIN_SCORE="${MIN_SCORE:-0.20}"
-
-  echo ""
-  echo "  ── Confirm Your Settings ──"
-  echo "  License key : ${LICENSE_KEY:0:16}..."
-  echo "  Voyage API  : ${VOYAGE_KEY:0:8}..."
-  echo "  Ollama      : $OLLAMA_HOST:$OLLAMA_PORT"
-  echo "  Qdrant      : $QDRANT_HOST:$QDRANT_PORT"
-  echo "  KB dir      : $KB_DIR"
-  echo "  Proxy       : http://localhost:$PROXY_PORT"
-  echo "  Dashboard   : http://localhost:$DASH_PORT"
-  echo "  CTX limit   : $CTX_LIMIT"
-  echo "  Min score   : $MIN_SCORE"
-  echo ""
-  read -p "  Proceed with these settings? [Y/n]: " CONFIRM
-  if [ "$CONFIRM" = "n" ] || [ "$CONFIRM" = "N" ]; then
-    echo "  Installation cancelled."
-    exit 1
-  fi
-else
-  echo ""
-  echo "  ── ContextCut PRO License ──"
-  echo "  Your license key was sent to your email after purchase on Gumroad."
-  echo "  It looks like: CC-PRO-xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx"
-  echo ""
-  read -p "  PRO License key: " LICENSE_KEY
-  if [ -z "$LICENSE_KEY" ]; then
-    echo "ERROR: License key is required. Purchase at https://5984630877416.gumroad.com/l/ContextCut-Pro"
-    exit 1
-  fi
-
-  read -p "  Voyage AI API key (leave blank for local Ollama embedding): " VOYAGE_KEY
-
-  if [ -z "$VOYAGE_KEY" ]; then
-    echo "  100% local mode — using Ollama for embeddings."
-    EMBED_MODE="ollama"
-    read -p "  Embedding model [nomic-embed-text]: " EMBED_MODEL
-    EMBED_MODEL="${EMBED_MODEL:-nomic-embed-text}"
-  else
-    EMBED_MODE="voyage"
-  fi
-
-  read -p "  Ollama host [localhost]: " OLLAMA_HOST
-  OLLAMA_HOST="${OLLAMA_HOST:-localhost}"
-
-  read -p "  Ollama port [11434]: " OLLAMA_PORT
-  OLLAMA_PORT="${OLLAMA_PORT:-11434}"
-
-  read -p "  Qdrant host [localhost]: " QDRANT_HOST
-  QDRANT_HOST="${QDRANT_HOST:-localhost}"
-
-  read -p "  Qdrant port [6333]: " QDRANT_PORT
-  QDRANT_PORT="${QDRANT_PORT:-6333}"
-
-  read -p "  Knowledge base dir [$INSTALL_DIR/knowledge]: " KB_DIR
-  KB_DIR="${KB_DIR:-$INSTALL_DIR/knowledge}"
-
-  read -p "  Proxy port [18788]: " PROXY_PORT
-  PROXY_PORT="${PROXY_PORT:-18788}"
-
-  read -p "  Dashboard port [18787]: " DASH_PORT
-  DASH_PORT="${DASH_PORT:-18787}"
-
-  read -p "  Model context limit [8192]: " CTX_LIMIT
-  CTX_LIMIT="${CTX_LIMIT:-8192}"
-
-  read -p "  Minimum relevance score 0.0-1.0 [0.20]: " MIN_SCORE
-  MIN_SCORE="${MIN_SCORE:-0.20}"
 fi
 
 echo ""
@@ -155,7 +181,7 @@ echo "  Dashboard   : port $DASH_PORT"
 echo "  Proxy       : port $PROXY_PORT"
 echo ""
 
-if $AUTO_INSTALL; then
+if $AUTO_INSTALL && ! $NONINTERACTIVE; then
   read -p "  Proceed with install? [Y/n]: " ANSWER
   if echo "$ANSWER" | grep -qi "^n"; then
     echo ""
@@ -181,6 +207,10 @@ if curl -sf "http://$QDRANT_HOST:$QDRANT_PORT/collections" > /dev/null 2>&1; the
 else
   echo ""
   echo "  Qdrant not reachable at $QDRANT_HOST:$QDRANT_PORT"
+  if $NONINTERACTIVE; then
+    echo "  ERROR: Qdrant must be running before install. Start it and re-run."
+    exit 1
+  fi
   if command -v docker &>/dev/null; then
     read -p "  Start Qdrant via Docker now? [y/N]: " START_QDRANT
     if [ "$START_QDRANT" = "y" ] || [ "$START_QDRANT" = "Y" ]; then
