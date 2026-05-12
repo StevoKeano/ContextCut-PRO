@@ -962,7 +962,7 @@ def make_dashboard() -> str:
         hits_str = " ".join(
             f'<span class="hit">{html.escape(h["source"].replace(".md",""))} <em>{h["score"]}</em></span>'
             for h in r.get("hits", [])
-        ) or '<span style="color:#4b5563">—</span>'
+        ) or '<span class="nh">—</span>'
         bar = f'<div class="mini-bar"><div class="mini-fill" style="width:{min(p,100)}%;background:{col}"></div></div>'
         rows_html += f"""<tr>
           <td class="ts">{r['ts']}</td>
@@ -994,14 +994,17 @@ def make_settings_page():
 <title>ContextCut-PRO — Settings</title>
 <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;600&family=Syne:wght@400;700;800&display=swap" rel="stylesheet">
 <style>
-:root{{--bg:#080c14;--surf:#0d1420;--surf2:#111927;--border:#1e2d42;--text:#c9d8f0;--muted:#4a6080;--accent:#00d4ff;--green:#22c55e;--yellow:#f59e0b;--red:#ef4444;--r:6px}}
+:root{{--bg:#080c14;--surf:#0d1420;--surf2:#111927;--border:#1e2d42;--text:#c9d8f0;--muted:#4a6080;--accent:#00d4ff;--green:#22c55e;--yellow:#f59e0b;--red:#ef4444;--th-bg:#0a1628;--hit-bg:#0a1a2e;--hover-bg:#1e293b;--active-bg:#0f172a;--r:6px}}
+.light{{--bg:#f1f5f9;--surf:#fff;--surf2:#f8fafc;--border:#e2e8f0;--text:#1e293b;--muted:#64748b;--accent:#0284c7;--th-bg:#e2e8f0;--hit-bg:#f1f5f9;--hover-bg:#f1f5f9;--active-bg:#e2e8f0}}
 *{{box-sizing:border-box;margin:0;padding:0}}
-body{{background:var(--bg);color:var(--text);font-family:'JetBrains Mono',monospace;font-size:13px;display:flex;flex-direction:column;height:100vh}}
+body{{background:var(--bg);color:var(--text);font-family:'JetBrains Mono',monospace;font-size:13px;display:flex;flex-direction:column;height:100vh;transition:background .3s,color .3s}}
 .header{{background:var(--surf);border-bottom:1px solid var(--border);padding:0 20px;display:flex;align-items:center;gap:14px;height:48px;flex-shrink:0}}
 .logo{{font-family:'Syne',sans-serif;font-size:20px;font-weight:800;color:var(--accent);letter-spacing:-.5px}}
 .logo span{{color:var(--text)}}
 .back-btn{{background:transparent;border:1px solid var(--border);color:var(--muted);border-radius:3px;padding:3px 10px;font-size:11px;cursor:pointer;font-family:'JetBrains Mono',monospace;margin-left:auto;text-decoration:none}}
 .back-btn:hover{{color:var(--text);border-color:var(--accent)}}
+.tog{{background:transparent;border:1px solid var(--border);color:var(--muted);border-radius:3px;padding:3px 8px;font-size:13px;cursor:pointer;line-height:1;flex-shrink:0}}
+.tog:hover{{color:var(--text);border-color:var(--accent)}}
 .container{{flex:1;overflow-y:auto;padding:20px;display:flex;justify-content:center}}
 .card{{background:var(--surf);border:1px solid var(--border);border-radius:var(--r);padding:20px;width:100%;max-width:500px}}
 .card h2{{font-family:'Syne',sans-serif;font-size:18px;margin-bottom:16px;color:var(--accent)}}
@@ -1030,6 +1033,7 @@ body{{background:var(--bg);color:var(--text);font-family:'JetBrains Mono',monosp
 <body>
 <div class="header">
   <div class="logo">ContextCut<span>-PRO</span></div>
+  <button class="tog" id="togBtn" title="Toggle day/night">☀</button>
   <a href="/" class="back-btn">← Back to Dashboard</a>
 </div>
 <div class="container">
@@ -1209,7 +1213,21 @@ async function saveSettings() {{
   }}
 }}
 
+(function(){
+  var t=localStorage.getItem('ccTheme');
+  if(!t)t=window.matchMedia('(prefers-color-scheme:dark)').matches?'dark':'light';
+  if(t==='light')document.body.classList.add('light');
+  var b=document.getElementById('togBtn');
+  if(b)b.textContent=t==='light'?'☽':'☀';
+})();
+function togTheme(){
+  document.body.classList.toggle('light');
+  var l=document.body.classList.contains('light');
+  localStorage.setItem('ccTheme',l?'light':'dark');
+  document.getElementById('togBtn').textContent=l?'☽':'☀';
+}
 onProviderChange();
+document.getElementById('togBtn').addEventListener('click',togTheme);
 </script>
 </body>
 </html>"""
@@ -1230,7 +1248,7 @@ def make_dashboard():
         hits_str = " ".join(
             f'<span class="hit">{html.escape(h["source"].replace(".md",""))} <em>{h["score"]}</em></span>'
             for h in r.get("hits", [])
-        ) or '<span style="color:#4b5563">—</span>'
+        ) or '<span class="nh">—</span>'
         bar = f'<div class="mini-bar"><div class="mini-fill" style="width:{min(p,100)}%;background:{col}"></div></div>'
         rows_html += f"""<tr>
           <td class="ts">{r['ts']}</td>
@@ -1251,9 +1269,10 @@ def make_dashboard():
 <title>ContextCut-PRO</title>
 <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;600&family=Syne:wght@400;700;800&display=swap" rel="stylesheet">
 <style>
-:root{{--bg:#080c14;--surf:#0d1420;--surf2:#111927;--border:#1e2d42;--text:#c9d8f0;--muted:#4a6080;--accent:#00d4ff;--green:#22c55e;--yellow:#f59e0b;--red:#ef4444;--r:6px}}
+:root{{--bg:#080c14;--surf:#0d1420;--surf2:#111927;--border:#1e2d42;--text:#c9d8f0;--muted:#4a6080;--accent:#00d4ff;--green:#22c55e;--yellow:#f59e0b;--red:#ef4444;--th-bg:#0a1628;--hit-bg:#0a1a2e;--hover:#1e293b;--active:#0f172a;--r:6px}}
+.light{{--bg:#f1f5f9;--surf:#fff;--surf2:#f8fafc;--border:#e2e8f0;--text:#1e293b;--muted:#64748b;--accent:#0284c7;--th-bg:#e2e8f0;--hit-bg:#f1f5f9;--hover:#f1f5f9;--active:#e2e8f0}}
 *{{box-sizing:border-box;margin:0;padding:0}}
-body{{background:var(--bg);color:var(--text);font-family:'JetBrains Mono',monospace;font-size:13px;display:flex;flex-direction:column;height:100vh;overflow:hidden}}
+body{{background:var(--bg);color:var(--text);font-family:'JetBrains Mono',monospace;font-size:13px;display:flex;flex-direction:column;height:100vh;overflow:hidden;transition:background .3s,color .3s}}
 /* ── header ── */
 .header{{background:var(--surf);border-bottom:1px solid var(--border);padding:0 20px;display:flex;align-items:center;gap:14px;height:48px;flex-shrink:0}}
 .logo{{font-family:'Syne',sans-serif;font-size:20px;font-weight:800;color:var(--accent);letter-spacing:-.5px}}
@@ -1285,14 +1304,14 @@ body{{background:var(--bg);color:var(--text);font-family:'JetBrains Mono',monosp
 /* table */
 .tbl-wrap{{background:var(--surf);border:1px solid var(--border);border-radius:var(--r);overflow:hidden}}
 table{{width:100%;border-collapse:collapse}}
-th{{background:#0a1628;color:var(--muted);text-align:left;padding:8px 10px;font-size:9px;text-transform:uppercase;letter-spacing:.1em;border-bottom:1px solid var(--border)}}
+th{{background:var(--th-bg);color:var(--muted);text-align:left;padding:8px 10px;font-size:9px;text-transform:uppercase;letter-spacing:.1em;border-bottom:1px solid var(--border)}}
 td{{padding:7px 10px;border-top:1px solid var(--border);vertical-align:middle;font-size:12px}}
 tr:hover td{{background:var(--surf2)}}
 .ts{{color:var(--muted);white-space:nowrap;font-size:10px}}
 .qcell{{max-width:160px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}}
 .num{{text-align:right;white-space:nowrap}}
 .hitcell{{max-width:180px}}
-.hit{{display:inline-block;background:#0a1a2e;border:1px solid var(--border);border-radius:3px;padding:1px 4px;margin:1px;font-size:10px;color:var(--muted)}}
+.hit{{display:inline-block;background:var(--hit-bg);border:1px solid var(--border);border-radius:3px;padding:1px 4px;margin:1px;font-size:10px;color:var(--muted)}}
 .hit em{{color:var(--accent);font-style:normal}}
 .mini-bar{{height:3px;background:var(--border);border-radius:2px;margin-top:3px;overflow:hidden}}
 .mini-fill{{height:100%;border-radius:2px}}
@@ -1303,6 +1322,10 @@ tr:hover td{{background:var(--surf2)}}
 .session-badge{{font-size:11px;color:var(--muted);background:var(--surf2);border:1px solid var(--border);border-radius:3px;padding:3px 8px;font-family:'JetBrains Mono',monospace}}
 .clear-btn{{background:transparent;border:1px solid var(--border);color:var(--muted);border-radius:3px;padding:3px 10px;font-size:11px;cursor:pointer;font-family:'JetBrains Mono',monospace}}
 .clear-btn:hover{{color:var(--text);border-color:var(--accent)}}
+.tog{{background:transparent;border:1px solid var(--border);color:var(--muted);border-radius:3px;padding:3px 8px;font-size:13px;cursor:pointer;line-height:1;flex-shrink:0}}
+.tog:hover{{color:var(--text);border-color:var(--accent)}}
+.badge{{font-size:11px;padding:3px 8px;border-radius:4px;color:var(--muted);background:var(--hit-bg)}}
+.nh{{color:var(--muted)}}
 .fb-file:hover{{background:var(--hover,#1e293b)}}
 .fb-file:active{{background:var(--active,#0f172a)}}
 .chat-messages{{flex:1;overflow-y:auto;padding:14px;display:flex;flex-direction:column;gap:10px}}
@@ -1357,6 +1380,7 @@ tr:hover td{{background:var(--surf2)}}
 <div class="header">
   <div class="logo">ContextCut<span>-PRO</span></div>
   <div class="hinfo">{UPSTREAM} · Qdrant {QDRANT_HOST}:{QDRANT_PORT} · min_score={MIN_SCORE} · top_k={TOP_K}</div>
+  <button class="tog" id="togBtn" title="Toggle day/night">☀</button>
   <a href="/settings" style="background:transparent;border:1px solid var(--border);color:var(--muted);border-radius:3px;padding:3px 10px;font-size:11px;cursor:pointer;font-family:'JetBrains Mono',monospace;text-decoration:none">Settings ⚙</a>
   <button onclick="openFileBrowser()" style="background:transparent;border:1px solid var(--border);color:var(--muted);border-radius:3px;padding:3px 10px;font-size:11px;cursor:pointer;font-family:'JetBrains Mono',monospace">Browse Files 📂</button>
   <div class="live"><span class="dot"></span>live</div>
@@ -1380,7 +1404,7 @@ tr:hover td{{background:var(--surf2)}}
         <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:7px">
           <div class="ctx-label" style="margin-bottom:0">Most Recent Context Usage</div>
           <div style="display:flex;gap:6px;align-items:center">
-            <span id="embedBadge" style="font-size:11px;color:#8b95a5;background:#1e2638;padding:3px 8px;border-radius:4px" title="Current embedding backend">—</span>
+            <span id="embedBadge" class="badge" title="Current embedding backend">—</span>
             <button class="clear-btn" onclick="openEmbedSettings()" title="Configure embedding model">⚙ Embed</button>
             <button class="clear-btn" onclick="clearContext()" title="Clear response cache">Clear Cache</button>
           </div>
@@ -1651,7 +1675,7 @@ function updateStats(d) {{
   if (ct) ct.textContent = (d.tokens_after||0).toLocaleString() + ' / {CTX_LIMIT:,} tokens';
   const tb = document.getElementById('tblBody');
   if (tb && d.ts) {{
-    const hits = (d.hits||[]).map(h=>`<span class="hit">${{esc(h.source.replace('.md',''))}} <em>${{h.score}}</em></span>`).join(' ') || '<span style="color:#4b5563">—</span>';
+    const hits = (d.hits||[]).map(h=>`<span class="hit">${{esc(h.source.replace('.md',''))}} <em>${{h.score}}</em></span>`).join(' ') || '<span class="nh">—</span>';
     const newRow = `<tr>
       <td class="ts">${{d.ts}}</td>
       <td class="qcell">${{esc((d.query||'').substring(0,60))}}</td>
@@ -1721,7 +1745,7 @@ async function pollStats() {{
       const c = p<60?'var(--green)':p<80?'var(--yellow)':'var(--red)';
       const hits = (r.hits||[]).map(h=>
         `<span class="hit">${{esc((h.source||'?').replace('.md',''))}} <em>${{h.score}}</em></span>`
-      ).join(' ') || '<span style="color:#4b5563">\u2014</span>';
+      ).join(' ') || '<span class="nh">\u2014</span>';
       return `<tr>
         <td class="ts">${{r.ts||''}}</td>
         <td class="qcell">${{esc((r.query||'').substring(0,60))}}</td>
@@ -2226,6 +2250,20 @@ function fbUploadFile() {{
   }})
   .catch(e => {{ alert('Network error: '+e.message); }});
 }}
+(function(){
+  var t=localStorage.getItem('ccTheme');
+  if(!t)t=window.matchMedia('(prefers-color-scheme:dark)').matches?'dark':'light';
+  if(t==='light')document.body.classList.add('light');
+  var b=document.getElementById('togBtn');
+  if(b)b.textContent=t==='light'?'☽':'☀';
+})();
+function togTheme(){
+  document.body.classList.toggle('light');
+  var l=document.body.classList.contains('light');
+  localStorage.setItem('ccTheme',l?'light':'dark');
+  document.getElementById('togBtn').textContent=l?'☽':'☀';
+}
+document.getElementById('togBtn').addEventListener('click',togTheme);
 </script>
 </body></html>"""
 
