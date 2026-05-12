@@ -544,10 +544,31 @@ echo "  Proxy:      http://localhost:$PROXY_PORT"
 echo "  KB dir:     $KB_DIR"
 echo "  Logs:       $LOG_DIR"
 echo ""
-echo "  Test it:"
-echo "    curl -X POST http://localhost:$PROXY_PORT/v1/chat/completions \\"
-echo "      -H 'Content-Type: application/json' \\"
-echo "      -d '{\"messages\":[{\"role\":\"user\",\"content\":\"hello\"}],\"model\":\"your-model-name\"}'"
+echo "  Opening dashboard in your browser..."
+if command -v xdg-open &>/dev/null; then
+  xdg-open "http://localhost:$DASH_PORT" 2>/dev/null || true
+elif command -v open &>/dev/null; then
+  open "http://localhost:$DASH_PORT" 2>/dev/null || true
+fi
+echo ""
+echo "  ── Quick Start ──"
+echo "  1. Starter knowledge files are in: $STARTER_DIR"
+echo "  2. Copy the ones relevant to you:"
+echo "     cp $STARTER_DIR/lawyer-* $KB_DIR/     # lawyers"
+echo "     cp $STARTER_DIR/cpa-* $KB_DIR/        # CPAs"
+echo "     cp $STARTER_DIR/doctor-* $KB_DIR/     # doctors"
+echo "     cp $STARTER_DIR/realtor-* $KB_DIR/    # realtors"
+echo "     cp $STARTER_DIR/advisor-* $KB_DIR/    # financial advisors"
+echo "     cp $STARTER_DIR/architect-* $KB_DIR/  # architects"
+echo "     cp $STARTER_DIR/tech-* $KB_DIR/       # tech workers"
+echo "     cp $STARTER_DIR/consultant-* $KB_DIR/ # consultants"
+echo "     cp $STARTER_DIR/base-* $KB_DIR/       # universal templates"
+echo "  3. Or add your own .md files to: $KB_DIR"
+echo "  4. Files are auto-ingested within seconds."
+echo "  5. Test the API:"
+echo "     curl -X POST http://localhost:$PROXY_PORT/v1/chat/completions \\"
+echo '       -H "Content-Type: application/json" \'
+echo '       -d "{\"messages\":[{\"role\":\"user\",\"content\":\"hello\"}],\"model\":\"your-model-name\"}"'
 echo ""
 echo "  Add .md files to $KB_DIR and they will be auto-ingested."
 echo ""
