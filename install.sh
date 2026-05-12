@@ -217,6 +217,16 @@ echo "  Downloading ContextCut scripts..."
 curl -sf "$REPO/qdrant_proxy_final.py" -o "$INSTALL_DIR/qdrant_proxy_final.py"
 curl -sf "$REPO/ingest.py"       -o "$INSTALL_DIR/ingest.py"
 
+# ── Download starter knowledge files ─────────────────────────────────────────
+STARTER_DIR="$INSTALL_DIR/starterKnowledgeFiles"
+mkdir -p "$STARTER_DIR"
+STARTER_FILES="advisor-ESTATE.md advisor-INVESTMENT.md advisor-RETIREMENT.md architect-CONTRACT.md architect-REGULATORY.md base-COMMUNICATION.md base-COMPLIANCE.md base-DEADLINES.md base-DRAFTING.md base-ETHICS.md base-RESEARCH.md base-REVIEW.md base-SKILL.md consultant-DELIVERABLE.md consultant-ENGAGEMENT.md consultant-METHODOLOGY.md cpa-corp-COMPLIANCE.md cpa-corp-INTL.md cpa-corp-MERGER.md cpa-corp-TAX.md cpa-corp-TRANSFER.md cpa-personal-DEDUCTION.md cpa-personal-ESTATE.md cpa-personal-INCOME.md cpa-personal-INVESTMENT.md cpa-personal-RETIREMENT.md cpa-smb-BOOKS.md cpa-smb-ENTITY.md cpa-smb-PAYROLL.md cpa-smb-QBI.md cpa-smb-SELFEMPLOYED.md customer_setup.md doctor-BILLING.md doctor-CLINICAL.md doctor-ETHICS.md doctor-PATIENT.md doctor-PRACTICE.md doctor-REGULATORY.md doctor-RESEARCH.md lawyer-lit-APPEAL.md lawyer-lit-DISCOVERY.md lawyer-lit-EVIDENCE.md lawyer-lit-MOTIONS.md lawyer-lit-PLEADING.md lawyer-re-CLOSING.md lawyer-re-LEASE.md lawyer-re-PURCHASE.md lawyer-re-TITLE.md lawyer-re-ZONING.md lawyer-smb-CONTRACT.md lawyer-smb-EMPLOYMENT.md lawyer-smb-ENTITY.md lawyer-smb-IP.md lawyer-smb-REGULATORY.md realtor-CONTRACT.md realtor-DISCLOSURE.md realtor-LISTING.md tech-CONTRACT.md tech-PRIVACY.md"
+for f in $STARTER_FILES; do
+  curl -sf "$REPO/starterKnowledgeFiles/$f" -o "$STARTER_DIR/$f"
+done
+echo "  Starter knowledge files: $(echo $STARTER_FILES | wc -w) files in starterKnowledgeFiles/"
+echo "  (Copy the ones you need into knowledge/)"
+
 # ── Write env file ────────────────────────────────────────────────────────────
 INSTANCE_ID=$(python3 -c "import uuid; print(uuid.uuid4())")
 cat > "$INSTALL_DIR/.env" << EOF
@@ -419,8 +429,8 @@ fi
 ENV_FILE="$INST/.env"
 SECRET_FILE="$HOME/.contextcut/instance_secret"
 if [ -f "$ENV_FILE" ] && [ -f "$SECRET_FILE" ]; then
-  KEY=$(grep "^CONTEXTCUT_LICENSE_KEY=" "$ENV_FILE" | cut -d= -f2- | tr -d '"'"')
-  INSTANCE_ID=$(grep "^CONTEXTCUT_INSTANCE_ID=" "$ENV_FILE" | cut -d= -f2- | tr -d '"'"')
+  KEY=$(grep "^CONTEXTCUT_LICENSE_KEY=" "$ENV_FILE" | sed 's/^[^=]*=//; s/^["'\'']//; s/["'\'']$//')
+  INSTANCE_ID=$(grep "^CONTEXTCUT_INSTANCE_ID=" "$ENV_FILE" | sed 's/^[^=]*=//; s/^["'\'']//; s/["'\'']$//')
   SECRET=$(cat "$SECRET_FILE")
   if [ -n "$KEY" ] && [ -n "$INSTANCE_ID" ] && [ -n "$SECRET" ]; then
     echo "Releasing license seat..."
