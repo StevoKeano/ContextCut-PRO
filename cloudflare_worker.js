@@ -378,7 +378,7 @@ body{background:#0F172A;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',
     </div>
 
     <div class="foot">
-      <a href="mailto:stevekean@gmail.com">Contact</a> &nbsp;&middot;&nbsp; <a href="https://github.com/StevoKeano/ContextCut-PRO">Docs</a> &nbsp;&middot;&nbsp; <a href="/compliance/soc2">Privacy &amp; Compliance</a>
+      <a href="mailto:stevekean@gmail.com">Contact</a> &nbsp;&middot;&nbsp; <a href="https://github.com/StevoKeano/ContextCut-PRO">Docs</a> &nbsp;&middot;&nbsp; <a href="/compliance/soc2">Privacy</a> &nbsp;&middot;&nbsp; <a href="/promo">Share</a>
     </div>
   </div>
 </div>
@@ -678,6 +678,89 @@ body{background:#080c14;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',
   return new Response(html, { headers: { "Content-Type": "text/html;charset=UTF-8" } });
 }
 
+async function handlePromo() {
+  const html = `<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1.0">
+<title>ContextCut PRO — Local AI Privacy Layer</title>
+<style>
+*{box-sizing:border-box;margin:0;padding:0}
+body{background:#080c14;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Arial,sans-serif;color:#c9d8f0;padding:40px 24px}
+.card{background:#0d1420;border:1px solid #1e2d42;border-radius:12px;max-width:720px;margin:0 auto;overflow:hidden}
+.hdr{background:#0d1420;border-bottom:1px solid #1e2d42;padding:32px;text-align:center}
+.hdr .logo{color:#00d4ff;font-size:26px;font-weight:800;letter-spacing:-.5px;margin-bottom:4px}
+.hdr .tag{color:#4a6080;font-size:15px;margin-bottom:20px}
+.hdr .btn{display:inline-block;background:#00d4ff;color:#000;padding:14px 32px;border-radius:8px;font-weight:700;font-size:16px;text-decoration:none}
+.hdr .btn:hover{opacity:.85}
+.bdy{padding:28px 32px}
+.sec{margin-bottom:24px}
+.sec h2{color:#00d4ff;font-size:15px;font-weight:700;margin-bottom:10px}
+.sec p{color:#8b95a5;font-size:13px;line-height:1.8}
+.sec ul{margin:6px 0 0 18px;padding:0}
+.sec li{color:#8b95a5;font-size:13px;line-height:1.9}
+.sec li b{color:#c9d8f0}
+.grd{display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-top:10px}
+.pill{background:#0d1420;border:1px solid #1e2d42;border-radius:8px;padding:12px 14px;text-align:center}
+.pill .prof{color:#00d4ff;font-size:12px;font-weight:700;text-transform:uppercase;letter-spacing:1px}
+.pill .desc{color:#4a6080;font-size:11px;margin-top:4px}
+.badge{display:inline-flex;align-items:center;gap:6px;background:#0a1a2e;border:1px solid #1e2d42;border-radius:6px;padding:6px 12px;font-size:12px;color:#4a6080;text-decoration:none}
+.badge:hover{border-color:#00d4ff;color:#00d4ff}
+.foot{text-align:center;padding:24px 32px;border-top:1px solid #1e2d42;font-size:12px;color:#4a6080}
+.foot a{color:#00d4ff;text-decoration:none}
+@media(max-width:500px){.grd{grid-template-columns:1fr}}
+</style>
+</head>
+<body>
+<div class="card">
+  <div class="hdr">
+    <div class="logo">ContextCut PRO</div>
+    <div class="tag">Private AI for professionals &mdash; local RAG that never touches the cloud</div>
+    <a class="btn" href="https://5984630877416.gumroad.com/l/ContextCut-Pro">Buy Now &mdash; $99 Lifetime</a>
+    <p style="margin-top:12px;font-size:12px;color:#4a6080">3 seats &nbsp;&middot;&nbsp; One-time purchase &nbsp;&middot;&nbsp; No subscription</p>
+  </div>
+  <div class="bdy">
+    <div class="sec">
+      <h2>What is ContextCut PRO?</h2>
+      <p>ContextCut PRO sits between your AI tools and your local LLM. It injects relevant context from your knowledge base into every prompt and trims responses to fit context windows &mdash; all on your machine. No data ever leaves your network.</p>
+    </div>
+    <div class="sec">
+      <h2>How it works</h2>
+      <p><b>1.</b> Install Ollama + Docker (5 minutes)<br>
+      <b>2.</b> Run the one-line install command<br>
+      <b>3.</b> Copy starter knowledge files for your profession<br>
+      <b>4.</b> Start using any AI tool &mdash; context is injected automatically</p>
+    </div>
+    <div class="sec">
+      <h2>Starter knowledge files included</h2>
+      <div class="grd">
+        <div class="pill"><div class="prof">Lawyer</div><div class="desc">Litigation, real estate, SMB, contracts</div></div>
+        <div class="pill"><div class="prof">CPA</div><div class="desc">Corporate, personal, SMB tax & books</div></div>
+        <div class="pill"><div class="prof">Doctor</div><div class="desc">Clinical, billing, practice, research</div></div>
+        <div class="pill"><div class="prof">Realtor</div><div class="desc">Listings, contracts, disclosures</div></div>
+        <div class="pill"><div class="prof">Advisor</div><div class="desc">Estate, investment, retirement</div></div>
+        <div class="pill"><div class="prof">Architect</div><div class="desc">Contracts, regulatory compliance</div></div>
+        <div class="pill"><div class="prof">Tech</div><div class="desc">Contracts, privacy compliance</div></div>
+        <div class="pill"><div class="prof">Consultant</div><div class="desc">Methodology, deliverables, engagement</div></div>
+      </div>
+    </div>
+    <div class="sec">
+      <h2>Privacy &amp; Compliance</h2>
+      <p style="margin-bottom:10px">ContextCut PRO is designed for professionals who cannot send client data to cloud AI services. Everything runs locally. No telemetry. No subscriptions.</p>
+      <a class="badge" href="/compliance/soc2">&#10003; SOC 2 Self-Assessment &rarr;</a>
+      <a class="badge" style="margin-left:6px" href="https://github.com/StevoKeano/ContextCut-PRO">&#10003; Open Source on GitHub</a>
+    </div>
+  </div>
+  <div class="foot">
+    <p><a href="https://5984630877416.gumroad.com/l/ContextCut-Pro">Buy ContextCut PRO</a> &nbsp;&middot;&nbsp; <a href="mailto:stevekean@gmail.com">Contact</a> &nbsp;&middot;&nbsp; <a href="https://github.com/StevoKeano/ContextCut-PRO">GitHub</a></p>
+  </div>
+</div>
+</body>
+</html>`;
+  return new Response(html, { headers: { "Content-Type": "text/html;charset=UTF-8" } });
+}
+
 function json(status, data) {
   return new Response(JSON.stringify(data), {
     status,
@@ -715,6 +798,10 @@ export default {
 
     if (url.pathname === "/compliance/soc2") {
       return await handleCompliance();
+    }
+
+    if (url.pathname === "/promo") {
+      return await handlePromo();
     }
 
     const installMatch = url.pathname.match(/^\/install\/(CC-PRO-[a-f0-9-]+)$/);
