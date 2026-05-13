@@ -1213,19 +1213,19 @@ async function saveSettings() {{
   }}
 }}
 
-(function(){
+(function(){{
   var t=localStorage.getItem('ccTheme');
   if(!t)t=window.matchMedia('(prefers-color-scheme:dark)').matches?'dark':'light';
   if(t==='light')document.body.classList.add('light');
   var b=document.getElementById('togBtn');
   if(b)b.textContent=t==='light'?'☽':'☀';
-})();
-function togTheme(){
+}})();
+function togTheme(){{
   document.body.classList.toggle('light');
   var l=document.body.classList.contains('light');
   localStorage.setItem('ccTheme',l?'light':'dark');
   document.getElementById('togBtn').textContent=l?'☽':'☀';
-}
+}}
 onProviderChange();
 document.getElementById('togBtn').addEventListener('click',togTheme);
 </script>
@@ -2250,19 +2250,19 @@ function fbUploadFile() {{
   }})
   .catch(e => {{ alert('Network error: '+e.message); }});
 }}
-(function(){
+(function(){{
   var t=localStorage.getItem('ccTheme');
   if(!t)t=window.matchMedia('(prefers-color-scheme:dark)').matches?'dark':'light';
   if(t==='light')document.body.classList.add('light');
   var b=document.getElementById('togBtn');
   if(b)b.textContent=t==='light'?'☽':'☀';
-})();
-function togTheme(){
+}})();
+function togTheme(){{
   document.body.classList.toggle('light');
   var l=document.body.classList.contains('light');
   localStorage.setItem('ccTheme',l?'light':'dark');
   document.getElementById('togBtn').textContent=l?'☽':'☀';
-}
+}}
 document.getElementById('togBtn').addEventListener('click',togTheme);
 </script>
 </body></html>"""
