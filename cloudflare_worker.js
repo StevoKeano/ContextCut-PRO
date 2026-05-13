@@ -372,7 +372,7 @@ body{background:#0F172A;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',
         </div>
         <div class="cmp-sec">
           <h4>Self-Attestation</h4>
-          <p>For vendor security reviews, a self-attestation questionnaire covering access controls, data handling, encryption, and incident response is available &mdash; <a href="mailto:stevekean@gmail.com">request a copy</a>.</p>
+          <p>For vendor security reviews, a self-attestation questionnaire covering access controls, data handling, encryption, and incident response is available &mdash; <a href="/compliance/soc2" target="_blank">view questionnaire &rarr;</a>.</p>
         </div>
       </div>
     </div>
@@ -566,6 +566,94 @@ async function handleReset(request, env) {
   return json(200, { valid: true, message: "All seats reset" });
 }
 
+async function handleCompliance() {
+  const html = `<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1.0">
+<title>ContextCut PRO — SOC 2 Self-Assessment</title>
+<style>
+*{box-sizing:border-box;margin:0;padding:0}
+body{background:#080c14;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Arial,sans-serif;padding:32px 24px;color:#c9d8f0}
+.card{background:#0d1420;border:1px solid #1e2d42;border-radius:12px;max-width:720px;margin:0 auto;overflow:hidden}
+.hdr{background:#0d1420;border-bottom:1px solid #1e2d42;padding:28px 32px}
+.hdr h1{color:#00d4ff;font-size:20px;font-weight:700}
+.hdr p{color:#4a6080;font-size:13px;margin-top:6px;line-height:1.6}
+.bdy{padding:24px 32px}
+.sec{border:1px solid #1e2d42;border-radius:8px;padding:18px 20px;margin-bottom:16px}
+.sec h2{color:#00d4ff;font-size:14px;font-weight:700;margin-bottom:12px;text-transform:uppercase;letter-spacing:1px}
+.sec p{color:#8b95a5;font-size:12px;line-height:1.7;margin-bottom:10px}
+.q{color:#c9d8f0;font-size:13px;font-weight:600;margin-bottom:4px}
+.a{color:#4a6080;font-size:12px;line-height:1.6;margin-bottom:12px;padding-left:14px;border-left:2px solid #00d4ff}
+.sec ul{margin:4px 0 8px 14px;padding:0}
+.sec li{color:#8b95a5;font-size:12px;line-height:1.7}
+.foot{text-align:center;padding:20px 32px;border-top:1px solid #1e2d42;font-size:12px;color:#4a6080}
+.foot a{color:#00d4ff;text-decoration:none}
+</style>
+</head>
+<body>
+<div class="card">
+  <div class="hdr">
+    <h1>ContextCut PRO — SOC 2 Self-Assessment</h1>
+    <p>This questionnaire documents the security and privacy controls implemented by ContextCut PRO. It serves as a self-attestation for vendor security reviews. All answers reflect the current architecture of the product as deployed by the customer on their own infrastructure.</p>
+  </div>
+  <div class="bdy">
+    <div class="sec">
+      <h2>1. Organization &amp; Product</h2>
+      <p class="q">What does the product do?</p>
+      <p class="a">ContextCut PRO is a local AI privacy layer that sits between AI tools and a local LLM. It injects relevant context from a local knowledge base into LLM prompts and trims responses to fit context windows. It runs entirely on the customer's own infrastructure.</p>
+      <p class="q">Who has access to customer data?</p>
+      <p class="a">No data leaves the customer's machine. There is no cloud backend, no telemetry, and no third-party data processing. The optional Voyage AI API key is used solely for generating embeddings; no document content is stored on Voyage's servers.</p>
+    </div>
+    <div class="sec">
+      <h2>2. Access Controls</h2>
+      <p class="q">How is access to the application controlled?</p>
+      <p class="a">Access is controlled by the customer's own network. The dashboard runs on localhost (127.0.0.1) and is not exposed to the network by default. API endpoints require a valid license key for activation and use instance-level secrets for ongoing communication.</p>
+      <p class="q">Is multi-factor authentication supported?</p>
+      <p class="a">MFA is handled at the network level by the customer. The application itself does not manage user accounts or authentication beyond license validation.</p>
+    </div>
+    <div class="sec">
+      <h2>3. Data Handling &amp; Privacy</h2>
+      <p class="q">Where is data stored?</p>
+      <p class="a">All data is stored locally on the customer's machine: knowledge base files as .md documents in a user-specified directory, vector embeddings in a local Qdrant instance (Docker), logs in ~/.contextcut/logs, and configuration in ~/.contextcut/.env.</p>
+      <p class="q">Is data encrypted at rest?</p>
+      <p class="a">Data at rest encryption is provided by the underlying filesystem (customer-managed). The application does not currently encrypt individual files. Configuration values (API keys) are stored in plaintext in .env within the home directory.</p>
+      <p class="q">Is data encrypted in transit?</p>
+      <p class="a">All communication between components (proxy, dashboard, Qdrant, Ollama) occurs over localhost and does not traverse the network. If the user configures a remote Ollama host, encryption depends on the customer's network configuration.</p>
+    </div>
+    <div class="sec">
+      <h2>4. Encryption</h2>
+      <p class="q">What encryption algorithms are used?</p>
+      <p class="a">No application-level encryption is currently implemented. Data security relies on filesystem-level encryption and network segmentation controlled by the customer.</p>
+    </div>
+    <div class="sec">
+      <h2>5. Incident Response</h2>
+      <p class="q">What happens if a security incident is detected?</p>
+      <p class="a">The application maintains an audit log of all queries and responses (timestamp, query, tokens before/after, context %, knowledge base hits). Logs are stored locally in ~/.contextcut/logs and can be exported as CSV from the dashboard. Incident response is the responsibility of the customer.</p>
+      <p class="q">Are logs tamper-proof?</p>
+      <p class="a">Logs are written to local files with standard file permissions. There is no cryptographic chain of custody. Customers should forward logs to their SIEM for proper audit trail management.</p>
+    </div>
+    <div class="sec">
+      <h2>6. Infrastructure Security</h2>
+      <p class="q">What dependencies does the product have?</p>
+      <p class="a">Python 3, Ollama (local LLM runtime), Docker (for Qdrant vector database), and pip packages installed in a virtual environment. All dependencies are open-source.</p>
+      <p class="q">How are updates delivered?</p>
+      <p class="a">Updates are delivered via GitHub and installed by the user via the install script. There is no auto-update mechanism. The customer controls when and whether to apply updates.</p>
+      <p class="q">Is there a vulnerability disclosure program?</p>
+      <p class="a">Security issues can be reported via email to stevekean@gmail.com or through the GitHub repository issues page.</p>
+    </div>
+  </div>
+  <div class="foot">
+    <p>This self-assessment was generated on $(new Date().toISOString().split('T')[0]).</p>
+    <p style="margin-top:4px"><a href="https://github.com/StevoKeano/ContextCut-PRO">&#8592; Back to Documentation</a></p>
+  </div>
+</div>
+</body>
+</html>`;
+  return new Response(html, { headers: { "Content-Type": "text/html;charset=UTF-8" } });
+}
+
 function json(status, data) {
   return new Response(JSON.stringify(data), {
     status,
@@ -599,6 +687,10 @@ export default {
 
     if (url.pathname === "/install.js") {
       return await handleInstallScript();
+    }
+
+    if (url.pathname === "/compliance/soc2") {
+      return await handleCompliance();
     }
 
     const installMatch = url.pathname.match(/^\/install\/(CC-PRO-[a-f0-9-]+)$/);
