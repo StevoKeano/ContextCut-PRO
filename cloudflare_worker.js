@@ -222,8 +222,23 @@ body{background:#0F172A;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',
 .term-copy{position:absolute;bottom:16px;right:20px;background:#1E293B;border:1px solid #334155;border-radius:6px;color:#94A3B8;font-size:12px;padding:6px 14px;cursor:pointer;transition:all .15s}
 .term-copy:hover{background:#334155;color:#fff}
 .term-copy.ok{background:#22C55E;border-color:#22C55E;color:#fff}
-.priv{background:#0F172A;border:1px solid #1E3A2E;border-radius:8px;padding:14px 18px;margin-bottom:24px}
+.priv{background:#0F172A;border:1px solid #1E3A2E;border-radius:8px;padding:14px 18px;margin-bottom:20px}
 .priv p{font-size:13px;color:#4ADE80;line-height:1.6}
+.cmp{margin-bottom:24px}
+.cmp-hdr{background:transparent;border:1px solid #334155;border-radius:8px;padding:12px 16px;color:#94A3B8;font-size:13px;font-weight:600;cursor:pointer;width:100%;text-align:left;transition:all .15s;font-family:inherit}
+.cmp-hdr:hover{background:#1E293B;color:#E2E8F0;border-color:#0EA5E9}
+.cmp-body{display:none;background:#0F172A;border:1px solid #334155;border-top:none;border-radius:0 0 8px 8px;padding:16px 20px;margin-top:-2px}
+.cmp-body.open{display:block}
+.cmp-sec{margin-bottom:16px}
+.cmp-sec:last-child{margin-bottom:0}
+.cmp-sec h4{color:#0EA5E9;font-size:12px;font-weight:700;margin-bottom:6px;text-transform:uppercase;letter-spacing:1px}
+.cmp-sec p{font-size:13px;color:#CBD5E1;line-height:1.7}
+.cmp-sec code{font-size:12px;color:#7DD3FC;background:#1E293B;padding:1px 5px;border-radius:3px}
+.cmp-sec ul{margin:6px 0 0 0;padding:0 0 0 16px}
+.cmp-sec li{font-size:12px;color:#94A3B8;line-height:1.8}
+.cmp-sec li b{color:#CBD5E1}
+.cmp-sec a{color:#0EA5E9;text-decoration:none}
+.cmp-sec a:hover{text-decoration:underline}
 .pre{background:#0F172A;border:1px solid #334155;border-radius:8px;padding:14px 18px;margin-bottom:24px}
 .pre h3{font-size:13px;font-weight:700;color:#EAB308;margin-bottom:8px}
 .pre ul{margin:0;padding:0 0 0 18px}
@@ -333,6 +348,35 @@ body{background:#0F172A;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',
     <div class="priv">
       <p><strong>100% local.</strong> Your documents and queries never leave your machine. No cloud, no telemetry, no subscriptions.</p>
     </div>
+
+    <div class="cmp">
+      <button class="cmp-hdr" id="cmpBtn">Privacy &amp; Compliance &nbsp;<span id="cmpArrow">&#9660;</span></button>
+      <div class="cmp-body" id="cmpBody">
+        <div class="cmp-sec">
+          <h4>Architecture</h4>
+          <p>ContextCut PRO runs entirely on your machine. There is no cloud backend, no telemetry, and no third-party data processing. Your documents, queries, and AI responses never leave your network. The optional Voyage AI API key is used solely for generating embeddings&mdash;no document content is stored on Voyage's servers.</p>
+        </div>
+        <div class="cmp-sec">
+          <h4>Data Flow</h4>
+          <p>Documents are stored as <code>.md</code> files in a local directory you control. Embeddings are generated locally via Ollama (default) or optionally via the Voyage AI API. All vector data is stored in a local Qdrant instance running in Docker on your machine. Chat history is maintained in-memory and is never persisted to disk.</p>
+        </div>
+        <div class="cmp-sec">
+          <h4>Compliance Readiness</h4>
+          <p>By keeping all data on-premise and fully self-hosted, ContextCut PRO supports compliance with:</p>
+          <ul>
+            <li><b>GDPR</b> &mdash; No cross-border data transfer; full data residency</li>
+            <li><b>HIPAA</b> &mdash; Data never leaves your controlled environment</li>
+            <li><b>CCPA/CPRA</b> &mdash; No sale or sharing of personal information</li>
+            <li><b>SOC 2</b> &mdash; Self-attestation supported (questionnaire available)</li>
+          </ul>
+        </div>
+        <div class="cmp-sec">
+          <h4>Self-Attestation</h4>
+          <p>For vendor security reviews, a self-attestation questionnaire covering access controls, data handling, encryption, and incident response is available &mdash; <a href="mailto:stevekean@gmail.com">request a copy</a>.</p>
+        </div>
+      </div>
+    </div>
+
     <div class="foot">
       Need help? &nbsp;<a href="mailto:stevekean@gmail.com">Reply to your purchase email</a> &nbsp;&middot;&nbsp; <a href="https://github.com/StevoKeano/ContextCut-PRO">Documentation</a>
     </div>
@@ -387,11 +431,16 @@ function copyCmd(){
     setTimeout(function(){btn.textContent='Copy';btn.classList.remove('ok');},2000);
   });
 }
+function toggleCmp(){
+  var b=document.getElementById('cmpBody');var a=document.getElementById('cmpArrow');
+  var open=b.classList.toggle('open');a.innerHTML=open?'&#9650;':'&#9660;';
+}
 document.getElementById('f-voyage').addEventListener('input',function(){
   document.getElementById('grp-model').style.opacity=this.value?'0.3':'1';
 });
 document.getElementById('genBtn').addEventListener('click',generate);
-document.getElementById('copyBtn').addEventListener('click',copyCmd);`;
+document.getElementById('copyBtn').addEventListener('click',copyCmd);
+document.getElementById('cmpBtn').addEventListener('click',toggleCmp);`;
 
 async function handleInstallScript() {
   return new Response(INSTALL_JS, { headers: { "Content-Type": "application/javascript;charset=UTF-8" } });

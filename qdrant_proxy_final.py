@@ -1383,6 +1383,7 @@ tr:hover td{{background:var(--surf2)}}
   <button class="tog" id="togBtn" title="Toggle day/night">☀</button>
   <a href="/settings" style="background:transparent;border:1px solid var(--border);color:var(--muted);border-radius:3px;padding:3px 10px;font-size:11px;cursor:pointer;font-family:'JetBrains Mono',monospace;text-decoration:none">Settings ⚙</a>
   <button onclick="openFileBrowser()" style="background:transparent;border:1px solid var(--border);color:var(--muted);border-radius:3px;padding:3px 10px;font-size:11px;cursor:pointer;font-family:'JetBrains Mono',monospace">Browse Files 📂</button>
+  <a href="/api/logs/export" style="background:transparent;border:1px solid var(--border);color:var(--muted);border-radius:3px;padding:3px 8px;font-size:11px;cursor:pointer;font-family:'JetBrains Mono',monospace;text-decoration:none" title="Download audit log CSV">Export Log</a>
   <div class="live"><span class="dot"></span>live</div>
 </div>
 
@@ -2278,6 +2279,22 @@ class DashboardHandler(_SuppressBrokenPipe, BaseHTTPRequestHandler):
             body = json.dumps(rows).encode()
             self.send_response(200)
             self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+            return
+        if self.path == "/api/logs/export":
+            with _lock:
+                rows = list(_log)
+            lines = ["ts,query,tokens_before,tokens_after,pct,hits"]
+            for r in rows:
+                hits = "; ".join(f"{h['source'].replace('.md','')} ({h['score']})" for h in r.get("hits", []))
+                q = r['query'].replace('"', '""')
+                lines.append(f'{r["ts"]},"{q}",{r["tokens_before"]},{r["tokens_after"]},{r["pct"]},"{hits}"')
+            body = "\n".join(lines).encode("utf-8")
+            self.send_response(200)
+            self.send_header("Content-Type", "text/csv")
+            self.send_header("Content-Disposition", f'attachment; filename="contextcut-audit-{datetime.now().strftime("%Y%m%d")}.csv"')
             self.send_header("Content-Length", str(len(body)))
             self.end_headers()
             self.wfile.write(body)
