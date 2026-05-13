@@ -669,7 +669,7 @@ body{background:#080c14;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',
     </div>
   </div>
   <div class="foot">
-    <p>This self-assessment was generated on $(new Date().toISOString().split('T')[0]).</p>
+    <p>This self-assessment was generated on ${new Date().toISOString().split('T')[0]}.</p>
     <p style="margin-top:4px"><a href="https://github.com/StevoKeano/ContextCut-PRO">&#8592; Back to Documentation</a></p>
   </div>
 </div>
