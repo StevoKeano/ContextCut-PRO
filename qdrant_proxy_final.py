@@ -409,14 +409,12 @@ GRACE_PERIOD    = int(os.getenv("CONTEXTCUT_GRACE_SEC", "3600"))
 
 _license_state = {
     "valid":           False,
-    "activated_at":    None,
-    "last_heartbeat":  None,
-    "expires_at":      None,
-    "license_type":    None,
-    "seats":           0,
-    "message":         "",
-    "grace_since":     None,
+    "instance_id":     _instance_id,
     "instance_secret": None,
+    "last_heartbeat":  None,
+    "license_type":    None,
+    "message":         "Not yet validated",
+    "seats":           0,
 }
 
 _instance_id = os.getenv("CONTEXTCUT_INSTANCE_ID") or str(uuid.uuid4())
@@ -519,15 +517,7 @@ def send_heartbeat() -> bool:
             return False
         return True
     except Exception:
-        if _license_state["valid"] and not _license_state["grace_since"]:
-            _license_state["grace_since"] = time.time()
-        elif _license_state["grace_since"]:
-            elapsed = time.time() - _license_state["grace_since"]
-            if elapsed > GRACE_PERIOD:
-                _license_state["valid"] = False
-                _license_state["message"] = f"License grace period expired ({GRACE_PERIOD}s)"
-                return False
-        return True
+        return True  # network blip — don't deactivate, keep running
 
 def heartbeat_loop():
     time.sleep(HEARTBEAT_INTERVAL)
