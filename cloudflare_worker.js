@@ -346,7 +346,7 @@ body{background:#0F172A;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',
     </div>
 
     <div class="priv">
-      <p><strong>100% local.</strong> Your documents and queries never leave your machine. No cloud, no telemetry, no subscriptions.</p>
+      <p><strong>100% local.</strong> Your documents and queries never leave your machine. No cloud, no telemetry, no subscriptions. &nbsp;<a href="/compliance/soc2" style="color:#0EA5E9;text-decoration:none;white-space:nowrap">View attestation &rarr;</a></p>
     </div>
 
     <div class="cmp">
@@ -378,7 +378,7 @@ body{background:#0F172A;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',
     </div>
 
     <div class="foot">
-      Need help? &nbsp;<a href="mailto:stevekean@gmail.com">Reply to your purchase email</a> &nbsp;&middot;&nbsp; <a href="https://github.com/StevoKeano/ContextCut-PRO">Documentation</a>
+      <a href="mailto:stevekean@gmail.com">Contact</a> &nbsp;&middot;&nbsp; <a href="https://github.com/StevoKeano/ContextCut-PRO">Docs</a> &nbsp;&middot;&nbsp; <a href="/compliance/soc2">Privacy &amp; Compliance</a>
     </div>
   </div>
 </div>
@@ -602,49 +602,64 @@ body{background:#080c14;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',
     <div class="sec">
       <h2>1. Organization &amp; Product</h2>
       <p class="q">What does the product do?</p>
-      <p class="a">ContextCut PRO is a local AI privacy layer that sits between AI tools and a local LLM. It injects relevant context from a local knowledge base into LLM prompts and trims responses to fit context windows. It runs entirely on the customer's own infrastructure.</p>
+      <p class="a">ContextCut PRO is a local AI privacy layer that sits between AI tools and a local LLM. It injects relevant context from a local knowledge base into LLM prompts and trims responses to fit context windows. It runs on the customer's own infrastructure with minimal outbound communication for license management.</p>
       <p class="q">Who has access to customer data?</p>
-      <p class="a">No data leaves the customer's machine. There is no cloud backend, no telemetry, and no third-party data processing. The optional Voyage AI API key is used solely for generating embeddings; no document content is stored on Voyage's servers.</p>
+      <p class="a">Customer documents, queries, LLM responses, vector embeddings, and logs never leave the customer's machine. The only data that traverses the network is license validation (license key + machine fingerprint) and optional Voyage AI embedding requests if configured. Voyage AI states they do not store document content used for embeddings. No telemetry, usage analytics, or product metrics are collected.</p>
     </div>
     <div class="sec">
       <h2>2. Access Controls</h2>
       <p class="q">How is access to the application controlled?</p>
-      <p class="a">Access is controlled by the customer's own network. The dashboard runs on localhost (127.0.0.1) and is not exposed to the network by default. API endpoints require a valid license key for activation and use instance-level secrets for ongoing communication.</p>
+      <p class="a">The dashboard binds to localhost (127.0.0.1) and is not exposed to the network by default. The proxy API also binds to localhost unless explicitly configured otherwise. License activation uses instance-level secrets; the proxy verifies the license on each startup and sends periodic heartbeats.</p>
       <p class="q">Is multi-factor authentication supported?</p>
-      <p class="a">MFA is handled at the network level by the customer. The application itself does not manage user accounts or authentication beyond license validation.</p>
+      <p class="a">MFA is handled at the network level by the customer. The application does not manage user accounts or authentication beyond license validation.</p>
     </div>
     <div class="sec">
-      <h2>3. Data Handling &amp; Privacy</h2>
+      <h2>3. License Management &amp; Network Communication</h2>
+      <p class="q">What data leaves the machine for license validation?</p>
+      <p class="a">On startup and every 30 minutes thereafter, the proxy sends an HTTPS heartbeat to <code>api.contextcut-pro.com</code> containing the license key (UUID) and a unique instance ID. No document content, queries, model names, filenames, or network metadata is transmitted. Without internet access, the license will be deactivated after the heartbeat timeout period (30 minutes), and the proxy will stop processing requests until connectivity is restored.</p>
+      <p class="q">What other outbound connections are made?</p>
+      <p class="a"><b>During initial install:</b> The setup script fetches the installer from <code>api.contextcut-pro.com</code>, pulls a Docker image for Qdrant from Docker Hub, and may pull an LLM model from Ollama (ollama.com, configurable to local only). pip installs packages from PyPI. <b>During operation:</b> The only recurring outbound traffic is the license heartbeat described above. No telemetry, usage stats, or error reports are sent.</p>
+      <p class="q">Is the license channel encrypted?</p>
+      <p class="a">Yes. All communication with <code>api.contextcut-pro.com</code> uses HTTPS/TLS 1.3. The license payload does not contain sensitive data beyond the key itself.</p>
+      <p class="q">Can the license check be disabled?</p>
+      <p class="a">Not currently. The license validation and heartbeat are required for ongoing operation. An offline activation mode is under consideration for air-gapped deployments.</p>
+    </div>
+    <div class="sec">
+      <h2>4. Data Handling &amp; Privacy</h2>
       <p class="q">Where is data stored?</p>
-      <p class="a">All data is stored locally on the customer's machine: knowledge base files as .md documents in a user-specified directory, vector embeddings in a local Qdrant instance (Docker), logs in ~/.contextcut/logs, and configuration in ~/.contextcut/.env.</p>
+      <p class="a">All data is stored locally on the customer's machine: knowledge base files as <code>.md</code> documents in a user-specified directory (<code>~/contextcut/knowledge</code> by default), vector embeddings in a local Qdrant instance (Docker), logs in <code>~/.contextcut/logs</code>, and configuration in <code>~/.contextcut/.env</code>.</p>
       <p class="q">Is data encrypted at rest?</p>
-      <p class="a">Data at rest encryption is provided by the underlying filesystem (customer-managed). The application does not currently encrypt individual files. Configuration values (API keys) are stored in plaintext in .env within the home directory.</p>
+      <p class="a">Data at rest encryption is provided by the underlying filesystem (customer-managed). The application does not encrypt individual files. LLM provider API keys and the Voyage AI key are stored in plaintext in the <code>.env</code> file within the home directory. Customers should enable full-disk encryption (LUKS, BitLocker, FileVault) to protect data at rest.</p>
       <p class="q">Is data encrypted in transit?</p>
-      <p class="a">All communication between components (proxy, dashboard, Qdrant, Ollama) occurs over localhost and does not traverse the network. If the user configures a remote Ollama host, encryption depends on the customer's network configuration.</p>
+      <p class="a">All inter-process communication (proxy, dashboard, Qdrant, Ollama) occurs over localhost (127.0.0.1) and does not traverse the network. If the customer configures a remote Ollama host, encryption depends on the customer's network configuration. Outbound license checks use HTTPS/TLS 1.3. If Voyage AI is configured, embedding requests are sent over HTTPS/TLS 1.3.</p>
+      <p class="q">What happens if Voyage AI is configured?</p>
+      <p class="a">When a Voyage AI API key is provided, document content is sent to Voyage's API for embedding generation. Voyage states they do not store document content or use it for training. The embedding results (vectors) are stored locally in Qdrant. The raw document content is not retained by Voyage after the embedding response is returned.</p>
     </div>
     <div class="sec">
-      <h2>4. Encryption</h2>
-      <p class="q">What encryption algorithms are used?</p>
-      <p class="a">No application-level encryption is currently implemented. Data security relies on filesystem-level encryption and network segmentation controlled by the customer.</p>
+      <h2>5. Encryption</h2>
+      <p class="q">What encryption is used for local data?</p>
+      <p class="a">No application-level encryption. Relies on filesystem encryption managed by the customer.</p>
+      <p class="q">What encryption is used for network communication?</p>
+      <p class="a">All outbound HTTPS connections (license validation, Voyage AI, Docker pulls, pip installs) use TLS 1.3. Local inter-process communication is unencrypted (localhost only).</p>
     </div>
     <div class="sec">
-      <h2>5. Incident Response</h2>
+      <h2>6. Incident Response</h2>
       <p class="q">What happens if a security incident is detected?</p>
-      <p class="a">The application maintains an audit log of all queries and responses (timestamp, query, tokens before/after, context %, knowledge base hits). Logs are stored locally in ~/.contextcut/logs and can be exported as CSV from the dashboard. Incident response is the responsibility of the customer.</p>
+      <p class="a">The application maintains an audit log of all queries and responses (timestamp, query, tokens before/after, context %, knowledge base hits). Logs are stored locally in <code>~/.contextcut/logs</code> and can be exported as CSV from the dashboard. Incident response is the responsibility of the customer.</p>
       <p class="q">Are logs tamper-proof?</p>
       <p class="a">Logs are written to local files with standard file permissions. There is no cryptographic chain of custody. Customers should forward logs to their SIEM for proper audit trail management.</p>
     </div>
     <div class="sec">
-      <h2>6. Infrastructure Security</h2>
+      <h2>7. Infrastructure Security</h2>
       <p class="q">What dependencies does the product have?</p>
-      <p class="a">Python 3, Ollama (local LLM runtime), Docker (for Qdrant vector database), and pip packages installed in a virtual environment. All dependencies are open-source.</p>
+      <p class="a">Python 3, Ollama (local LLM runtime), Docker (for Qdrant vector database), and pip packages installed in a Python virtual environment. All dependencies are open-source.</p>
       <p class="q">How are updates delivered?</p>
-      <p class="a">Updates are delivered via GitHub and installed by the user via the install script. There is no auto-update mechanism. The customer controls when and whether to apply updates.</p>
+      <p class="a">Updates are delivered via GitHub and applied by re-running the install script. There is no auto-update mechanism. The customer controls when and whether to apply updates.</p>
       <p class="q">Is there a vulnerability disclosure program?</p>
       <p class="a">Security issues can be reported via email to stevekean@gmail.com or through the GitHub repository issues page.</p>
     </div>
     <div class="sec">
-      <h2>7. Knowledge Base &amp; Domain Expertise</h2>
+      <h2>8. Knowledge Base &amp; Domain Expertise</h2>
       <p class="q">Do you need a domain-specific LLM (e.g. "lawyer model")?</p>
       <p class="a">No. ContextCut PRO uses a Retrieval-Augmented Generation (RAG) architecture. Domain expertise is provided by the knowledge base &mdash; a set of <code>.md</code> files that are semantically searched and injected into each LLM prompt. The LLM itself is a general-purpose model (any model you choose from Ollama). This means any profession &mdash; lawyer, CPA, doctor, realtor, financial advisor, architect, consultant, tech &mdash; can achieve expert-level results by curating the knowledge base, without needing a fine-tuned model. Starter knowledge files for all of these verticals are included with the product.</p>
       <p class="q">Does the knowledge base leave the machine?</p>
