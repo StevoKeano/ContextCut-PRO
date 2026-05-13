@@ -643,6 +643,15 @@ body{background:#080c14;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',
       <p class="q">Is there a vulnerability disclosure program?</p>
       <p class="a">Security issues can be reported via email to stevekean@gmail.com or through the GitHub repository issues page.</p>
     </div>
+    <div class="sec">
+      <h2>7. Knowledge Base &amp; Domain Expertise</h2>
+      <p class="q">Do you need a domain-specific LLM (e.g. "lawyer model")?</p>
+      <p class="a">No. ContextCut PRO uses a Retrieval-Augmented Generation (RAG) architecture. Domain expertise is provided by the knowledge base &mdash; a set of <code>.md</code> files that are semantically searched and injected into each LLM prompt. The LLM itself is a general-purpose model (any model you choose from Ollama). This means any profession &mdash; lawyer, CPA, doctor, realtor, financial advisor, architect, consultant, tech &mdash; can achieve expert-level results by curating the knowledge base, without needing a fine-tuned model. Starter knowledge files for all of these verticals are included with the product.</p>
+      <p class="q">Does the knowledge base leave the machine?</p>
+      <p class="a">No. All <code>.md</code> files, their vector embeddings, and the retrieval process are entirely local. The knowledge base never leaves your controlled environment.</p>
+      <p class="q">How is the knowledge base secured?</p>
+      <p class="a">Knowledge files are standard <code>.md</code> documents in a directory you control. Vector embeddings are stored in a local Qdrant instance on your machine. File system permissions, disk encryption, and backup policies are managed by the customer.</p>
+    </div>
   </div>
   <div class="foot">
     <p>This self-assessment was generated on $(new Date().toISOString().split('T')[0]).</p>
