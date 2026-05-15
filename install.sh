@@ -222,17 +222,61 @@ else
       sleep 5
     fi
   else
-    echo '  Docker not found. Install Docker engine (Desktop GUI not required):'
+    echo "  Docker not found."
+    echo "  ─────────────────────────────────────────────────────"
+    echo "  1) Install Docker engine (Ubuntu/Debian):"
+    echo '       sudo apt update && sudo apt install -y docker-ce docker-ce-cli containerd.io'
+    echo "       sudo systemctl enable --now docker"
     echo ""
-    echo "    Linux (Ubuntu/Debian):"
-    echo '      sudo apt update && sudo apt install -y docker-ce docker-ce-cli containerd.io'
-    echo "      sudo systemctl enable --now docker"
+    echo "  2) Install Qdrant natively (no Docker):"
+    echo "       Downloads the Qdrant binary + creates a systemd service."
     echo ""
-    echo "    macOS: Docker Desktop — https://docker.com"
-    echo "    Windows: Docker Desktop (WSL2 backend) — https://docker.com"
-    echo ""
-    echo "  Or run Qdrant without Docker: https://qdrant.tech/documentation/quick-start/"
-    exit 1
+    read -p "  Choose [1] Docker, [2] native Qdrant, or [N] abort: " QD_CHOICE
+    if [ "$QD_CHOICE" = "1" ]; then
+      echo '  Install Docker manually, then re-run this script.'
+      echo "  https://docs.docker.com/engine/install/ubuntu/"
+      exit 1
+    elif [ "$QD_CHOICE" = "2" ]; then
+      echo "  Installing Qdrant natively..."
+      ARCH="x86_64"
+      if [ "$(uname -m)" = "aarch64" ]; then ARCH="aarch64"; fi
+      QD_URL="https://github.com/qdrant/qdrant/releases/latest/download/qdrant-${ARCH}-unknown-linux-gnu.tar.gz"
+      TMP_DIR=$(mktemp -d)
+      echo "  Downloading Qdrant from GitHub..."
+      curl -sSL "$QD_URL" -o "$TMP_DIR/qdrant.tar.gz" || { echo "  Download failed"; exit 1; }
+      tar -xzf "$TMP_DIR/qdrant.tar.gz" -C "$TMP_DIR" || { echo "  Extract failed"; exit 1; }
+      if [ ! -f "$TMP_DIR/qdrant" ]; then
+        echo "  ERROR: qdrant binary not found in tarball. Contents:"; ls -la "$TMP_DIR"
+        exit 1
+      fi
+      sudo mv "$TMP_DIR/qdrant" /usr/local/bin/qdrant
+      rm -rf "$TMP_DIR"
+      echo "  Qdrant binary installed to /usr/local/bin/qdrant"
+      mkdir -p "$INSTALL_DIR/qdrant_storage"
+      sudo tee /etc/systemd/system/qdrant.service > /dev/null << 'QDSVC'
+[Unit]
+Description=Qdrant vector database
+After=network.target
+
+[Service]
+Type=simple
+ExecStart=/usr/local/bin/qdrant --uri http://127.0.0.1:6333
+WorkingDirectory=/var/lib/qdrant
+Restart=on-failure
+
+[Install]
+WantedBy=multi-user.target
+QDSVC
+      sudo mkdir -p /var/lib/qdrant
+      sudo systemctl daemon-reload
+      sudo systemctl enable --now qdrant
+      echo "  Qdrant service started. Waiting 5s..."
+      sleep 5
+    else
+      echo "  Aborted. Install Qdrant manually, then re-run."
+      echo "  https://qdrant.tech/documentation/quick-start/"
+      exit 1
+    fi
   fi
 fi
 
