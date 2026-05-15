@@ -407,12 +407,14 @@ body{background:#0F172A;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',
         <div class="cmp-sec">
           <h4>Ollama on Windows: Admin Cmd</h4>
           <p>Run these <b>one time</b> in an <b>Admin</b> command prompt, then close all Ollama windows and restart:</p>
-          <pre style="background:#1E293B;padding:6px 10px;border-radius:4px;font-size:11px;color:#E2E8F0;overflow-x:auto;white-space:nowrap">setx OLLAMA_NO_CLOUD true /M &amp;&amp; setx OLLAMA_CONTEXT_LENGTH 8192 /M &amp;&amp; setx OLLAMA_HOST http://127.0.0.1:11434 /M</pre>
+          <pre style="background:#1E293B;padding:6px 10px;border-radius:4px;font-size:11px;color:#E2E8F0;overflow-x:auto;white-space:nowrap">setx OLLAMA_NO_CLOUD true /M &amp;&amp; setx OLLAMA_CONTEXT_LENGTH 8192 /M</pre>
           <table style="width:100%;margin-top:6px;border-collapse:collapse;font-size:11px">
             <tr><td style="padding:3px 6px;border:1px solid #334155"><code>OLLAMA_NO_CLOUD=true</code></td><td style="padding:3px 6px;border:1px solid #334155">Disables all outbound calls to ollama.com</td></tr>
             <tr><td style="padding:3px 6px;border:1px solid #334155"><code>OLLAMA_CONTEXT_LENGTH=8192</code></td><td style="padding:3px 6px;border:1px solid #334155">Reduces KV cache from ~5GB to ~1.25GB, preventing GPU VRAM eviction on a 14B q8_0 model</td></tr>
-            <tr><td style="padding:3px 6px;border:1px solid #334155"><code>OLLAMA_HOST=http://127.0.0.1:11434</code></td><td style="padding:3px 6px;border:1px solid #334155">Restricts Ollama to localhost (default <code>0.0.0.0</code> exposes to LAN)</td></tr>
           </table>
+          <p style="margin-top:8px"><b>OLLAMA_HOST</b> &mdash; Only set this if Ollama and the proxy are on the <b>same machine</b>:</p>
+          <pre style="background:#1E293B;padding:6px 10px;border-radius:4px;font-size:11px;color:#E2E8F0;overflow-x:auto;white-space:nowrap">setx OLLAMA_HOST http://127.0.0.1:11434 /M</pre>
+          <p style="font-size:11px;color:#94A3B8;margin-top:4px">If the proxy is on a <b>different machine</b> (like a dedicated Ubuntu server), leave the default <code>0.0.0.0</code> so Ollama listens on the LAN. Use Windows Firewall to restrict port <code>11434</code> to only the proxy server's IP.</p>
         </div>
         <div class="cmp-sec">
           <h4>License Communication</h4>
