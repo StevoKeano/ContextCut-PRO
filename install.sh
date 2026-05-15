@@ -256,6 +256,15 @@ for f in $STARTER_FILES; do
 done
 echo "  Starter knowledge files: $(echo $STARTER_FILES | wc -w) files in starterKnowledgeFiles/"
 echo "  (Copy the ones you need into knowledge/)"
+echo ""
+
+# ── Privacy: disable Ollama telemetry ────────────────────────────────────────
+if [ "$(uname)" != "Darwin" ]; then
+  echo "  \033[33mPrivacy:\033[0m Set OLLAMA_NO_CLOUD=true in your Ollama environment to disable"
+  echo "          all outbound calls to ollama.com. On the Ollama host, add:"
+  echo "            export OLLAMA_NO_CLOUD=true"
+  echo "          (Windows: run as Admin: setx OLLAMA_NO_CLOUD true /M)"
+fi
 
 # ── Write env file ────────────────────────────────────────────────────────────
 INSTANCE_ID=$(python3 -c "import uuid; print(uuid.uuid4())")

@@ -346,7 +346,7 @@ body{background:#0F172A;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',
     </div>
 
     <div class="priv">
-      <p><strong>100% local.</strong> Your documents and queries never leave your machine. No cloud, no telemetry, no subscriptions. &nbsp;<a href="/compliance/soc2" style="color:#0EA5E9;text-decoration:none;white-space:nowrap">View attestation &rarr;</a></p>
+      <p><strong>100% local.</strong> Your documents and queries never leave your machine. No cloud, no telemetry, no subscriptions. <strong>Important:</strong> If using Ollama on Windows, set <code>OLLAMA_NO_CLOUD=true</code> as a system environment variable (Admin cmd: <code>setx OLLAMA_NO_CLOUD true /M</code>) to disable all outbound calls to ollama.com. &nbsp;<a href="/compliance/soc2" style="color:#0EA5E9;text-decoration:none;white-space:nowrap">View attestation &rarr;</a></p>
     </div>
 
     <div class="cmp">
