@@ -2196,10 +2196,11 @@ function openFileBrowser() {{
         '</div>'
       ).join('') || '<div style="color:var(--muted);padding:20px;text-align:center">No .md files found</div>';
 
+      const kbd = data.kb_dir || '~/contextcut/knowledge';
       overlay.innerHTML =
         '<div style="background:#131a2b;border:1px solid var(--border);border-radius:8px;width:700px;max-width:95vw;max-height:85vh;display:flex;flex-direction:column;font-family:JetBrains Mono,monospace;font-size:12px;color:var(--text)">' +
           '<div style="display:flex;justify-content:space-between;align-items:center;padding:16px 20px;border-bottom:1px solid var(--border)">' +
-            '<strong style="font-size:14px">📂 Knowledge Files</strong>' +
+            '<div><strong style="font-size:14px">📂 Knowledge Files</strong><div style="font-size:10px;color:var(--muted);margin-top:2px">'+esc(kbd)+'</div></div>' +
             '<div style="display:flex;gap:8px;align-items:center">' +
               '<button onclick="fbUploadFile()" style="background:var(--accent);color:#000;border:none;border-radius:4px;padding:4px 12px;font-size:11px;cursor:pointer;font-family:inherit;font-weight:600">+ New</button>' +
               '<button id="fbCloseBtn" style="background:none;border:none;color:var(--muted);font-size:18px;cursor:pointer">&times;</button>' +
@@ -2508,7 +2509,7 @@ class DashboardHandler(_SuppressBrokenPipe, BaseHTTPRequestHandler):
                     "size": f.stat().st_size,
                     "modified": datetime.fromtimestamp(f.stat().st_mtime).isoformat(),
                 })
-            body = json.dumps({"files": files}).encode()
+            body = json.dumps({"files": files, "kb_dir": str(KB_DIR)}).encode()
             self.send_response(200)
             self.send_header("Content-Type", "application/json")
             self.send_header("Content-Length", str(len(body)))
