@@ -1384,7 +1384,7 @@ tr:hover td{{background:var(--surf2)}}
   <div class="logo">ContextCut<span>-PRO</span></div>
   <div class="hinfo">{UPSTREAM} · Qdrant {QDRANT_HOST}:{QDRANT_PORT} · min_score={MIN_SCORE} · top_k={TOP_K}</div>
   <button class="tog" id="togBtn" title="Toggle day/night">☀</button>
-  <a href="/settings" style="background:transparent;border:1px solid var(--border);color:var(--muted);border-radius:3px;padding:3px 10px;font-size:11px;cursor:pointer;font-family:'JetBrains Mono',monospace;text-decoration:none">Settings ⚙</a>
+  <a href="/settings" style="background:transparent;border:1px solid var(--border);color:var(--muted);border-radius:3px;padding:3px 10px;font-size:11px;cursor:pointer;font-family:'JetBrains Mono',monospace;text-decoration:none">LLM-Provider ⚙</a>
   <button onclick="openFileBrowser()" style="background:transparent;border:1px solid var(--border);color:var(--muted);border-radius:3px;padding:3px 10px;font-size:11px;cursor:pointer;font-family:'JetBrains Mono',monospace">Browse Files 📂</button>
   <a href="/api/logs/export" style="background:transparent;border:1px solid var(--border);color:var(--muted);border-radius:3px;padding:3px 8px;font-size:11px;cursor:pointer;font-family:'JetBrains Mono',monospace;text-decoration:none" title="Download audit log CSV">Export Log</a>
   <button onclick="seedDemo()" style="background:transparent;border:1px solid var(--border);color:var(--muted);border-radius:3px;padding:3px 8px;font-size:11px;cursor:pointer;font-family:'JetBrains Mono',monospace" title="Load sample data for demo">Demo Data</button>
@@ -1449,7 +1449,7 @@ tr:hover td{{background:var(--surf2)}}
             <option value="">▾</option>
           </select>
         </div>
-        <button class="settings-toggle" id="settingsToggle" onclick="toggleSettings()">Settings ⚙</button>
+        <button class="settings-toggle" id="settingsToggle" onclick="toggleSettings()">Params ⚙</button>
       </div>
       <div class="settings-panel" id="settingsPanel">
         <div class="settings-row">
@@ -1573,6 +1573,8 @@ async function seedDemo() {{
         if (tb) tb.innerHTML = rows.map(r => `<tr><td class="ts">${{r.ts}}</td><td class="qcell">${{esc(r.query.substring(0,60))}}</td><td class="num">${{r.tokens_before}}</td><td class="num">${{r.tokens_after}}</td><td class="num" style="color:var(--accent)">${{r.pct}}%</td><td class="hitcell">${{(r.hits||[]).map(h=>'<span class="hit">'+esc(h.source.replace(".md",""))+' <em>'+h.score+'</em></span>').join(' ')}}</td></tr>`).join('') + '<tr><td colspan="6" class="tbl-footer">Demo data loaded — ${{d.count}} requests</td></tr>';
       }}
       setTimeout(pollStats, 100);
+      toggleFullscreen();
+      setTimeout(toggleFullscreen, 3000);
     }}
   }} catch(e) {{}}
 }}
@@ -1586,7 +1588,7 @@ const tourSteps = [
   {{sel:'.chat-messages',title:'Chat Area',text:'Conversation with your AI. Context from your knowledge base is injected automatically into every message — no manual work needed.',pos:'left'}},
   {{sel:'.chat-input-bar',title:'Message Input',text:'Type your question here. Press Enter to send. Session history is maintained automatically.',pos:'top'}},
   {{sel:'#modelSelect',title:'Model Selector',text:'Quick-select from available models including Ollama local models and cloud providers like minimax-m2, gemini-3-flash, and glm-4.7. Auto-populated on startup.',pos:'bottom'}},
-  {{sel:'#settingsPanel',title:'Settings Panel',text:'Fine-tune generation parameters: temperature (creativity), top-p (diversity), max tokens, and minimum relevance score for RAG retrieval. Expand by clicking the Settings ⚙ button.',pos:'top'}},
+  {{sel:'#settingsPanel',title:'Settings Panel',text:'Fine-tune generation parameters: temperature (creativity), top-p (diversity), max tokens, and minimum relevance score for RAG retrieval. Expand by clicking the Params ⚙ button.',pos:'top'}},
   {{sel:'button[onclick*="openFileBrowser"]',title:'File Browser',text:'Upload and manage .md files in your knowledge base. Files are auto-ingested into Qdrant vectors within seconds of being added.',pos:'bottom'}},
 ];
 let tourIdx = -1;
