@@ -154,7 +154,7 @@ LISTEN_PORT    = int(os.getenv("CONTEXTCUT_PROXY_PORT",     "18788"))
 DASHBOARD_PORT = int(os.getenv("CONTEXTCUT_DASHBOARD_PORT", "18787"))
 CTX_LIMIT      = int(os.getenv("CONTEXTCUT_CTX_LIMIT",   "8192"))
 TOP_K          = int(os.getenv("CONTEXTCUT_TOP_K",       "5"))
-MIN_SCORE      = float(os.getenv("CONTEXTCUT_MIN_SCORE", "0.20"))
+MIN_SCORE      = float(os.getenv("CONTEXTCUT_MIN_SCORE", "0.50"))
 DEFAULT_MODEL  = os.getenv("CONTEXTCUT_MODEL",           "")
 
 # ── Dynamic Provider Settings ────────────────────────────────────────────────
@@ -2575,18 +2575,18 @@ class DashboardHandler(_SuppressBrokenPipe, BaseHTTPRequestHandler):
             return
         if self.path == "/api/demo/seed":
             demo_queries = [
-                ("What are the key terms in this non-compete clause?", 3420, 890, [{"source":"lawyer-smb-CONTRACT.md","score":0.81},{"source":"lawyer-smb-EMPLOYMENT.md","score":0.67}]),
-                ("Summarize the discovery deadline for the Johnson case", 5100, 1240, [{"source":"lawyer-lit-DISCOVERY.md","score":0.88},{"source":"lawyer-lit-MOTIONS.md","score":0.62}]),
-                ("What is the QBI deduction limit for 2025?", 2280, 650, [{"source":"cpa-smb-QBI.md","score":0.91},{"source":"cpa-smb-SELFEMPLOYED.md","score":0.73}]),
-                ("Draft a motion to compel based on these facts", 7650, 2100, [{"source":"lawyer-lit-MOTIONS.md","score":0.85},{"source":"lawyer-lit-DISCOVERY.md","score":0.71},{"source":"base-DRAFTING.md","score":0.59}]),
-                ("Explain the HIPAA privacy rule for patient records", 4100, 1080, [{"source":"doctor-PATIENT.md","score":0.87},{"source":"doctor-PRACTICE.md","score":0.69},{"source":"base-COMPLIANCE.md","score":0.55}]),
-                ("What are the earnest money requirements in Texas?", 1950, 520, [{"source":"realtor-CONTRACT.md","score":0.83},{"source":"realtor-DISCLOSURE.md","score":0.74}]),
-                ("Calculate the capital gains on this property sale", 6300, 1700, [{"source":"cpa-personal-INVESTMENT.md","score":0.78},{"source":"cpa-personal-INCOME.md","score":0.65}]),
-                ("What are the zoning restrictions for mixed-use development?", 3850, 1020, [{"source":"architect-REGULATORY.md","score":0.86},{"source":"lawyer-re-ZONING.md","score":0.72}]),
-                ("Summarize the engagement letter for the Smith consulting project", 4700, 1350, [{"source":"consultant-ENGAGEMENT.md","score":0.89},{"source":"consultant-DELIVERABLE.md","score":0.61}]),
-                ("Draft a closing statement for the Oakwood property transfer", 8200, 2450, [{"source":"lawyer-re-CLOSING.md","score":0.82},{"source":"lawyer-re-PURCHASE.md","score":0.68},{"source":"realtor-CONTRACT.md","score":0.56}]),
-                ("What are the encryption requirements for client data under GDPR?", 2900, 780, [{"source":"tech-PRIVACY.md","score":0.84},{"source":"base-COMPLIANCE.md","score":0.70},{"source":"base-ETHICS.md","score":0.52}]),
-                ("Review this trust distribution schedule for compliance", 5400, 1480, [{"source":"advisor-ESTATE.md","score":0.90},{"source":"cpa-personal-ESTATE.md","score":0.77}]),
+                ("What are the key terms in this non-compete clause?", 142, 2870, [{"source":"lawyer-smb-CONTRACT.md","score":0.81},{"source":"lawyer-smb-EMPLOYMENT.md","score":0.67}]),
+                ("Summarize the discovery deadline for the Johnson case", 98, 3240, [{"source":"lawyer-lit-DISCOVERY.md","score":0.88},{"source":"lawyer-lit-MOTIONS.md","score":0.62}]),
+                ("What is the QBI deduction limit for 2025?", 72, 1810, [{"source":"cpa-smb-QBI.md","score":0.91},{"source":"cpa-smb-SELFEMPLOYED.md","score":0.73}]),
+                ("Draft a motion to compel based on these facts", 185, 4620, [{"source":"lawyer-lit-MOTIONS.md","score":0.85},{"source":"lawyer-lit-DISCOVERY.md","score":0.71},{"source":"base-DRAFTING.md","score":0.59}]),
+                ("Explain the HIPAA privacy rule for patient records", 108, 2980, [{"source":"doctor-PATIENT.md","score":0.87},{"source":"doctor-PRACTICE.md","score":0.69},{"source":"base-COMPLIANCE.md","score":0.55}]),
+                ("What are the earnest money requirements in Texas?", 64, 1430, [{"source":"realtor-CONTRACT.md","score":0.83},{"source":"realtor-DISCLOSURE.md","score":0.74}]),
+                ("Calculate the capital gains on this property sale", 125, 3950, [{"source":"cpa-personal-INVESTMENT.md","score":0.78},{"source":"cpa-personal-INCOME.md","score":0.65}]),
+                ("What are the zoning restrictions for mixed-use development?", 88, 2110, [{"source":"architect-REGULATORY.md","score":0.86},{"source":"lawyer-re-ZONING.md","score":0.72}]),
+                ("Summarize the engagement letter for the Smith consulting project", 112, 2560, [{"source":"consultant-ENGAGEMENT.md","score":0.89},{"source":"consultant-DELIVERABLE.md","score":0.61}]),
+                ("Draft a closing statement for the Oakwood property transfer", 156, 4780, [{"source":"lawyer-re-CLOSING.md","score":0.82},{"source":"lawyer-re-PURCHASE.md","score":0.68},{"source":"realtor-CONTRACT.md","score":0.56}]),
+                ("What are the encryption requirements for client data under GDPR?", 95, 1690, [{"source":"tech-PRIVACY.md","score":0.84},{"source":"base-COMPLIANCE.md","score":0.70},{"source":"base-ETHICS.md","score":0.52}]),
+                ("Review this trust distribution schedule for compliance", 134, 3170, [{"source":"advisor-ESTATE.md","score":0.90},{"source":"cpa-personal-ESTATE.md","score":0.77}]),
             ]
             now = time.time()
             with _lock:
