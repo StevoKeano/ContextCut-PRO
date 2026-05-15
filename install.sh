@@ -317,6 +317,7 @@ QDSVC
     fi
   fi
 fi
+fi
 
 # ── Python venv ───────────────────────────────────────────────────────────────
 echo "  Creating Python virtual environment..."
