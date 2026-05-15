@@ -336,7 +336,7 @@ body{background:#0F172A;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',
       </div>
       <div class="fg">
         <label>Min Relevance Score</label>
-        <input type="text" id="f-score" value="0.20">
+        <input type="text" id="f-score" value="0.50">
         <span class="hint">0.0 – 1.0 &nbsp;|&nbsp; Lower = more results</span>
       </div>
     </div>
@@ -414,7 +414,7 @@ function generate(){
   var pport=document.getElementById('f-proxy-port').value||'18788';
   var dport=document.getElementById('f-dash-port').value||'18787';
   var ctx=document.getElementById('f-ctx').value||'8192';
-  var score=document.getElementById('f-score').value||'0.20';
+  var score=document.getElementById('f-score').value||'0.50';
   var lines=[
     'curl -fsSL "'+esc(installUrl)+'" -o /tmp/cc-install.sh \\\\',
     '  && VOYAGE_KEY="'+esc(voyage)+'" \\\\',
