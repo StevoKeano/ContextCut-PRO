@@ -1339,10 +1339,10 @@ tr:hover td{{background:var(--surf2)}}
 .chat-input-bar{{border-top:1px solid var(--border);padding:10px;display:flex;flex-direction:column;gap:8px;flex-shrink:0;background:var(--surf)}}
 .model-row{{display:flex;align-items:center;gap:8px}}
 .model-label{{font-size:10px;color:var(--muted);white-space:nowrap}}
-.model-combo{{flex:1;display:flex;gap:4px}}
-.model-input{{flex:1;background:var(--bg);border:1px solid var(--border);border-radius:var(--r);padding:5px 9px;color:var(--text);font-family:'JetBrains Mono',monospace;font-size:12px;outline:none;min-width:0}}
+.model-combo{{flex:1;display:flex;gap:4px;min-width:0;overflow:hidden}}
+.model-input{{flex:1;background:var(--bg);border:1px solid var(--border);border-radius:var(--r);padding:5px 9px;color:var(--text);font-family:'JetBrains Mono',monospace;font-size:12px;outline:none;min-width:0;width:60px}}
 .model-input:focus{{border-color:var(--accent)}}
-.model-select{{background:var(--bg);border:1px solid var(--border);border-radius:var(--r);padding:4px 6px;color:var(--muted);font-size:11px;cursor:pointer;outline:none;font-family:'JetBrains Mono',monospace}}
+.model-select{{background:var(--bg);border:1px solid var(--border);border-radius:var(--r);padding:4px 6px;color:var(--muted);font-size:11px;cursor:pointer;outline:none;font-family:'JetBrains Mono',monospace;max-width:100%;overflow:hidden}}
 .model-select:focus{{border-color:var(--accent)}}
 .model-select option{{background:var(--surf);color:var(--text)}}
 .input-row{{display:flex;gap:8px;align-items:flex-end}}
@@ -1357,7 +1357,7 @@ tr:hover td{{background:var(--surf2)}}
 .param-slider{{width:60px;height:4px;-webkit-appearance:none;background:var(--border);border-radius:2px;outline:none;cursor:pointer}}
 .param-slider::-webkit-slider-thumb{{-webkit-appearance:none;width:12px;height:12px;border-radius:50%;background:var(--accent);cursor:pointer}}
 .param-val{{font-size:10px;color:var(--accent);min-width:28px;text-align:center;font-family:'JetBrains Mono',monospace}}
-.settings-toggle{{background:transparent;border:1px solid var(--border);color:var(--muted);border-radius:3px;padding:3px 8px;font-size:10px;cursor:pointer;font-family:'JetBrains Mono',monospace}}
+.settings-toggle{{background:transparent;border:1px solid var(--border);color:var(--muted);border-radius:3px;padding:3px 8px;font-size:10px;cursor:pointer;font-family:'JetBrains Mono',monospace;flex-shrink:0;white-space:nowrap}}
 .settings-toggle:hover{{color:var(--text);border-color:var(--accent)}}
 .settings-panel{{display:none;background:var(--surf);border-top:1px solid var(--border);padding:8px 10px}}
 .settings-panel.open{{display:block}}
@@ -1573,8 +1573,6 @@ async function seedDemo() {{
         if (tb) tb.innerHTML = rows.map(r => `<tr><td class="ts">${{r.ts}}</td><td class="qcell">${{esc(r.query.substring(0,60))}}</td><td class="num">${{r.tokens_before}}</td><td class="num">${{r.tokens_after}}</td><td class="num" style="color:var(--accent)">${{r.pct}}%</td><td class="hitcell">${{(r.hits||[]).map(h=>'<span class="hit">'+esc(h.source.replace(".md",""))+' <em>'+h.score+'</em></span>').join(' ')}}</td></tr>`).join('') + '<tr><td colspan="6" class="tbl-footer">Demo data loaded — ${{d.count}} requests</td></tr>';
       }}
       setTimeout(pollStats, 100);
-      toggleFullscreen();
-      setTimeout(toggleFullscreen, 3000);
     }}
   }} catch(e) {{}}
 }}
@@ -1588,6 +1586,7 @@ const tourSteps = [
   {{sel:'.chat-messages',title:'Chat Area',text:'Conversation with your AI. Context from your knowledge base is injected automatically into every message — no manual work needed.',pos:'left'}},
   {{sel:'.chat-input-bar',title:'Message Input',text:'Type your question here. Press Enter to send. Session history is maintained automatically.',pos:'top'}},
   {{sel:'#modelSelect',title:'Model Selector',text:'Quick-select from available models including Ollama local models and cloud providers like minimax-m2, gemini-3-flash, and glm-4.7. Auto-populated on startup.',pos:'bottom'}},
+  {{sel:'#fsBtn',title:'Fullscreen Mode',text:'Expand the chat panel to full screen for focused work. Toggle on/off with this button or press F11. The tour will show and then restore it.',pos:'bottom'}},
   {{sel:'#settingsPanel',title:'Settings Panel',text:'Fine-tune generation parameters: temperature (creativity), top-p (diversity), max tokens, and minimum relevance score for RAG retrieval. Expand by clicking the Params ⚙ button.',pos:'top'}},
   {{sel:'button[onclick*="openFileBrowser"]',title:'File Browser',text:'Upload and manage .md files in your knowledge base. Files are auto-ingested into Qdrant vectors within seconds of being added.',pos:'bottom'}},
 ];
@@ -1605,6 +1604,7 @@ function endTour(){{
   const ov = document.getElementById('tourOv'); const sp = document.getElementById('tourSpot'); const tip = document.getElementById('tourTip');
   if(ov)ov.remove(); if(sp)sp.remove(); if(tip)tip.remove();
   const sp2 = document.getElementById('settingsPanel'); if(sp2&&sp2.classList.contains('open')) toggleSettings();
+  const rg = document.querySelector('.right'); if(rg&&rg.classList.contains('fullscreen')) toggleFullscreen();
   tourIdx = -1;
 }}
 function tourGo(i){{
@@ -1612,6 +1612,9 @@ function tourGo(i){{
   const sp = document.getElementById('settingsPanel');
   if(s.sel==='#settingsPanel'){{ if(sp&&!sp.classList.contains('open')) toggleSettings(); }}
   else if(sp&&sp.classList.contains('open')) toggleSettings();
+  const rg = document.querySelector('.right');
+  if(s.sel==='#fsBtn'){{ if(rg&&!rg.classList.contains('fullscreen')) toggleFullscreen(); }}
+  else if(rg&&rg.classList.contains('fullscreen')) toggleFullscreen();
   const el = document.querySelector(s.sel); if(!el) return tourNext();
   const r = el.getBoundingClientRect();
   const spot = document.getElementById('tourSpot');
