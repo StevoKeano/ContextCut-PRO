@@ -389,6 +389,38 @@ body{background:#0F172A;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',
       </div>
     </div>
 
+    <div class="opsec">
+      <button class="cmp-hdr" id="opsecBtn">OpSec &nbsp;<span id="opsecArrow">&#9660;</span></button>
+      <div class="cmp-body" id="opsecBody">
+        <div class="cmp-sec">
+          <h4>Port Exposure</h4>
+          <p>All ContextCut PRO services bind exclusively to <code>127.0.0.1</code> (localhost):</p>
+          <ul>
+            <li><b>Dashboard</b> &mdash; Port 18787 on <code>127.0.0.1</code> (not reachable from LAN/WAN)</li>
+            <li><b>Proxy</b> &mdash; Port 18788 on <code>127.0.0.1</code> (not reachable from LAN/WAN)</li>
+            <li><b>Qdrant</b> &mdash; Port 6333 on <code>127.0.0.1</code> (not reachable from LAN/WAN)</li>
+            <li><b>Ollama mgmt endpoints</b> &mdash; <code>/api/pull</code>, <code>/api/push</code>, <code>/api/delete</code>, <code>/api/copy</code>, <code>/api/create</code> return 403 through the proxy</li>
+            <li><b>Open proxy prevention</b> &mdash; The catch-all POST handler only forwards <code>/v1/chat/completions</code>, <code>/api/chat</code>, <code>/api/generate</code>, and <code>/v1/completions</code>; all other paths return 404</li>
+            <li><b>Gumroad webhook</b> &mdash; Verified via HMAC-SHA256 signature; only processed if the signature matches <code>GUMROAD_WEBHOOK_SECRET</code></li>
+          </ul>
+        </div>
+        <div class="cmp-sec">
+          <h4>Ollama on Windows: Admin Cmd</h4>
+          <p>Run these <b>one time</b> in an <b>Admin</b> command prompt, then close all Ollama windows and restart:</p>
+          <pre style="background:#1E293B;padding:6px 10px;border-radius:4px;font-size:11px;color:#E2E8F0;overflow-x:auto;white-space:nowrap">setx OLLAMA_NO_CLOUD true /M &amp;&amp; setx OLLAMA_CONTEXT_LENGTH 8192 /M &amp;&amp; setx OLLAMA_HOST http://127.0.0.1:11434 /M</pre>
+          <table style="width:100%;margin-top:6px;border-collapse:collapse;font-size:11px">
+            <tr><td style="padding:3px 6px;border:1px solid #334155"><code>OLLAMA_NO_CLOUD=true</code></td><td style="padding:3px 6px;border:1px solid #334155">Disables all outbound calls to ollama.com</td></tr>
+            <tr><td style="padding:3px 6px;border:1px solid #334155"><code>OLLAMA_CONTEXT_LENGTH=8192</code></td><td style="padding:3px 6px;border:1px solid #334155">Reduces KV cache from ~5GB to ~1.25GB, preventing GPU VRAM eviction on a 14B q8_0 model</td></tr>
+            <tr><td style="padding:3px 6px;border:1px solid #334155"><code>OLLAMA_HOST=http://127.0.0.1:11434</code></td><td style="padding:3px 6px;border:1px solid #334155">Restricts Ollama to localhost (default <code>0.0.0.0</code> exposes to LAN)</td></tr>
+          </table>
+        </div>
+        <div class="cmp-sec">
+          <h4>License Communication</h4>
+          <p>The only outbound traffic is a lightweight heartbeat (every 15 min) to <code>api.contextcut-pro.com</code> to verify the license seat is active. No document content, queries, or metadata is transmitted.</p>
+        </div>
+      </div>
+    </div>
+
     <div class="foot">
       <a href="mailto:stevekean@gmail.com">Contact</a> &nbsp;&middot;&nbsp; <a href="https://github.com/StevoKeano/ContextCut-PRO">Docs</a> &nbsp;&middot;&nbsp; <a href="/compliance/soc2">Privacy</a> &nbsp;&middot;&nbsp; <a href="/promo">Share</a>
     </div>
@@ -447,12 +479,17 @@ function toggleCmp(){
   var b=document.getElementById('cmpBody');var a=document.getElementById('cmpArrow');
   var open=b.classList.toggle('open');a.innerHTML=open?'&#9650;':'&#9660;';
 }
+function toggleOpsec(){
+  var b=document.getElementById('opsecBody');var a=document.getElementById('opsecArrow');
+  var open=b.classList.toggle('open');a.innerHTML=open?'&#9650;':'&#9660;';
+}
 document.getElementById('f-voyage').addEventListener('input',function(){
   document.getElementById('grp-model').style.opacity=this.value?'0.3':'1';
 });
 document.getElementById('genBtn').addEventListener('click',generate);
 document.getElementById('copyBtn').addEventListener('click',copyCmd);
-document.getElementById('cmpBtn').addEventListener('click',toggleCmp);`;
+document.getElementById('cmpBtn').addEventListener('click',toggleCmp);
+document.getElementById('opsecBtn').addEventListener('click',toggleOpsec);`;
 
 async function handleInstallScript() {
   return new Response(INSTALL_JS, { headers: { "Content-Type": "application/javascript;charset=UTF-8" } });
