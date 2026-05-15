@@ -208,9 +208,47 @@ else
   echo ""
   echo "  Qdrant not reachable at $QDRANT_HOST:$QDRANT_PORT"
   if $NONINTERACTIVE; then
-    echo "  ERROR: Qdrant must be running before install. Start it and re-run."
-    exit 1
-  fi
+    if command -v docker &>/dev/null; then
+      echo "  Auto-starting Qdrant via Docker..."
+      docker run -d --name qdrant --restart always \
+        -p "127.0.0.1:$QDRANT_PORT:6333" \
+        -v "$INSTALL_DIR/qdrant_storage:/qdrant/storage" \
+        qdrant/qdrant
+      echo "  Qdrant started. Waiting 5s..."
+      sleep 5
+    else
+      echo "  Auto-installing Qdrant natively..."
+      ARCH="x86_64"
+      if [ "$(uname -m)" = "aarch64" ]; then ARCH="aarch64"; fi
+      QD_URL="https://github.com/qdrant/qdrant/releases/latest/download/qdrant-${ARCH}-unknown-linux-gnu.tar.gz"
+      TMP_DIR=$(mktemp -d)
+      curl -sSL "$QD_URL" -o "$TMP_DIR/qdrant.tar.gz" || { echo "  Download failed"; exit 1; }
+      tar -xzf "$TMP_DIR/qdrant.tar.gz" -C "$TMP_DIR" || { echo "  Extract failed"; exit 1; }
+      sudo mv "$TMP_DIR/qdrant" /usr/local/bin/qdrant
+      rm -rf "$TMP_DIR"
+      echo "  Qdrant binary installed to /usr/local/bin/qdrant"
+      mkdir -p "$INSTALL_DIR/qdrant_storage"
+      sudo tee /etc/systemd/system/qdrant.service > /dev/null << 'QDSVC'
+[Unit]
+Description=Qdrant vector database
+After=network.target
+
+[Service]
+Type=simple
+ExecStart=/usr/local/bin/qdrant --uri http://127.0.0.1:6333
+WorkingDirectory=/var/lib/qdrant
+Restart=on-failure
+
+[Install]
+WantedBy=multi-user.target
+QDSVC
+      sudo mkdir -p /var/lib/qdrant
+      sudo systemctl daemon-reload
+      sudo systemctl enable --now qdrant
+      echo "  Qdrant service started. Waiting 5s..."
+      sleep 5
+    fi
+  else
   if command -v docker &>/dev/null; then
     read -p "  Start Qdrant via Docker now? [y/N]: " START_QDRANT
     if [ "$START_QDRANT" = "y" ] || [ "$START_QDRANT" = "Y" ]; then
