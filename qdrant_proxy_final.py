@@ -1611,8 +1611,8 @@ function tourGo(i){{
   else if(sp&&sp.classList.contains('open')) toggleSettings();
   const el = document.querySelector(s.sel); if(!el) return tourNext();
   const r = el.getBoundingClientRect();
-  const sp = document.getElementById('tourSpot');
-  if(sp){{ sp.style.left = (r.left-6)+'px'; sp.style.top = (r.top-6)+'px'; sp.style.width = (r.width+12)+'px'; sp.style.height = (r.height+12)+'px'; }}
+  const spot = document.getElementById('tourSpot');
+  if(spot){{ spot.style.left = (r.left-6)+'px'; spot.style.top = (r.top-6)+'px'; spot.style.width = (r.width+12)+'px'; spot.style.height = (r.height+12)+'px'; }}
   const tip = document.getElementById('tourTip');
   if(tip){{
     document.getElementById('tourTitle').textContent = s.title;
