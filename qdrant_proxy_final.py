@@ -407,6 +407,8 @@ LICENSE_KEY     = os.getenv("CONTEXTCUT_LICENSE_KEY", "")
 HEARTBEAT_INTERVAL = int(os.getenv("CONTEXTCUT_HEARTBEAT_SEC", "900"))
 GRACE_PERIOD    = int(os.getenv("CONTEXTCUT_GRACE_SEC", "3600"))
 
+_instance_id = os.getenv("CONTEXTCUT_INSTANCE_ID") or str(uuid.uuid4())
+
 _license_state = {
     "valid":           False,
     "instance_id":     _instance_id,
@@ -416,8 +418,6 @@ _license_state = {
     "message":         "Not yet validated",
     "seats":           0,
 }
-
-_instance_id = os.getenv("CONTEXTCUT_INSTANCE_ID") or str(uuid.uuid4())
 
 def get_fingerprint() -> dict:
     import platform
@@ -1578,31 +1578,37 @@ async function seedDemo() {{
 }}
 
 const tourSteps = [
-  {sel:'.logo',title:'Dashboard Header',text:'ContextCut PRO dashboard with live status indicator. Green dot means the proxy is running and accepting requests.',pos:'bottom'},
-  {sel:'.hinfo',title:'Connection Info',text:'Shows your LLM provider, Qdrant host, minimum relevance score, and Top-K setting. All configurable via the Settings page.',pos:'bottom'},
-  {sel:'.cards',title:'Statistics Cards',text:'Real-time metrics: license status, total requests, context compression %, tokens saved, peak token usage, context limit, and cache hits.',pos:'bottom'},
-  {sel:'.ctx-wrap',title:'Context Usage Meter',text:'Visual bar showing how much of your token limit the most recent request consumed. Green = efficient. Red = nearing the limit.',pos:'bottom'},
-  {sel:'.tbl-wrap',title:'Audit Log',text:'Every query is logged with timestamp, before/after tokens, compression percentage, and which knowledge base files matched. Exportable as CSV.',pos:'top'},
-  {sel:'.chat-messages',title:'Chat Area',text:'Conversation with your AI. Context from your knowledge base is injected automatically into every message — no manual work needed.',pos:'left'},
-  {sel:'.chat-input-bar',title:'Message Input',text:'Type your question here. Select a model, adjust temperature and top-p, then press Enter. Session history is maintained automatically.',pos:'top'},
-  {sel:'button[onclick*="openFileBrowser"]',title:'File Browser',text:'Upload and manage .md files in your knowledge base. Files are auto-ingested into Qdrant vectors within seconds of being added.',pos:'bottom'},
+  {{sel:'.logo',title:'Dashboard Header',text:'ContextCut PRO dashboard with live status indicator. Green dot means the proxy is running and accepting requests.',pos:'bottom'}},
+  {{sel:'.hinfo',title:'Connection Info',text:'Shows your LLM provider, Qdrant host, minimum relevance score, and Top-K setting. All configurable via the Settings page.',pos:'bottom'}},
+  {{sel:'.cards',title:'Statistics Cards',text:'Real-time metrics: license status, total requests, context compression %, tokens saved, peak token usage, context limit, and cache hits.',pos:'bottom'}},
+  {{sel:'.ctx-wrap',title:'Context Usage Meter',text:'Visual bar showing how much of your token limit the most recent request consumed. Green = efficient. Red = nearing the limit.',pos:'bottom'}},
+  {{sel:'.tbl-wrap',title:'Audit Log',text:'Every query is logged with timestamp, before/after tokens, compression percentage, and which knowledge base files matched. Exportable as CSV.',pos:'top'}},
+  {{sel:'.chat-messages',title:'Chat Area',text:'Conversation with your AI. Context from your knowledge base is injected automatically into every message — no manual work needed.',pos:'left'}},
+  {{sel:'.chat-input-bar',title:'Message Input',text:'Type your question here. Press Enter to send. Session history is maintained automatically.',pos:'top'}},
+  {{sel:'#modelSelect',title:'Model Selector',text:'Quick-select from available models including Ollama local models and cloud providers like minimax-m2, gemini-3-flash, and glm-4.7. Auto-populated on startup.',pos:'bottom'}},
+  {{sel:'#settingsPanel',title:'Settings Panel',text:'Fine-tune generation parameters: temperature (creativity), top-p (diversity), max tokens, and minimum relevance score for RAG retrieval. Expand by clicking the Settings ⚙ button.',pos:'top'}},
+  {{sel:'button[onclick*="openFileBrowser"]',title:'File Browser',text:'Upload and manage .md files in your knowledge base. Files are auto-ingested into Qdrant vectors within seconds of being added.',pos:'bottom'}},
 ];
 let tourIdx = -1;
-function startTour(){
+function startTour(){{
   const ov = document.createElement('div'); ov.id = 'tourOv'; ov.className = 'on';
   const sp = document.createElement('div'); sp.id = 'tourSpot';
   const tip = document.createElement('div'); tip.id = 'tourTip';
   tip.innerHTML = '<h3 id="tourTitle"></h3><p id="tourText"></p><div class="tc"><span class="step" id="tourStep"></span><div class="btns"><button onclick="tourPrev()" id="tourPrevBtn">Back</button><button class="prim" onclick="tourNext()" id="tourNextBtn">Next</button><button onclick="endTour()" id="tourEndBtn" style="display:none" class="prim">Done</button></div></div>';
   document.body.appendChild(ov); document.body.appendChild(sp); document.body.appendChild(tip);
   tourIdx = -1; tourNext();
-}
-function endTour(){
+}}
+function endTour(){{
   const ov = document.getElementById('tourOv'); const sp = document.getElementById('tourSpot'); const tip = document.getElementById('tourTip');
   if(ov)ov.remove(); if(sp)sp.remove(); if(tip)tip.remove();
+  const sp2 = document.getElementById('settingsPanel'); if(sp2&&sp2.classList.contains('open')) toggleSettings();
   tourIdx = -1;
-}
-function tourGo(i){
+}}
+function tourGo(i){{
   const s = tourSteps[i]; if(!s) return endTour();
+  const sp = document.getElementById('settingsPanel');
+  if(s.sel==='#settingsPanel'){{ if(sp&&!sp.classList.contains('open')) toggleSettings(); }}
+  else if(sp&&sp.classList.contains('open')) toggleSettings();
   const el = document.querySelector(s.sel); if(!el) return tourNext();
   const r = el.getBoundingClientRect();
   const sp = document.getElementById('tourSpot');
@@ -1626,9 +1632,9 @@ function tourGo(i){
     tip.style.left = tx+'px'; tip.style.top = ty+'px'; tip.className = 'on';
     el.scrollIntoView({{behavior:'smooth',block:'center'}});
   }}
-}
-function tourNext(){ tourIdx++; tourGo(tourIdx); }
-function tourPrev(){ tourIdx--; tourGo(tourIdx); }
+}}
+function tourNext(){{ tourIdx++; tourGo(tourIdx); }}
+function tourPrev(){{ tourIdx--; tourGo(tourIdx); }}
 
 function toggleSettings() {{
   const panel = document.getElementById('settingsPanel');
