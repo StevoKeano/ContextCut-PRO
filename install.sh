@@ -215,7 +215,7 @@ else
     read -p "  Start Qdrant via Docker now? [y/N]: " START_QDRANT
     if [ "$START_QDRANT" = "y" ] || [ "$START_QDRANT" = "Y" ]; then
       docker run -d --name qdrant --restart always \
-        -p "$QDRANT_PORT:6333" \
+        -p "127.0.0.1:$QDRANT_PORT:6333" \
         -v "$INSTALL_DIR/qdrant_storage:/qdrant/storage" \
         qdrant/qdrant
       echo "  Qdrant started. Waiting 5s..."

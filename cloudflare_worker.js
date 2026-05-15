@@ -8,9 +8,21 @@ async function uuidv4() {
 }
 
 async function handleWebhook(request, env) {
-  const body = await request.formData();
-  const eventType = body.get("resource_name");
-  const product = body.get("product_name");
+  const raw = await request.text();
+  const sig = request.headers.get("X-Gumroad-Signature");
+  if (env.GUMROAD_WEBHOOK_SECRET && sig) {
+    const enc = new TextEncoder();
+    const key = await crypto.subtle.importKey("raw", enc.encode(env.GUMROAD_WEBHOOK_SECRET), { name: "HMAC", hash: "SHA-256" }, false, ["sign"]);
+    const expected = await crypto.subtle.sign("HMAC", key, enc.encode(raw));
+    const expectedHex = [...new Uint8Array(expected)].map(b => b.toString(16).padStart(2,"0")).join("");
+    const sigHex = sig.startsWith("sha256=") ? sig.slice(7) : sig;
+    if (expectedHex !== sigHex) {
+      return json(401, { error: "Invalid signature" });
+    }
+  }
+  const params = new URLSearchParams(raw);
+  const eventType = params.get("resource_name");
+  const product = params.get("product_name");
 
   if (
     eventType !== "sale" ||
@@ -20,8 +32,8 @@ async function handleWebhook(request, env) {
     return json(200, { ok: true, skipped: true });
   }
 
-  const email = body.get("email");
-  const orderId = body.get("order_number");
+  const email = params.get("email");
+  const orderId = params.get("order_number");
   const maxSeats = 3;
 
   const existingCheck = await env.LICENSE_KV.get(`order:${orderId}`);

@@ -20,7 +20,7 @@ import urllib.request
 LICENSE_SERVER = os.getenv(
     "CONTEXTCUT_LICENSE_SERVER",
     "https://api.contextcut-pro.com"
-)
+).rstrip("/")
 
 HEADERS = {
     "Content-Type": "application/json",

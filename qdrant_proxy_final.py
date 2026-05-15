@@ -341,6 +341,9 @@ def save_sessions():
         with _lock:
             for sid, sess in _sessions.items():
                 data[sid] = {"history": sess["history"], "created": sess["created"], "msg_count": sess["msg_count"]}
+        d = os.path.dirname(SESSION_FILE)
+        if d and not os.path.exists(d):
+            os.makedirs(d, exist_ok=True)
         with open(SESSION_FILE, "w") as f:
             json.dump(data, f)
     except Exception as e:
@@ -3082,6 +3085,12 @@ class DashboardHandler(_SuppressBrokenPipe, BaseHTTPRequestHandler):
             parsed_body = json.loads(raw_body)
         except Exception:
             parsed_body = None
+        safe_prefixes = ("/v1/chat/completions", "/api/chat", "/api/generate", "/v1/completions")
+        if not self.path.startswith(safe_prefixes):
+            self.send_response(404)
+            self.end_headers()
+            self.wfile.write(b'{"error":"Not found"}')
+            return
         is_streaming = isinstance(parsed_body, dict) and parsed_body.get("stream", False)
         req = urllib.request.Request(
             f"http://127.0.0.1:{LISTEN_PORT}{self.path}",
@@ -3195,7 +3204,7 @@ if __name__ == "__main__":
     _READY_FILE = Path(__file__).parent / ".proxy_ready"
     _READY_FILE.write_text("ready\n")
 
-    dash = ReusableHTTPServer(("0.0.0.0", DASHBOARD_PORT), DashboardHandler)
+    dash = ReusableHTTPServer(("127.0.0.1", DASHBOARD_PORT), DashboardHandler)
     threading.Thread(target=dash.serve_forever, daemon=True).start()
 
     print(f"[contextcut] Dashboard  → http://localhost:{DASHBOARD_PORT}  (Chat + Monitor tabs)")
