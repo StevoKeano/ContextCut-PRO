@@ -1591,6 +1591,7 @@ const tourSteps = [
 ];
 let tourIdx = -1;
 function startTour(){{
+  if(document.getElementById('tourOv')) return;
   const ov = document.createElement('div'); ov.id = 'tourOv'; ov.className = 'on';
   const sp = document.createElement('div'); sp.id = 'tourSpot';
   const tip = document.createElement('div'); tip.id = 'tourTip';
