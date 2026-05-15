@@ -171,7 +171,7 @@ _custom_base_url = ""
 _ollama_url = ""
 _api_key = ""
 _free_only = False
-_local_only = False
+_local_only = True
 
 def load_saved_credentials():
     global _provider_name, _custom_base_url, _ollama_url, _api_key, _free_only, _local_only
@@ -182,7 +182,7 @@ def load_saved_credentials():
     _ollama_url = creds.get("ollama_url", "")
     _api_key = creds.get("api_key", "")
     _free_only = creds.get("free_only", False)
-    _local_only = creds.get("local_only", False)
+    _local_only = creds.get("local_only", True)
 
     saved_embed_mode = creds.get("embed_mode", "")
     if saved_embed_mode:
