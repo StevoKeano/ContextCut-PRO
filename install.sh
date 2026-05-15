@@ -42,7 +42,7 @@ if [ -n "$CONTEXTCUT_LICENSE_KEY" ]; then
     PROXY_PORT="${PROXY_PORT:-18788}"
     DASH_PORT="${DASH_PORT:-18787}"
     CTX_LIMIT="${CTX_LIMIT:-8192}"
-    MIN_SCORE="${MIN_SCORE:-0.20}"
+    MIN_SCORE="${MIN_SCORE:-0.50}"
   else
     AUTO_INSTALL=true
     echo ""
@@ -95,8 +95,8 @@ if ! $NONINTERACTIVE; then
     read -p "  Model context limit [8192]: " CTX_LIMIT
     CTX_LIMIT="${CTX_LIMIT:-8192}"
 
-    read -p "  Minimum relevance score 0.0-1.0 [0.20]: " MIN_SCORE
-    MIN_SCORE="${MIN_SCORE:-0.20}"
+    read -p "  Minimum relevance score 0.0-1.0 [0.50]: " MIN_SCORE
+    MIN_SCORE="${MIN_SCORE:-0.50}"
 
     echo ""
     echo "  ── Confirm Your Settings ──"
@@ -162,8 +162,8 @@ if ! $NONINTERACTIVE; then
     read -p "  Model context limit [8192]: " CTX_LIMIT
     CTX_LIMIT="${CTX_LIMIT:-8192}"
 
-    read -p "  Minimum relevance score 0.0-1.0 [0.20]: " MIN_SCORE
-    MIN_SCORE="${MIN_SCORE:-0.20}"
+    read -p "  Minimum relevance score 0.0-1.0 [0.50]: " MIN_SCORE
+    MIN_SCORE="${MIN_SCORE:-0.50}"
   fi
 fi
 
