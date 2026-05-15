@@ -559,6 +559,13 @@ if command -v xdg-open &>/dev/null; then
 elif command -v open &>/dev/null; then
   open "http://localhost:$DASH_PORT" 2>/dev/null || true
 fi
+echo "  ── Admin: Environment Variables ──"
+echo "  If using Ollama on Windows, run an Admin cmd (one time) to disable telemetry:"
+echo "    setx OLLAMA_NO_CLOUD true /M"
+echo "  Then close all Ollama windows and restart Ollama — it reads env vars only at"
+echo '  startup. On Linux, add `export OLLAMA_NO_CLOUD=true` to your Ollama service.'
+echo "  Performance: OLLAMA_CONTEXT_LENGTH=8192 reduces KV cache from 5GB to ~1.25GB"
+echo "  on a 14B q8_0 model, preventing GPU VRAM eviction."
 echo ""
 echo "  ── Quick Start ──"
 echo "  1. Starter knowledge files are in: $STARTER_DIR"
