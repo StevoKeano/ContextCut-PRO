@@ -993,8 +993,8 @@ def make_settings_page():
 <title>ContextCut-PRO — Settings</title>
 <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;600&family=Syne:wght@400;700;800&display=swap" rel="stylesheet">
 <style>
-:root{{--bg:#080c14;--surf:#0d1420;--surf2:#111927;--border:#1e2d42;--text:#c9d8f0;--muted:#4a6080;--accent:#00d4ff;--green:#22c55e;--yellow:#f59e0b;--red:#ef4444;--th-bg:#0a1628;--hit-bg:#0a1a2e;--hover-bg:#1e293b;--active-bg:#0f172a;--r:6px}}
-.light{{--bg:#f1f5f9;--surf:#fff;--surf2:#f8fafc;--border:#e2e8f0;--text:#1e293b;--muted:#64748b;--accent:#0284c7;--th-bg:#e2e8f0;--hit-bg:#f1f5f9;--hover-bg:#f1f5f9;--active-bg:#e2e8f0}}
+:root{{--bg:#0d111e;--surf:#131a2b;--surf2:#182233;--border:#1e2d42;--text:#d1dce8;--muted:#5a7a9a;--accent:#00d4ff;--green:#22c55e;--yellow:#f59e0b;--red:#ef4444;--th-bg:#0a1628;--hit-bg:#0a1a2e;--hover-bg:#1e293b;--active-bg:#0f172a;--r:6px}}
+.light{{--bg:#f4f7fb;--surf:#fff;--surf2:#edf2f7;--border:#cbd5e1;--text:#0f172a;--muted:#475569;--accent:#0284c7;--th-bg:#e2e8f0;--hit-bg:#f1f5f9;--hover-bg:#f1f5f9;--active-bg:#e2e8f0}}
 *{{box-sizing:border-box;margin:0;padding:0}}
 body{{background:var(--bg);color:var(--text);font-family:'JetBrains Mono',monospace;font-size:13px;display:flex;flex-direction:column;height:100vh;transition:background .3s,color .3s}}
 .header{{background:var(--surf);border-bottom:1px solid var(--border);padding:0 20px;display:flex;align-items:center;gap:14px;height:48px;flex-shrink:0}}
@@ -1044,6 +1044,11 @@ body{{background:var(--bg);color:var(--text);font-family:'JetBrains Mono',monosp
       <select id="providerSelect" onchange="onProviderChange()">
         {provider_opts}
       </select>
+    </div>
+
+    <div id="cloudWarning" style="display:none;background:#2a0a0a;border:1px solid #dc2626;border-radius:6px;padding:12px;margin-bottom:16px">
+      <div style="color:#ef4444;font-weight:700;font-size:13px;margin-bottom:4px">&#9888; DATA LEAVES YOUR MACHINE</div>
+      <div style="color:#fca5a5;font-size:11px;line-height:1.5">This provider runs on remote servers. Your queries, context from your knowledge base, and conversation history will be sent to a third party. Review their privacy policy and terms of service before use. Only local Ollama models keep 100% of your data on your machine.</div>
     </div>
 
     <div class="form-group hidden" id="ollamaUrlGroup">
@@ -1103,12 +1108,14 @@ function onProviderChange() {{
   const c = document.getElementById('customUrlGroup');
   const f = document.getElementById('freeOnlyGroup');
   const k = document.getElementById('apiKey');
+  const w = document.getElementById('cloudWarning');
   if (p === 'Ollama') {{
     o.classList.remove('hidden');
     l.classList.remove('hidden');
     c.classList.add('hidden');
     f.classList.add('hidden');
     k.placeholder = 'Not required for local Ollama';
+    w.style.display = 'none';
   }} else {{
     o.classList.add('hidden');
     l.classList.add('hidden');
@@ -1117,6 +1124,7 @@ function onProviderChange() {{
     if (p === 'OpenRouter') f.classList.remove('hidden');
     else f.classList.add('hidden');
     k.placeholder = 'Enter your API key';
+    w.style.display = 'block';
   }}
   hideModelList();
 }}
@@ -1268,8 +1276,8 @@ def make_dashboard():
 <title>ContextCut-PRO</title>
 <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;600&family=Syne:wght@400;700;800&display=swap" rel="stylesheet">
 <style>
-:root{{--bg:#080c14;--surf:#0d1420;--surf2:#111927;--border:#1e2d42;--text:#c9d8f0;--muted:#4a6080;--accent:#00d4ff;--green:#22c55e;--yellow:#f59e0b;--red:#ef4444;--th-bg:#0a1628;--hit-bg:#0a1a2e;--hover:#1e293b;--active:#0f172a;--r:6px}}
-.light{{--bg:#f1f5f9;--surf:#fff;--surf2:#f8fafc;--border:#e2e8f0;--text:#1e293b;--muted:#64748b;--accent:#0284c7;--th-bg:#e2e8f0;--hit-bg:#f1f5f9;--hover:#f1f5f9;--active:#e2e8f0}}
+:root{{--bg:#0d111e;--surf:#131a2b;--surf2:#182233;--border:#1e2d42;--text:#d1dce8;--muted:#5a7a9a;--accent:#00d4ff;--green:#22c55e;--yellow:#f59e0b;--red:#ef4444;--th-bg:#0a1628;--hit-bg:#0a1a2e;--hover:#1e293b;--active:#0f172a;--r:6px}}
+.light{{--bg:#f4f7fb;--surf:#fff;--surf2:#edf2f7;--border:#cbd5e1;--text:#0f172a;--muted:#475569;--accent:#0284c7;--th-bg:#e2e8f0;--hit-bg:#f1f5f9;--hover:#f1f5f9;--active:#e2e8f0}}
 *{{box-sizing:border-box;margin:0;padding:0}}
 body{{background:var(--bg);color:var(--text);font-family:'JetBrains Mono',monospace;font-size:13px;display:flex;flex-direction:column;height:100vh;overflow:hidden;transition:background .3s,color .3s}}
 /* ── header ── */
@@ -1325,8 +1333,9 @@ tr:hover td{{background:var(--surf2)}}
 .tog:hover{{color:var(--text);border-color:var(--accent)}}
 .badge{{font-size:11px;padding:3px 8px;border-radius:4px;color:var(--muted);background:var(--hit-bg)}}
 .nh{{color:var(--muted)}}
-.fb-file:hover{{background:var(--hover,#1e293b)}}
-.fb-file:active{{background:var(--active,#0f172a)}}
+.fb-file:hover{{background:var(--hover,#f1f5f9)}}
+.fb-file:active{{background:var(--active,#e2e8f0)}}
+.fb-file.selected{{background:var(--active,#1e293b)}}
 .chat-messages{{flex:1;overflow-y:auto;padding:14px;display:flex;flex-direction:column;gap:10px}}
 .chat-messages::-webkit-scrollbar{{width:4px}}.chat-messages::-webkit-scrollbar-thumb{{background:var(--border);border-radius:2px}}
 .msg{{max-width:88%}}
@@ -2023,28 +2032,28 @@ function openEmbedSettings() {{
       const isVoyage = cfg.mode === 'voyage';
       const kbDir = cfg.kb_dir || '/knowledge';
 
-      const html = '<div style="background:#131a2b;border:1px solid var(--border);border-radius:8px;padding:24px;width:420px;max-width:90vw;font-family:JetBrains Mono,monospace;font-size:12px;color:var(--text)">' +
+      const html = '<div style="background:var(--surf);border:1px solid var(--border);border-radius:8px;padding:24px;width:420px;max-width:90vw;font-family:JetBrains Mono,monospace;font-size:12px;color:var(--text)">' +
         '<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:16px">' +
           '<strong style="font-size:14px">\\u2699 Embed Model Settings</strong>' +
           '<button id="emCloseBtn" style="background:none;border:none;color:var(--muted);font-size:18px;cursor:pointer">&times;</button>' +
         '</div>' +
-        '<div style="background:#2a0a0a;border:1px solid #dc2626;border-radius:6px;padding:12px;margin-bottom:16px">' +
+        '<div style="background:var(--bg);border:1px solid #dc2626;border-radius:6px;padding:12px;margin-bottom:16px">' +
           '<div style="color:#ef4444;font-weight:700;font-size:13px;margin-bottom:4px">\\u26a0 DANGER ZONE</div>' +
           '<div style="color:#fca5a5;font-size:11px;line-height:1.5">Switching embedding models will <b>delete all existing vectors</b> in Qdrant. Your knowledge base will be wiped and you must re-ingest all files. This action cannot be undone.</div>' +
         '</div>' +
         '<label style="display:block;margin-bottom:4px;color:var(--muted);font-size:11px">Backend</label>' +
-        '<select id="emMode" style="width:100%;background:#0d1320;color:var(--text);border:1px solid var(--border);border-radius:4px;padding:7px 10px;font-family:inherit;font-size:12px;margin-bottom:4px">' +
+        '<select id="emMode" style="width:100%;background:var(--bg);color:var(--text);border:1px solid var(--border);border-radius:4px;padding:7px 10px;font-family:inherit;font-size:12px;margin-bottom:4px">' +
           '<option value="voyage" '+(isVoyage?'selected':'')+'>Voyage AI (voyage-3)</option>' +
           '<option value="ollama" '+(!isVoyage?'selected':'')+'>Ollama Local</option>' +
         '</select>' +
         '<div id="emModeDesc" style="color:var(--muted);font-size:10px;margin-bottom:14px">'+(isVoyage?'Cloud \\u2014 highest quality, requires API key':'100% local \\u2014 nomic-embed-text, mxbai-embed-large, bge-m3, qwen3-embedding')+'</div>' +
         '<div id="emVoyageFields" style="display:'+(isVoyage?'block':'none')+'">' +
           '<label style="display:block;margin-bottom:4px;color:var(--muted);font-size:11px">Voyage API Key</label>' +
-          '<input id="emVoyageKey" type="password" value="'+(cfg.voyage_key||'')+'" placeholder="Paste your voyage-ai key" style="width:100%;background:#0d1320;color:var(--text);border:1px solid var(--border);border-radius:4px;padding:7px 10px;font-family:inherit;font-size:12px;margin-bottom:14px" />' +
+           '<input id="emVoyageKey" type="password" value="'+(cfg.voyage_key||'')+'" placeholder="Paste your voyage-ai key" style="width:100%;background:var(--bg);color:var(--text);border:1px solid var(--border);border-radius:4px;padding:7px 10px;font-family:inherit;font-size:12px;margin-bottom:14px" />' +
         '</div>' +
         '<div id="emOllamaFields" style="display:'+(isVoyage?'none':'block')+'">' +
           '<label style="display:block;margin-bottom:4px;color:var(--muted);font-size:11px">Ollama Embedding Model</label>' +
-          '<select id="emModel" style="width:100%;background:#0d1320;color:var(--text);border:1px solid var(--border);border-radius:4px;padding:7px 10px;font-family:inherit;font-size:12px;margin-bottom:14px">' +
+           '<select id="emModel" style="width:100%;background:var(--bg);color:var(--text);border:1px solid var(--border);border-radius:4px;padding:7px 10px;font-family:inherit;font-size:12px;margin-bottom:14px">' +
             '<option value="nomic-embed-text"'+(cfg.ollama_model==='nomic-embed-text'?' selected':'')+'>nomic-embed-text (274MB, 8K ctx)</option>' +
             '<option value="mxbai-embed-large"'+(cfg.ollama_model==='mxbai-embed-large'?' selected':'')+'>mxbai-embed-large (670MB, 512 ctx)</option>' +
             '<option value="bge-m3"'+(cfg.ollama_model==='bge-m3'?' selected':'')+'>bge-m3 (1.2GB, 8K ctx, multilingual)</option>' +
@@ -2221,7 +2230,7 @@ function openFileBrowser() {{
 
       const kbd = data.kb_dir || '~/contextcut/knowledge';
       overlay.innerHTML =
-        '<div style="background:#131a2b;border:1px solid var(--border);border-radius:8px;width:700px;max-width:95vw;max-height:85vh;display:flex;flex-direction:column;font-family:JetBrains Mono,monospace;font-size:12px;color:var(--text)">' +
+        '<div style="background:var(--surf);border:1px solid var(--border);border-radius:8px;width:700px;max-width:95vw;max-height:85vh;display:flex;flex-direction:column;font-family:JetBrains Mono,monospace;font-size:12px;color:var(--text)">' +
           '<div style="display:flex;justify-content:space-between;align-items:center;padding:16px 20px;border-bottom:1px solid var(--border)">' +
             '<div><strong style="font-size:14px">📂 Knowledge Files</strong><div style="font-size:10px;color:var(--muted);margin-top:2px">'+esc(kbd)+'</div></div>' +
             '<div style="display:flex;gap:8px;align-items:center">' +
@@ -2235,7 +2244,7 @@ function openFileBrowser() {{
               '<div id="fbEditorPlaceholder" style="flex:1;display:flex;align-items:center;justify-content:center;color:var(--muted);font-size:12px">Select a file to edit</div>' +
               '<div id="fbEditorContent" style="display:none;flex:1;flex-direction:column;min-height:0">' +
                 '<div id="fbFileName" style="padding:8px 14px;font-size:11px;color:var(--accent);border-bottom:1px solid var(--border)"></div>' +
-                '<textarea id="fbTextArea" style="flex:1;background:#0d1320;color:var(--text);border:none;padding:12px 14px;font-family:JetBrains Mono,monospace;font-size:12px;resize:none;outline:none" spellcheck="false"></textarea>' +
+                '<textarea id="fbTextArea" style="flex:1;background:var(--bg);color:var(--text);border:none;padding:12px 14px;font-family:JetBrains Mono,monospace;font-size:12px;resize:none;outline:none" spellcheck="false"></textarea>' +
                 '<div style="display:flex;gap:8px;justify-content:flex-end;padding:8px 14px;border-top:1px solid var(--border)">' +
                   '<button id="fbDeleteBtn" onclick="fbDeleteFile()" style="background:#7f1d1d;color:#fca5a5;border:1px solid #dc2626;border-radius:4px;padding:5px 14px;font-size:11px;cursor:pointer;font-family:inherit">Delete</button>' +
                   '<button id="fbSaveBtn" onclick="fbSaveFile()" style="background:var(--accent);color:#000;border:none;border-radius:4px;padding:5px 14px;font-size:11px;cursor:pointer;font-family:inherit;font-weight:600">Save</button>' +
@@ -2261,8 +2270,8 @@ function escAttr(s) {{ return (s||'').replace(/&/g,'&amp;').replace(/"/g,'&quot;
 let _fbCurrentPath = '';
 
 function fbOpenFile(el) {{
-  document.querySelectorAll('.fb-file').forEach(e => e.style.background = '');
-  el.style.background = '#1e293b';
+  document.querySelectorAll('.fb-file').forEach(e => e.classList.remove('selected'));
+  el.classList.add('selected');
   _fbCurrentPath = el.dataset.path;
   const name = el.querySelector('span').textContent;
   document.getElementById('fbFileName').textContent = name;
