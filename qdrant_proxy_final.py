@@ -1579,6 +1579,8 @@ async function seedDemo() {{
 
 const tourSteps = [
   {{sel:'.logo',title:'Dashboard Header',text:'ContextCut PRO dashboard with live status indicator. Green dot means the proxy is running and accepting requests.',pos:'bottom'}},
+  {{sel:'button[onclick*="seedDemo"]',title:'Demo Data',text:'Click this to seed the audit log with sample queries from various professions (law, accounting, real estate, etc.). Demonstrates how real-world queries appear with before/after token counts and matched knowledge base hits.',pos:'bottom'}},
+  {{sel:'button[onclick*="clearContext"]',title:'Clear Cache',text:'Clears the response cache, forcing fresh retrieval from your knowledge base on the next query. Use this when you\'ve updated your .md files and want to see up-to-date results.',pos:'bottom'}},
   {{sel:'.hinfo',title:'Connection Info',text:'Shows your LLM provider, Qdrant host, minimum relevance score, and Top-K setting. All configurable via the Settings page.',pos:'bottom'}},
   {{sel:'.cards',title:'Statistics Cards',text:'Real-time metrics: license status, total requests, context compression %, tokens saved, peak token usage, context limit, and cache hits.',pos:'bottom'}},
   {{sel:'.ctx-wrap',title:'Context Usage Meter',text:'Visual bar showing how much of your token limit the most recent request consumed. Green = efficient. Red = nearing the limit.',pos:'bottom'}},
@@ -1639,7 +1641,11 @@ function tourGo(i){{
     el.scrollIntoView({{behavior:'smooth',block:'center'}});
   }}
 }}
-function tourNext(){{ tourIdx++; tourGo(tourIdx); }}
+function tourNext(){{
+  const cur = tourSteps[tourIdx];
+  if(cur){{ if(cur.sel==='button[onclick*="seedDemo"]') seedDemo(); else if(cur.sel==='button[onclick*="clearContext"]') clearContext(); }}
+  tourIdx++; tourGo(tourIdx);
+}}
 function tourPrev(){{ tourIdx--; tourGo(tourIdx); }}
 
 function toggleSettings() {{
