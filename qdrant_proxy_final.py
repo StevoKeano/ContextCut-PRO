@@ -902,6 +902,12 @@ class ProxyHandler(_SuppressBrokenPipe, BaseHTTPRequestHandler):
                     "tokens_after": tok_after, "ctx_limit": CTX_LIMIT, "pct": pct, "hits": hits_meta})
 
         is_streaming = isinstance(body, dict) and body.get("stream", False)
+        if self.path in ("/api/pull", "/api/push", "/api/delete", "/api/copy", "/api/create"):
+            self.send_response(403)
+            self.send_header("Content-Type", "application/json")
+            self.end_headers()
+            self.wfile.write(json.dumps({"error": "Blocked by proxy"}).encode())
+            return
         self._forward("POST", raw_body, streaming=is_streaming, session_id=body.get("session_id") if body else None)
 
     def do_DELETE(self):
@@ -1473,6 +1479,9 @@ tr:hover td{{background:var(--surf2)}}
             <input type="range" class="param-slider" id="minscoreSlider" min="0.0" max="0.6" step="0.05" value="{MIN_SCORE}" oninput="updateMinScore()">
             <span class="param-val" id="minscoreVal">{MIN_SCORE}</span>
           </div>
+          <div style="font-size:9px;color:var(--muted);margin-top:6px;border-top:1px solid var(--border);padding-top:6px">
+            ⚡ 32K context = 5GB VRAM for KV cache. If responses take &gt;5s, your GPU is swapping models — set <code>OLLAMA_CONTEXT_LENGTH=8192</code> on the Ollama host to fit both embed &amp; chat models in VRAM.
+          </div>
         </div>
       </div>
       <div class="input-row">
@@ -1679,7 +1688,7 @@ function getGenerationParams() {{
   const topP = parseFloat(document.getElementById('toppSlider').value);
   const maxTok = parseInt(document.getElementById('maxTokInput').value);
   document.getElementById('maxTokVal').textContent = maxTok || '0';
-  const params = {{temperature: temp, top_p: topP}};
+  const params = {{temperature: temp, top_p: topP, num_ctx: {CTX_LIMIT}}};
   if (maxTok > 0) params.max_tokens = maxTok;
   return params;
 }}
