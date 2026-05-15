@@ -1479,7 +1479,7 @@ tr:hover td{{background:var(--surf2)}}
           </div>
           <div class="param-group">
             <span class="param-label">Min score:</span>
-            <input type="range" class="param-slider" id="minscoreSlider" min="0.0" max="0.6" step="0.05" value="{MIN_SCORE}" oninput="updateMinScore()">
+            <input type="range" class="param-slider" id="minscoreSlider" min="0.0" max="1.0" step="0.05" value="{MIN_SCORE}" oninput="updateMinScore()">
             <span class="param-val" id="minscoreVal">{MIN_SCORE}</span>
           </div>
           <div style="font-size:9px;color:var(--muted);margin-top:6px;border-top:1px solid var(--border);padding-top:6px">
