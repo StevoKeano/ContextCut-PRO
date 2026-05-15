@@ -1363,6 +1363,19 @@ tr:hover td{{background:var(--surf2)}}
 .settings-panel.open{{display:block}}
 .right.fullscreen{{position:fixed;top:48px;left:0;right:0;bottom:0;z-index:100;background:var(--bg);border-top:1px solid var(--border)}}
 .right.fullscreen .chat-input-bar{{position:fixed;bottom:0;left:0;right:0}}
+#tourOv{{position:fixed;top:0;left:0;right:0;bottom:0;z-index:9998;display:none}}
+#tourOv.on{{display:block}}
+#tourSpot{{position:fixed;z-index:9999;pointer-events:none;border-radius:8px;box-shadow:0 0 0 9999px rgba(0,0,0,.55);transition:all .35s ease}}
+#tourTip{{position:fixed;z-index:10000;background:var(--surf);border:1px solid var(--accent);border-radius:10px;padding:18px 22px;max-width:380px;box-shadow:0 8px 32px rgba(0,0,0,.5);display:none}}
+#tourTip.on{{display:block}}
+#tourTip h3{{color:var(--accent);font-size:14px;font-weight:700;margin-bottom:6px;font-family:'Syne',sans-serif}}
+#tourTip p{{color:var(--text);font-size:12px;line-height:1.7;margin-bottom:14px}}
+#tourTip .tc{{display:flex;align-items:center;justify-content:space-between}}
+#tourTip .tc .step{{color:var(--muted);font-size:11px}}
+#tourTip .tc .btns{{display:flex;gap:6px}}
+#tourTip .tc button{{background:transparent;border:1px solid var(--border);color:var(--muted);border-radius:5px;padding:6px 14px;font-size:11px;cursor:pointer;font-family:'JetBrains Mono',monospace}}
+#tourTip .tc button:hover{{border-color:var(--accent);color:var(--accent)}}
+#tourTip .tc button.prim{{background:var(--accent);border-color:var(--accent);color:#000;font-weight:700}}
 </style>
 </head>
 <body>
@@ -1374,6 +1387,8 @@ tr:hover td{{background:var(--surf2)}}
   <a href="/settings" style="background:transparent;border:1px solid var(--border);color:var(--muted);border-radius:3px;padding:3px 10px;font-size:11px;cursor:pointer;font-family:'JetBrains Mono',monospace;text-decoration:none">Settings ⚙</a>
   <button onclick="openFileBrowser()" style="background:transparent;border:1px solid var(--border);color:var(--muted);border-radius:3px;padding:3px 10px;font-size:11px;cursor:pointer;font-family:'JetBrains Mono',monospace">Browse Files 📂</button>
   <a href="/api/logs/export" style="background:transparent;border:1px solid var(--border);color:var(--muted);border-radius:3px;padding:3px 8px;font-size:11px;cursor:pointer;font-family:'JetBrains Mono',monospace;text-decoration:none" title="Download audit log CSV">Export Log</a>
+  <button onclick="seedDemo()" style="background:transparent;border:1px solid var(--border);color:var(--muted);border-radius:3px;padding:3px 8px;font-size:11px;cursor:pointer;font-family:'JetBrains Mono',monospace" title="Load sample data for demo">Demo Data</button>
+  <button onclick="startTour()" style="background:transparent;border:1px solid var(--border);color:var(--muted);border-radius:3px;padding:3px 8px;font-size:11px;cursor:pointer;font-family:'JetBrains Mono',monospace" title="Guided tour">Tour</button>
   <div class="live"><span class="dot"></span>live</div>
 </div>
 
@@ -1545,6 +1560,75 @@ function restoreMessages() {{
 function toggleFullscreen() {{
   document.querySelector('.right').classList.toggle('fullscreen');
 }}
+
+async function seedDemo() {{
+  try {{
+    const r = await fetch('/api/demo/seed');
+    const d = await r.json();
+    if (d.ok) {{
+      const lr = await fetch('/log');
+      if (lr.ok) {{
+        const rows = await lr.json();
+        const tb = document.getElementById('tblBody');
+        if (tb) tb.innerHTML = rows.map(r => `<tr><td class="ts">${{r.ts}}</td><td class="qcell">${{esc(r.query.substring(0,60))}}</td><td class="num">${{r.tokens_before}}</td><td class="num">${{r.tokens_after}}</td><td class="num" style="color:var(--accent)">${{r.pct}}%</td><td class="hitcell">${{(r.hits||[]).map(h=>'<span class="hit">'+esc(h.source.replace(".md",""))+' <em>'+h.score+'</em></span>').join(' ')}}</td></tr>`).join('') + '<tr><td colspan="6" class="tbl-footer">Demo data loaded — ${{d.count}} requests</td></tr>';
+      }}
+      setTimeout(pollStats, 100);
+    }}
+  }} catch(e) {{}}
+}}
+
+const tourSteps = [
+  {sel:'.logo',title:'Dashboard Header',text:'ContextCut PRO dashboard with live status indicator. Green dot means the proxy is running and accepting requests.',pos:'bottom'},
+  {sel:'.hinfo',title:'Connection Info',text:'Shows your LLM provider, Qdrant host, minimum relevance score, and Top-K setting. All configurable via the Settings page.',pos:'bottom'},
+  {sel:'.cards',title:'Statistics Cards',text:'Real-time metrics: license status, total requests, context compression %, tokens saved, peak token usage, context limit, and cache hits.',pos:'bottom'},
+  {sel:'.ctx-wrap',title:'Context Usage Meter',text:'Visual bar showing how much of your token limit the most recent request consumed. Green = efficient. Red = nearing the limit.',pos:'bottom'},
+  {sel:'.tbl-wrap',title:'Audit Log',text:'Every query is logged with timestamp, before/after tokens, compression percentage, and which knowledge base files matched. Exportable as CSV.',pos:'top'},
+  {sel:'.chat-messages',title:'Chat Area',text:'Conversation with your AI. Context from your knowledge base is injected automatically into every message — no manual work needed.',pos:'left'},
+  {sel:'.chat-input-bar',title:'Message Input',text:'Type your question here. Select a model, adjust temperature and top-p, then press Enter. Session history is maintained automatically.',pos:'top'},
+  {sel:'button[onclick*="openFileBrowser"]',title:'File Browser',text:'Upload and manage .md files in your knowledge base. Files are auto-ingested into Qdrant vectors within seconds of being added.',pos:'bottom'},
+];
+let tourIdx = -1;
+function startTour(){
+  const ov = document.createElement('div'); ov.id = 'tourOv'; ov.className = 'on';
+  const sp = document.createElement('div'); sp.id = 'tourSpot';
+  const tip = document.createElement('div'); tip.id = 'tourTip';
+  tip.innerHTML = '<h3 id="tourTitle"></h3><p id="tourText"></p><div class="tc"><span class="step" id="tourStep"></span><div class="btns"><button onclick="tourPrev()" id="tourPrevBtn">Back</button><button class="prim" onclick="tourNext()" id="tourNextBtn">Next</button><button onclick="endTour()" id="tourEndBtn" style="display:none" class="prim">Done</button></div></div>';
+  document.body.appendChild(ov); document.body.appendChild(sp); document.body.appendChild(tip);
+  tourIdx = -1; tourNext();
+}
+function endTour(){
+  const ov = document.getElementById('tourOv'); const sp = document.getElementById('tourSpot'); const tip = document.getElementById('tourTip');
+  if(ov)ov.remove(); if(sp)sp.remove(); if(tip)tip.remove();
+  tourIdx = -1;
+}
+function tourGo(i){
+  const s = tourSteps[i]; if(!s) return endTour();
+  const el = document.querySelector(s.sel); if(!el) return tourNext();
+  const r = el.getBoundingClientRect();
+  const sp = document.getElementById('tourSpot');
+  if(sp){{ sp.style.left = (r.left-6)+'px'; sp.style.top = (r.top-6)+'px'; sp.style.width = (r.width+12)+'px'; sp.style.height = (r.height+12)+'px'; }}
+  const tip = document.getElementById('tourTip');
+  if(tip){{
+    document.getElementById('tourTitle').textContent = s.title;
+    document.getElementById('tourText').textContent = s.text;
+    document.getElementById('tourStep').textContent = (i+1)+' / '+tourSteps.length;
+    document.getElementById('tourPrevBtn').style.display = i===0?'none':'';
+    document.getElementById('tourNextBtn').style.display = i===tourSteps.length-1?'none':'';
+    document.getElementById('tourEndBtn').style.display = i===tourSteps.length-1?'':'none';
+    var tx, ty;
+    if(s.pos==='bottom'){{ tx = r.left; ty = r.bottom + 16; }}
+    else if(s.pos==='top'){{ tx = r.left; ty = r.top - 16 - tip.offsetHeight; }}
+    else if(s.pos==='left'){{ tx = r.left - 16 - tip.offsetWidth; ty = r.top; }}
+    else{{ tx = r.right + 16; ty = r.top; }}
+    if(ty < 10) ty = 10; if(tx < 10) tx = 10;
+    if(ty + tip.offsetHeight > window.innerHeight - 10) ty = window.innerHeight - 10 - tip.offsetHeight;
+    if(tx + tip.offsetWidth > window.innerWidth - 10) tx = window.innerWidth - 10 - tip.offsetWidth;
+    tip.style.left = tx+'px'; tip.style.top = ty+'px'; tip.className = 'on';
+    el.scrollIntoView({{behavior:'smooth',block:'center'}});
+  }}
+}
+function tourNext(){ tourIdx++; tourGo(tourIdx); }
+function tourPrev(){ tourIdx--; tourGo(tourIdx); }
 
 function toggleSettings() {{
   const panel = document.getElementById('settingsPanel');
@@ -2473,6 +2557,46 @@ class DashboardHandler(_SuppressBrokenPipe, BaseHTTPRequestHandler):
             return
         if self.path == "/stats":
             body = json.dumps(make_stats_json()).encode()
+            self.send_response(200)
+            self.send_header("Content-Type","application/json")
+            self.send_header("Content-Length",str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+            return
+        if self.path == "/api/demo/seed":
+            demo_queries = [
+                ("What are the key terms in this non-compete clause?", 3420, 890, [{"source":"lawyer-smb-CONTRACT.md","score":0.81},{"source":"lawyer-smb-EMPLOYMENT.md","score":0.67}]),
+                ("Summarize the discovery deadline for the Johnson case", 5100, 1240, [{"source":"lawyer-lit-DISCOVERY.md","score":0.88},{"source":"lawyer-lit-MOTIONS.md","score":0.62}]),
+                ("What is the QBI deduction limit for 2025?", 2280, 650, [{"source":"cpa-smb-QBI.md","score":0.91},{"source":"cpa-smb-SELFEMPLOYED.md","score":0.73}]),
+                ("Draft a motion to compel based on these facts", 7650, 2100, [{"source":"lawyer-lit-MOTIONS.md","score":0.85},{"source":"lawyer-lit-DISCOVERY.md","score":0.71},{"source":"base-DRAFTING.md","score":0.59}]),
+                ("Explain the HIPAA privacy rule for patient records", 4100, 1080, [{"source":"doctor-PATIENT.md","score":0.87},{"source":"doctor-PRACTICE.md","score":0.69},{"source":"base-COMPLIANCE.md","score":0.55}]),
+                ("What are the earnest money requirements in Texas?", 1950, 520, [{"source":"realtor-CONTRACT.md","score":0.83},{"source":"realtor-DISCLOSURE.md","score":0.74}]),
+                ("Calculate the capital gains on this property sale", 6300, 1700, [{"source":"cpa-personal-INVESTMENT.md","score":0.78},{"source":"cpa-personal-INCOME.md","score":0.65}]),
+                ("What are the zoning restrictions for mixed-use development?", 3850, 1020, [{"source":"architect-REGULATORY.md","score":0.86},{"source":"lawyer-re-ZONING.md","score":0.72}]),
+                ("Summarize the engagement letter for the Smith consulting project", 4700, 1350, [{"source":"consultant-ENGAGEMENT.md","score":0.89},{"source":"consultant-DELIVERABLE.md","score":0.61}]),
+                ("Draft a closing statement for the Oakwood property transfer", 8200, 2450, [{"source":"lawyer-re-CLOSING.md","score":0.82},{"source":"lawyer-re-PURCHASE.md","score":0.68},{"source":"realtor-CONTRACT.md","score":0.56}]),
+                ("What are the encryption requirements for client data under GDPR?", 2900, 780, [{"source":"tech-PRIVACY.md","score":0.84},{"source":"base-COMPLIANCE.md","score":0.70},{"source":"base-ETHICS.md","score":0.52}]),
+                ("Review this trust distribution schedule for compliance", 5400, 1480, [{"source":"advisor-ESTATE.md","score":0.90},{"source":"cpa-personal-ESTATE.md","score":0.77}]),
+            ]
+            now = time.time()
+            with _lock:
+                _log.clear()
+                total_before = total_after = 0
+                for i, (q, b, a, hits) in enumerate(demo_queries):
+                    ts = datetime.fromtimestamp(now - (len(demo_queries) - i) * 120).strftime("%H:%M:%S")
+                    pct = round(a / 8192 * 100, 1)
+                    _log.appendleft({"ts": ts, "query": q, "tokens_before": b, "tokens_after": a, "ctx_limit": 8192, "pct": pct, "hits": hits})
+                    total_before += b
+                    total_after += a
+                _stats = {
+                    "total_requests":  len(demo_queries),
+                    "total_saved":     max(0, total_before - total_after),
+                    "max_tokens_seen": max(e[2] for e in demo_queries),
+                    "last_seen":       datetime.fromtimestamp(now).strftime("%H:%M:%S"),
+                    "start_time":      datetime.fromtimestamp(now - len(demo_queries) * 120).isoformat(),
+                    "cache_hits":      3,
+                }
+            body = json.dumps({"ok": True, "count": len(demo_queries)}).encode()
             self.send_response(200)
             self.send_header("Content-Type","application/json")
             self.send_header("Content-Length",str(len(body)))
