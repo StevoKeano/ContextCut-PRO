@@ -222,9 +222,16 @@ else
       sleep 5
     fi
   else
-    echo "  Docker not found. Install Qdrant manually:"
-    echo "    https://qdrant.tech/documentation/quick-start/"
-    echo "  Or install Docker Desktop: https://docker.com"
+    echo '  Docker not found. Install Docker engine (Desktop GUI not required):'
+    echo ""
+    echo "    Linux (Ubuntu/Debian):"
+    echo '      sudo apt update && sudo apt install -y docker-ce docker-ce-cli containerd.io'
+    echo "      sudo systemctl enable --now docker"
+    echo ""
+    echo "    macOS: Docker Desktop — https://docker.com"
+    echo "    Windows: Docker Desktop (WSL2 backend) — https://docker.com"
+    echo ""
+    echo "  Or run Qdrant without Docker: https://qdrant.tech/documentation/quick-start/"
     exit 1
   fi
 fi
@@ -496,6 +503,32 @@ fi
 STOPEOF
   chmod +x "$INSTALL_DIR/stop.sh"
 
+  # ── systemd service (reboot-proof on Linux) ──
+  mkdir -p "$HOME/.config/systemd/user"
+  cat > "$HOME/.config/systemd/user/contextcut.service" << 'SERVICEEOF'
+[Unit]
+Description=ContextCut PRO — proxy + knowledge base watcher
+After=network-online.target docker.service
+Wants=network-online.target docker.service
+
+[Service]
+Type=simple
+ExecStart=%h/contextcut/start.sh
+ExecStop=%h/contextcut/stop.sh
+Restart=on-failure
+RestartSec=10
+EnvironmentFile=%h/contextcut/.env
+
+[Install]
+WantedBy=default.target
+SERVICEEOF
+  echo "  systemd user service written to ~/.config/systemd/user/contextcut.service"
+  echo "  To enable auto-start on boot:"
+  echo "    systemctl --user daemon-reload"
+  echo "    systemctl --user enable --now contextcut"
+  echo "    sudo loginctl enable-linger $USER"
+  echo ""
+
   cat > "$INSTALL_DIR/reset_license.sh" << 'RESETEOF'
 #!/bin/bash
 ENV_FILE="$(dirname "$0")/.env"
@@ -566,6 +599,15 @@ echo "  Then close all Ollama windows and restart Ollama — it reads env vars o
 echo '  startup. On Linux, add `export OLLAMA_NO_CLOUD=true` to your Ollama service.'
 echo "  Performance: OLLAMA_CONTEXT_LENGTH=8192 reduces KV cache from 5GB to ~1.25GB"
 echo "  on a 14B q8_0 model, preventing GPU VRAM eviction."
+echo ""
+echo "  ── Reboot-proof (auto-start on boot) ──"
+echo "  Linux:"
+echo "    systemctl --user daemon-reload"
+echo "    systemctl --user enable --now contextcut"
+echo "    sudo loginctl enable-linger $USER"
+echo "  macOS: launchd agents are already installed (auto-start on login)."
+echo "  Windows: Create a scheduled task or shortcut in shell:startup:"
+echo '    (New-Object -Com WScript.Shell).CreateShortcut("$env:APPDATA\Microsoft\Windows\Start Menu\Programs\Startup\ContextCut.lnk").TargetPath = "wsl.exe"; .Arguments = "-d Ubuntu -- ~/contextcut/start.sh"; .Save()'
 echo ""
 echo "  ── Quick Start ──"
 echo "  1. Starter knowledge files are in: $STARTER_DIR"
