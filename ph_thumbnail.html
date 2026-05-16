@@ -1,0 +1,36 @@
+<!DOCTYPE html>
+<html>
+<head><meta charset="utf-8"><title>Thumbnail</title>
+<style>
+body{margin:0;width:1280px;height:720px;overflow:hidden;background:#080c14;font-family:system-ui,sans-serif;position:relative}
+.bg{position:absolute;inset:0;background:radial-gradient(ellipse at 30% 40%,#0a1a3e 0%,#080c14 60%)}
+.grid{position:absolute;inset:0;background-image:linear-gradient(rgba(0,212,255,.04) 1px,transparent 1px),linear-gradient(90deg,rgba(0,212,255,.04) 1px,transparent 1px);background-size:40px 40px}
+.shield{position:absolute;top:100px;left:80px;width:200px;height:200px;border:4px solid #00d4ff;border-radius:40px;display:flex;align-items:center;justify-content:center;background:rgba(0,212,255,.06);box-shadow:0 0 80px rgba(0,212,255,.15)}
+.shield svg{width:100px;height:100px}
+.title{position:absolute;top:110px;left:320px;color:#fff;font-weight:800;font-size:72px;line-height:1.1;letter-spacing:-1.5px}
+.title .pro{color:#00d4ff}
+.sub{position:absolute;top:270px;left:322px;color:#4a6080;font-size:24px;font-weight:400;white-space:nowrap}
+.pill{position:absolute;bottom:140px;left:80px;background:rgba(0,212,255,.1);border:1px solid rgba(0,212,255,.2);border-radius:12px;padding:16px 28px;color:#00d4ff;font-size:22px;font-weight:700}
+.pill2{position:absolute;bottom:140px;left:380px;background:rgba(34,197,94,.1);border:1px solid rgba(34,197,94,.2);border-radius:12px;padding:16px 28px;color:#22c55e;font-size:22px;font-weight:700}
+.bar{position:absolute;bottom:80px;left:80px;right:80px;height:6px;background:#1e2d42;border-radius:3px}
+.bar-fill{height:100%;width:72%;background:linear-gradient(90deg,#00d4ff,#22c55e);border-radius:3px}
+.bar-label{position:absolute;bottom:90px;right:80px;color:#4a6080;font-size:18px}
+</style>
+</head>
+<body>
+<div class="bg"></div>
+<div class="grid"></div>
+<div class="shield">
+  <svg viewBox="0 0 24 24" fill="none" stroke="#00d4ff" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
+    <path d="M12 2l7 4v5c0 5-3 9-7 10-4-1-7-5-7-10V6l7-4z"/>
+    <path d="M9 12l2 2 4-4"/>
+  </svg>
+</div>
+<div class="title">ContextCut<br><span class="pro">PRO</span></div>
+<div class="sub">Private AI Knowledge Layer</div>
+<div class="pill">🔒 100% Local</div>
+<div class="pill2">📉 −72% Tokens</div>
+<div class="bar"><div class="bar-fill"></div></div>
+<div class="bar-label">token savings</div>
+</body>
+</html>

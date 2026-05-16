@@ -1,0 +1,97 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>ContextCut — Teleprompter (90s)</title>
+<style>
+body{background:#000;color:#fff;font-family:system-ui,sans-serif;margin:0;padding:20px;height:100vh;display:flex;flex-direction:column}
+#timer{text-align:center;font-size:24px;color:#00d4ff;font-weight:700;padding:10px;border-bottom:1px solid #222}
+#text{flex:1;display:flex;align-items:center;justify-content:center;font-size:32px;line-height:1.8;text-align:center;padding:40px}
+#text em{color:#00d4ff;font-style:normal}
+#text .action{color:#f59e0b;font-size:22px;display:block;margin-top:12px}
+.btns{text-align:center;padding:16px;border-top:1px solid #222}
+.btns button{background:#00d4ff;color:#000;border:none;border-radius:8px;padding:14px 40px;font-size:18px;font-weight:700;cursor:pointer;margin:0 8px}
+.btns button.sec{background:#222;color:#fff}
+#status{color:#666;font-size:14px;margin-top:8px;display:block}
+#bar{height:3px;background:#00d4ff;width:0%;transition:width .3s}
+</style>
+</head>
+<body>
+<div id="timer">0:00 / 1:30</div>
+<div id="bar"></div>
+<div id="text">Ready — press <b>Start</b>, then F12 in AHK</div>
+<div class="btns">
+  <button id="goBtn">▶ Start</button>
+  <button class="sec" id="resetBtn">⟲ Reset</button>
+  <span id="status">Not started</span>
+</div>
+<script>
+var cues=[
+{t:0,text:"Every time you ask your local LLM a question,<br>you paste in everything \u2014 and watch your<br><em>context window bloat</em>, tokens burn,<br>and the model lose focus."},
+{t:5,text:"ContextCut is different.<br><br>It finds only what matters from your<br>knowledge base and injects it automatically.<br><span class=\"action\">\u2727 AHK populates table with demo data</span>"},
+{t:10,text:"Look at these real token counts.<br><br><em>Before: 64 tokens</em> \u2014 the raw query.<br><em>After: over 1,400 tokens</em> \u2014 with relevant<br>context injected from your knowledge base."},
+{t:15,text:"<span class=\"action\">\u2727 AHK opens file browser</span><br><br>This is the knowledge base.<br>Starter files for your profession \u2014<br>legal, CPA, medical, real estate."},
+{t:19,text:"You pick what applies to your clients.<br><br>Copy them into the <em>knowledge</em> directory<br>and the watcher service auto-ingests them<br>into Qdrant within seconds."},
+{t:24,text:"Edit them. Update them.<br>Add your own content.<br><br>Your AI stays smart about<br><em>your client\u2019s domain</em>.<br><span class=\"action\">\u2727 AHK closes modal</span>"},
+{t:29,text:"Let\u2019s see it in action.<br><br>A real question from a real use case.<br><span class=\"action\">\u2727 AHK focuses chat</span>"},
+{t:33,text:"<em>\u201cWhat are the key terms<br>in this non-compete clause?\u201d</em><br><span class=\"action\">\u2727 AHK types and sends the query</span>"},
+{t:38,text:"The proxy sends the query to Qdrant,<br>finds the three most relevant chunks,<br>injects them into the prompt,<br>and streams the response back."},
+{t:43,text:"Watch the left panel \u2014<br>it updates live with <em>token counts</em>,<br><em>compression percentage</em>,<br>and which knowledge files matched."},
+{t:48,text:"Token savings you can actually see.<br><br>Before and after \u2014 every single request."},
+{t:53,text:"Notice the stat pills beneath the response.<br><br><em>36% CTX</em> \u2014 compression ratio.<br><em>3 chunks injected</em> \u2014 from your KB."},
+{t:59,text:"<span class=\"action\">\u2727 AHK opens Params panel</span><br><br>Fine-tune retrieval here.<br><em>Min score</em> controls relevance threshold.<br><em>Top-K</em> sets how many chunks to inject."},
+{t:67,text:"Tuneable live &#8212;<br>no config files to edit,<br>no services to restart."},
+{t:73,text:"<em>Everything local.</em><br><br>Your documents. Your queries.<br>Your vector database. Your LLM."},
+{t:78,text:"ContextCut PRO \u2014<br><br><em style=\"font-size:40px\">Stop wasting tokens.<br>Inject only what matters.</em><br><span class=\"action\">\u2727 AHK clicks promo tab \u2014 15s to narrate</span>"},
+{t:82,text:"Starter files ship with every purchase.<br><br>Customers curate their own knowledge.<br>The watcher detects changes instantly.<br>No re-indexing, no commands, no hassle."},
+{t:87,text:"Your data never leaves your machine.<br>Your documents, your vectors, your LLM.<br><br>ContextCut PRO \u2014 <em>private AI<br>for professionals.</em>"},
+{t:92,text:"<span style=\"color:#00d4ff;font-size:28px\">api.contextcut-pro.com/promo</span>"}
+];
+var running=false,start=0,frame=null,idx=-1;
+function go(){
+  if(!running){
+    running=true;start=Date.now();idx=-1;
+    document.getElementById('goBtn').textContent='\u25cf Running';
+    document.getElementById('status').textContent='Running...';
+    if(frame)cancelAnimationFrame(frame);
+    frame=requestAnimationFrame(tick);
+  }else{
+    running=false;
+    if(frame){cancelAnimationFrame(frame);frame=null;}
+    document.getElementById('goBtn').textContent='\u25b6 Resume';
+    document.getElementById('status').textContent='Paused';
+  }
+}
+function reset(){
+  running=false;if(frame){cancelAnimationFrame(frame);frame=null;}idx=-1;
+  document.getElementById('goBtn').textContent='\u25b6 Start';
+  document.getElementById('text').innerHTML='Ready \u2014 press <b>Start</b>, then F12 in AHK';
+  document.getElementById('timer').textContent='0:00 / 1:30';
+  document.getElementById('bar').style.width='0%';
+  document.getElementById('status').textContent='Reset';
+}
+function tick(){
+  if(!running)return;
+  var e=(Date.now()-start)/1000;
+  var m=Math.floor(e/60),s=Math.floor(e%60);
+  document.getElementById('timer').textContent=m+':'+(s<10?'0':'')+s+' / 1:30';
+  document.getElementById('bar').style.width=Math.min(e/90*100,100)+'%';
+  var f=-1;
+  for(var i=cues.length-1;i>=0;i--){if(e>=cues[i].t){f=i;break;}}
+  if(f!==idx&&f>=0){idx=f;
+    document.getElementById('text').innerHTML=cues[f].text;
+    document.getElementById('status').textContent='Cue '+(f+1)+'/'+cues.length;
+  }
+  if(e>=98){running=false;document.getElementById('status').textContent='\u2713 Done';
+    document.getElementById('goBtn').textContent='\u25b6 Replay';return;}
+  frame=requestAnimationFrame(tick);
+}
+document.getElementById('goBtn').onclick=go;
+document.getElementById('resetBtn').onclick=reset;
+document.onkeydown=function(e){
+  if(e.key===' '||e.key==='Space'){e.preventDefault();go();}
+  if(e.key==='r'||e.key==='R')reset();
+};
+</script>
+</body>
+</html>

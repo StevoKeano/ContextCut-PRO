@@ -1244,12 +1244,32 @@ def make_dashboard():
         rows = list(_log)
         s    = dict(_stats)
 
-    last_pct = rows[0]["pct"] if rows else 0
-    last_tok = rows[0]["tokens_after"] if rows else 0
+    last_pct = rows[0]["pct"] if rows and rows[0].get("type") != "provider_switch" else 0
+    last_tok = rows[0]["tokens_after"] if rows and rows[0].get("type") != "provider_switch" else 0
     bc       = pct_color(last_pct)
+
+    is_cloud = _provider_name != "Ollama" or not _local_only
+
+    cloud_banner = ""
+    if is_cloud:
+        cloud_banner = f"""<div class="cloud-banner">
+  <span style="font-size:18px;margin-right:10px">&#9888;</span>
+  <div style="flex:1">
+    <strong>DATA LEAVES YOUR MACHINE</strong> &mdash; Using <b>{html.escape(_provider_name)}</b>
+    <div style="font-size:12px;opacity:.9;margin-top:2px">Your queries and context from your knowledge base are sent to a third-party server. Switch back to <b>Ollama</b> with <b>Local models only</b> checked for 100% local processing.</div>
+  </div>
+  <a href="/settings" style="background:#dc2626;color:#fff;border:none;border-radius:4px;padding:6px 14px;font-size:12px;font-weight:600;text-decoration:none;white-space:nowrap">Settings &rarr;</a>
+</div>"""
 
     rows_html = ""
     for r in rows:
+        if r.get("type") == "provider_switch":
+            cloud_cls = "cloud-on" if r.get("is_cloud") else "cloud-off"
+            rows_html += f"""<tr class="{cloud_cls}">
+              <td class="ts">{r['ts']}</td>
+              <td class="qcell" colspan="5" style="font-weight:600">{html.escape(r['query'])}</td>
+            </tr>"""
+            continue
         p   = r["pct"]
         col = pct_color(p)
         hits_str = " ".join(
@@ -1394,6 +1414,10 @@ tr:hover td{{background:var(--surf2)}}
 #tourTip .tc button{{background:transparent;border:1px solid var(--border);color:var(--muted);border-radius:5px;padding:6px 14px;font-size:11px;cursor:pointer;font-family:'JetBrains Mono',monospace}}
 #tourTip .tc button:hover{{border-color:var(--accent);color:var(--accent)}}
 #tourTip .tc button.prim{{background:var(--accent);border-color:var(--accent);color:#000;font-weight:700}}
+.cloud-banner{{display:flex;align-items:center;gap:12px;background:#2a0a0a;border-bottom:2px solid #dc2626;padding:10px 20px;color:#fca5a5;font-size:13px;flex-shrink:0}}
+.cloud-banner strong{{color:#ef4444}}
+tr.cloud-on td{{background:#2a0a0a!important;color:#fca5a5!important;border-top-color:#dc2626!important}}
+tr.cloud-off td{{background:#0a1a2e!important;color:#22c55e!important;border-top-color:#22c55e!important}}
 </style>
 </head>
 <body>
@@ -1409,6 +1433,8 @@ tr:hover td{{background:var(--surf2)}}
   <button onclick="startTour()" style="background:transparent;border:1px solid var(--border);color:var(--muted);border-radius:3px;padding:3px 8px;font-size:11px;cursor:pointer;font-family:'JetBrains Mono',monospace" title="Guided tour">Tour</button>
   <div class="live"><span class="dot"></span>live</div>
 </div>
+
+{cloud_banner}
 
 <div class="main">
 
@@ -1855,6 +1881,10 @@ async function pollStats() {{
     const tb = g('tblBody');
     if (!tb) return;
     tb.innerHTML = rows.map(r => {{
+      if (r.type === 'provider_switch') {{
+        var cls = r.is_cloud ? 'cloud-on' : 'cloud-off';
+        return `<tr class="${{cls}}"><td class="ts">${{r.ts||''}}</td><td class="qcell" colspan="5" style="font-weight:600">${{esc(r.query||'')}}</td></tr>`;
+      }}
       const p = r.pct||0;
       const c = p<60?'var(--green)':p<80?'var(--yellow)':'var(--red)';
       const hits = (r.hits||[]).map(h=>
@@ -2402,6 +2432,7 @@ class DashboardHandler(_SuppressBrokenPipe, BaseHTTPRequestHandler):
                 rows = list(_log)
             lines = ["ts,query,tokens_before,tokens_after,pct,hits"]
             for r in rows:
+                if r.get("type") == "provider_switch": continue
                 hits = "; ".join(f"{h['source'].replace('.md','')} ({h['score']})" for h in r.get("hits", []))
                 q = r['query'].replace('"', '""')
                 lines.append(f'{r["ts"]},"{q}",{r["tokens_before"]},{r["tokens_after"]},{r["pct"]},"{hits}"')
@@ -2667,7 +2698,7 @@ class DashboardHandler(_SuppressBrokenPipe, BaseHTTPRequestHandler):
         if self.path == "/api/settings/provider":
             try:
                 body = json.loads(raw_body)
-                global _provider_name, _custom_base_url, _ollama_url, _api_key, _free_only, UPSTREAM
+                global _provider_name, _custom_base_url, _ollama_url, _api_key, _free_only, _local_only, UPSTREAM
                 _provider_name = body.get("provider", "Ollama")
                 _custom_base_url = body.get("custom_url", "").strip()
                 incoming_key = body.get("api_key", "").strip()
@@ -2691,6 +2722,13 @@ class DashboardHandler(_SuppressBrokenPipe, BaseHTTPRequestHandler):
                 if _api_key: CredentialManager.save("api_key", _api_key)
 
                 print(f"[contextcut] Provider switched to {_provider_name} | upstream: {UPSTREAM}")
+                is_cloud = _provider_name != "Ollama" or not _local_only
+                _log.appendleft({
+                    "ts": datetime.now().strftime("%H:%M:%S"),
+                    "query": f"⚠ Provider switched to {'☁ ' + _provider_name if is_cloud else '✓ Ollama (local)'}",
+                    "tokens_before": "—", "tokens_after": "—", "pct": 0, "hits": [],
+                    "type": "provider_switch", "is_cloud": is_cloud
+                })
                 resp = json.dumps({"ok": True, "upstream": UPSTREAM, "has_key": bool(_api_key)}).encode()
                 self.send_response(200)
                 self.send_header("Content-Type", "application/json")

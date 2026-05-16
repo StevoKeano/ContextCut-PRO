@@ -758,6 +758,11 @@ body{background:#080c14;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',
 .pill .desc{color:#4a6080;font-size:11px;margin-top:4px}
 .badge{display:inline-flex;align-items:center;gap:6px;background:#0a1a2e;border:1px solid #1e2d42;border-radius:6px;padding:6px 12px;font-size:12px;color:#4a6080;text-decoration:none}
 .badge:hover{border-color:#00d4ff;color:#00d4ff}
+pre{background:#0a1a2e;border:1px solid #1e2d42;border-radius:6px;padding:12px 16px;font-size:11px;color:#c9d8f0;overflow-x:auto;line-height:1.6;margin:8px 0}
+code{font-family:'Courier New',monospace}
+table{width:100%;border-collapse:collapse;margin:8px 0;font-size:12px}
+table td{padding:6px 10px;border:1px solid #1e2d42;color:#8b95a5}
+table td:first-child{color:#00d4ff;font-family:'Courier New',monospace;white-space:nowrap}
 .foot{text-align:center;padding:24px 32px;border-top:1px solid #1e2d42;font-size:12px;color:#4a6080}
 .foot a{color:#00d4ff;text-decoration:none}
 @media(max-width:500px){.grd{grid-template-columns:1fr}}
@@ -801,6 +806,34 @@ body{background:#080c14;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',
       <p style="margin-bottom:10px">ContextCut PRO is designed for professionals who cannot send client data to cloud AI services. Everything runs locally. No telemetry. No subscriptions.</p>
       <a class="badge" href="/compliance/soc2">&#10003; SOC 2 Self-Assessment &rarr;</a>
       <a class="badge" style="margin-left:6px" href="https://github.com/StevoKeano/ContextCut-PRO">&#10003; Open Source on GitHub</a>
+    </div>
+
+    <div class="sec">
+      <h2>OpSec &amp; Port Exposure</h2>
+      <p>All ContextCut PRO services bind exclusively to <code>127.0.0.1</code> (localhost):</p>
+      <ul>
+        <li><b>Dashboard</b> &mdash; Port 18787 on <code>127.0.0.1</code> (not reachable from LAN/WAN)</li>
+        <li><b>Proxy</b> &mdash; Port 18788 on <code>127.0.0.1</code> (not reachable from LAN/WAN)</li>
+        <li><b>Qdrant</b> &mdash; Port 6333 on <code>127.0.0.1</code> (not reachable from LAN/WAN)</li>
+        <li><b>Ollama mgmt endpoints</b> &mdash; <code>/api/pull</code>, <code>/api/push</code>, <code>/api/delete</code>, <code>/api/copy</code>, <code>/api/create</code> return 403 through the proxy</li>
+        <li><b>Open proxy prevention</b> &mdash; The catch-all POST handler only forwards <code>/v1/chat/completions</code>, <code>/api/chat</code>, <code>/api/generate</code>, and <code>/v1/completions</code>; all other paths return 404</li>
+        <li><b>Gumroad webhook</b> &mdash; Verified via HMAC-SHA256 signature; only processed if the signature matches <code>GUMROAD_WEBHOOK_SECRET</code></li>
+      </ul>
+
+      <h3 style="color:#00d4ff;font-size:13px;font-weight:700;margin:16px 0 8px">Ollama on Windows: Admin Cmd</h3>
+      <p>Run these <b>one time</b> in an <b>Admin</b> command prompt, then close all Ollama windows and restart:</p>
+      <pre>setx OLLAMA_NO_CLOUD true /M && setx OLLAMA_CONTEXT_LENGTH 8192 /M</pre>
+      <table>
+        <tr><td>OLLAMA_NO_CLOUD=true</td><td>Disables all outbound calls to ollama.com</td></tr>
+        <tr><td>OLLAMA_CONTEXT_LENGTH=8192</td><td>Reduces KV cache from ~5GB to ~1.25GB, preventing GPU VRAM eviction on a 14B q8_0 model</td></tr>
+      </table>
+
+      <p style="margin-top:12px"><b>OLLAMA_HOST</b> &mdash; Only set this if Ollama and the proxy are on the <b>same machine</b>:</p>
+      <pre>setx OLLAMA_HOST http://127.0.0.1:11434 /M</pre>
+      <p style="font-size:12px;color:#4a6080;line-height:1.6;margin-top:4px">If the proxy is on a <b>different machine</b> (like a dedicated Ubuntu server), leave the default <code>0.0.0.0</code> so Ollama listens on the LAN. Use Windows Firewall to restrict port <code>11434</code> to only the proxy server's IP.</p>
+
+      <h3 style="color:#00d4ff;font-size:13px;font-weight:700;margin:16px 0 8px">License Communication</h3>
+      <p>The only outbound traffic is a lightweight heartbeat (every 15 min) to <code>api.contextcut-pro.com</code> to verify the license seat is active. No document content, queries, or metadata is transmitted.</p>
     </div>
   </div>
   <div class="foot">
