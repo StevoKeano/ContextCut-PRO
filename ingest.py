@@ -100,11 +100,22 @@ def _ollama_embed(texts, model):
     """Embed using Ollama's /api/embed endpoint."""
     payloads = []
     for t in texts:
-        payload = json.dumps({"model": model, "input": t}).encode()
+        try:
+            payload = json.dumps({"model": model, "input": t}).encode()
+        except ValueError as e:
+            print(f"  [!] Ollama embed JSON encoding error: {e}")
+            print(f"  [!] Input text contains invalid characters for JSON")
+            print(f"  [!] Repr of first 200 chars: {repr(t[:200])}")
+            raise
         req = urllib.request.Request(f"{OLLAMA_URL}/api/embed", data=payload, method="POST")
         req.add_header("Content-Type", "application/json")
-        with urllib.request.urlopen(req, timeout=60) as resp:
-            data = json.loads(resp.read().decode("utf-8"))
+        try:
+            with urllib.request.urlopen(req, timeout=60) as resp:
+                data = json.loads(resp.read().decode("utf-8"))
+        except urllib.error.HTTPError as e:
+            body = e.read().decode("utf-8", errors="replace")
+            print(f"  [!] Ollama HTTP {e.code}: {body}")
+            raise
         embeddings = data.get("embeddings", [])
         if embeddings:
             payloads.append(embeddings[0])
@@ -136,9 +147,7 @@ def file_id(path: Path) -> str:
     return hashlib.md5(str(path).encode()).hexdigest()
 
 def sanitize_text(text: str) -> str:
-    # 1. Remove control characters or problematic formatting
-    # 2. Ensure it's a clean string
-    return text.replace('\r\n', '\n').replace('"', '\\"').strip()
+    return text.replace('\r\n', '\n').strip()
 
 processing_queue = set()
 
