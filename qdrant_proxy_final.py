@@ -1771,6 +1771,7 @@ async function clearContext() {{
 async function attachFile(input) {{
   const file = input.files[0];
   if (!file) return;
+  if (file.size > 512 * 1024) {{ alert('File too large (max 512KB): '+file.name); input.value = ''; return; }}
   const ext = '.' + file.name.split('.').pop().toLowerCase();
   const allowed = {{'.md':1,'.txt':1,'.py':1,'.js':1,'.ts':1,'.html':1,'.css':1,'.csv':1,'.json':1,'.xml':1,'.yaml':1,'.yml':1,'.go':1,'.rs':1,'.rb':1,'.java':1,'.c':1,'.cpp':1,'.h':1,'.sh':1,'.sql':1,'.log':1}};
   if (!allowed[ext]) {{ alert('File type not supported: '+ext); input.value = ''; return; }}
@@ -3041,6 +3042,7 @@ class DashboardHandler(_SuppressBrokenPipe, BaseHTTPRequestHandler):
                 env["CONTEXTCUT_QDRANT_PORT"] = str(QDRANT_PORT)
                 env["CONTEXTCUT_KB_DIR"] = str(KB_DIR)
                 env["CONTEXTCUT_COLLECTION"] = COLLECTION
+                env["CONTEXTCUT_UPSTREAM"] = UPSTREAM
 
                 result = subprocess.run(
                     [sys.executable, str(ingest_path)],
@@ -3109,6 +3111,9 @@ class DashboardHandler(_SuppressBrokenPipe, BaseHTTPRequestHandler):
                 ext = "." + name.rsplit(".", 1)[-1].lower() if "." in name else ""
                 if ext not in ALLOWED_EXT:
                     resp = json.dumps({"error": "File type not supported"}).encode()
+                    self.send_response(400)
+                elif len(content) > 1024 * 512:
+                    resp = json.dumps({"error": "File too large (max 512KB)"}).encode()
                     self.send_response(400)
                 elif "/" in name or "\\" in name:
                     resp = json.dumps({"error": "Invalid filename"}).encode()
