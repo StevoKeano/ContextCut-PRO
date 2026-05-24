@@ -1388,6 +1388,7 @@ tr:hover td{{background:var(--surf2)}}
 .chat-input:focus{{border-color:var(--accent)}}
 .send-btn{{background:var(--accent);color:#000;border:none;border-radius:var(--r);padding:8px 16px;font-family:'Syne',sans-serif;font-weight:700;font-size:13px;cursor:pointer;white-space:nowrap;height:38px}}
 .send-btn:hover{{opacity:.85}}.send-btn:disabled{{opacity:.4;cursor:not-allowed}}
+.att-btn{{background:transparent;border:1px solid var(--border);color:var(--muted);border-radius:var(--r);padding:8px 10px;font-size:14px;cursor:pointer;line-height:1;flex-shrink:0}}
 /* ── Settings panel ── */
 .settings-row{{display:flex;align-items:center;gap:6px;flex-wrap:wrap}}
 .param-group{{display:flex;align-items:center;gap:4px}}
@@ -1523,6 +1524,8 @@ tr.cloud-off td{{background:#0a1a2e!important;color:#22c55e!important;border-top
         </div>
       </div>
       <div class="input-row">
+        <button class="att-btn" id="attachBtn" onclick="document.getElementById('fileInput').click()" title="Attach .md file to knowledge base">📎</button>
+        <input type="file" id="fileInput" accept=".md" style="display:none" onchange="attachFile(this)" />
         <textarea class="chat-input" id="chatInput" rows="2" role="textbox" aria-label="Message input"
           placeholder="Type a message… (Enter to send, Shift+Enter for newline). Try: /clear, /help"
           onkeydown="handleKey(event)"></textarea>
@@ -1756,6 +1759,30 @@ async function clearContext() {{
       if (document.getElementById('cardCache')) document.getElementById('cardCache').textContent = '0';
     }}
   }} catch(e) {{}}
+}}
+
+async function attachFile(input) {{
+  const file = input.files[0];
+  if (!file) return;
+  if (!file.name.endsWith('.md')) {{ alert('Only .md files allowed.'); input.value = ''; return; }}
+  const text = await file.text();
+  appendMsg('assistant', '\\uD83D\\uDCC4 Adding **'+esc(file.name)+'** to knowledge base and ingesting...', '');
+  try {{
+    const r = await fetch('/api/knowledge/upload', {{
+      method: 'POST',
+      headers: {{'Content-Type':'application/json'}},
+      body: JSON.stringify({{name: file.name, content: text}})
+    }});
+    const d = await r.json();
+    if (!d.ok) throw new Error(d.error||'upload failed');
+    const rr = await fetch('/api/embed/reingest', {{method: 'POST'}});
+    const dd = await rr.json();
+    if (!dd.ok) throw new Error(dd.error||'re-ingest failed');
+    appendMsg('assistant', '\\u2705 **'+esc(file.name)+'** added to knowledge base and ingested. Ask a question about it!', '');
+  }} catch(e) {{
+    appendMsg('assistant', '\\u274c Failed to add file: '+esc(e.message), '');
+  }}
+  input.value = '';
 }}
 
 function handleCommand(text) {{
