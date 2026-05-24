@@ -150,6 +150,13 @@ QDRANT_HOST    = os.getenv("CONTEXTCUT_QDRANT_HOST",     "localhost")
 QDRANT_PORT    = int(os.getenv("CONTEXTCUT_QDRANT_PORT", "6333"))
 COLLECTION     = os.getenv("CONTEXTCUT_COLLECTION",      "contextcut")
 KB_DIR         = Path(os.getenv("CONTEXTCUT_KB_DIR", str(Path.home() / "contextcut" / "knowledge"))).expanduser()
+
+ALLOWED_EXT = {
+    ".md", ".txt", ".py", ".js", ".ts", ".html", ".css",
+    ".csv", ".json", ".xml", ".yaml", ".yml",
+    ".go", ".rs", ".rb", ".java", ".c", ".cpp", ".h",
+    ".sh", ".sql", ".log",
+}
 LISTEN_PORT    = int(os.getenv("CONTEXTCUT_PROXY_PORT",     "18788"))
 DASHBOARD_PORT = int(os.getenv("CONTEXTCUT_DASHBOARD_PORT", "18787"))
 CTX_LIMIT      = int(os.getenv("CONTEXTCUT_CTX_LIMIT",   "8192"))
@@ -1525,7 +1532,7 @@ tr.cloud-off td{{background:#0a1a2e!important;color:#22c55e!important;border-top
       </div>
       <div class="input-row">
         <button class="att-btn" id="attachBtn" onclick="document.getElementById('fileInput').click()" title="Attach .md file to knowledge base">📎</button>
-        <input type="file" id="fileInput" accept=".md" style="display:none" onchange="attachFile(this)" />
+        <input type="file" id="fileInput" accept=".md,.txt,.py,.js,.ts,.html,.css,.csv,.json,.xml,.yaml,.yml,.go,.rs,.rb,.java,.c,.cpp,.h,.sh,.sql,.log" style="display:none" onchange="attachFile(this)" />
         <textarea class="chat-input" id="chatInput" rows="2" role="textbox" aria-label="Message input"
           placeholder="Type a message… (Enter to send, Shift+Enter for newline). Try: /clear, /help"
           onkeydown="handleKey(event)"></textarea>
@@ -1764,7 +1771,9 @@ async function clearContext() {{
 async function attachFile(input) {{
   const file = input.files[0];
   if (!file) return;
-  if (!file.name.endsWith('.md')) {{ alert('Only .md files allowed.'); input.value = ''; return; }}
+  const ext = '.' + file.name.split('.').pop().toLowerCase();
+  const allowed = {{'.md':1,'.txt':1,'.py':1,'.js':1,'.ts':1,'.html':1,'.css':1,'.csv':1,'.json':1,'.xml':1,'.yaml':1,'.yml':1,'.go':1,'.rs':1,'.rb':1,'.java':1,'.c':1,'.cpp':1,'.h':1,'.sh':1,'.sql':1,'.log':1}};
+  if (!allowed[ext]) {{ alert('File type not supported: '+ext); input.value = ''; return; }}
   const text = await file.text();
   appendMsg('assistant', '\\uD83D\\uDCC4 Adding **'+esc(file.name)+'** to knowledge base and ingesting...', '');
   try {{
@@ -2590,9 +2599,9 @@ class DashboardHandler(_SuppressBrokenPipe, BaseHTTPRequestHandler):
             return
         if self.path == "/api/knowledge/files":
             import glob as _glob
-            md_files = sorted(KB_DIR.glob("*.md"))
+            all_files = sorted(f for f in KB_DIR.iterdir() if f.is_file() and f.suffix.lower() in ALLOWED_EXT)
             files = []
-            for f in md_files:
+            for f in all_files:
                 files.append({
                     "name": f.name,
                     "path": str(f),
@@ -2620,7 +2629,7 @@ class DashboardHandler(_SuppressBrokenPipe, BaseHTTPRequestHandler):
                 self.wfile.write(body)
                 return
             fpath = Path(fp)
-            if not fpath.suffix == ".md" or not fpath.resolve().absolute().as_posix().startswith(KB_DIR.resolve().absolute().as_posix()):
+            if not fpath.suffix.lower() in ALLOWED_EXT or not fpath.resolve().absolute().as_posix().startswith(KB_DIR.resolve().absolute().as_posix()):
                 body = json.dumps({"error": "Forbidden"}).encode()
                 self.send_response(403)
                 self.send_header("Content-Type", "application/json")
@@ -3069,7 +3078,7 @@ class DashboardHandler(_SuppressBrokenPipe, BaseHTTPRequestHandler):
                 fp = body.get("path", "")
                 content = body.get("content", "")
                 fpath = Path(fp)
-                if not fpath.suffix == ".md" or not fpath.resolve().absolute().as_posix().startswith(KB_DIR.resolve().absolute().as_posix()):
+                if not fpath.suffix.lower() in ALLOWED_EXT or not fpath.resolve().absolute().as_posix().startswith(KB_DIR.resolve().absolute().as_posix()):
                     resp = json.dumps({"error": "Forbidden"}).encode()
                     self.send_response(403)
                 else:
@@ -3097,8 +3106,9 @@ class DashboardHandler(_SuppressBrokenPipe, BaseHTTPRequestHandler):
                 body = json.loads(raw_body)
                 name = body.get("name", "").strip()
                 content = body.get("content", "")
-                if not name.endswith(".md"):
-                    resp = json.dumps({"error": "Only .md files allowed"}).encode()
+                ext = "." + name.rsplit(".", 1)[-1].lower() if "." in name else ""
+                if ext not in ALLOWED_EXT:
+                    resp = json.dumps({"error": "File type not supported"}).encode()
                     self.send_response(400)
                 elif "/" in name or "\\" in name:
                     resp = json.dumps({"error": "Invalid filename"}).encode()
@@ -3129,7 +3139,7 @@ class DashboardHandler(_SuppressBrokenPipe, BaseHTTPRequestHandler):
                 body = json.loads(raw_body)
                 fp = body.get("path", "")
                 fpath = Path(fp)
-                if not fpath.suffix == ".md" or not fpath.resolve().absolute().as_posix().startswith(KB_DIR.resolve().absolute().as_posix()):
+                if not fpath.suffix.lower() in ALLOWED_EXT or not fpath.resolve().absolute().as_posix().startswith(KB_DIR.resolve().absolute().as_posix()):
                     resp = json.dumps({"error": "Forbidden"}).encode()
                     self.send_response(403)
                 elif not fpath.exists():

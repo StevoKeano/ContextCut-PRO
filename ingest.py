@@ -80,7 +80,15 @@ def _get_embed_dim():
 EMBED_DIM = _get_embed_dim()
 
 # Files to never ingest
-EXCLUDE_FILES = {"MEMORY.md"}
+EXCLUDE_FILES = {"MEMORY.md", "MEMORY.txt", "MEMORY.py"}
+
+# Allowed file extensions for knowledge base ingestion
+ALLOWED_EXT = {
+    ".md", ".txt", ".py", ".js", ".ts", ".html", ".css",
+    ".csv", ".json", ".xml", ".yaml", ".yml",
+    ".go", ".rs", ".rb", ".java", ".c", ".cpp", ".h",
+    ".sh", ".sql", ".log",
+}
 
 last_embed_time = 0
 
@@ -206,18 +214,18 @@ def safe_embed(texts, model, input_type):
 
 def should_ingest(path: Path) -> bool:
     return (
-        path.suffix == ".md"
+        path.suffix.lower() in ALLOWED_EXT
         and path.name not in EXCLUDE_FILES
         and ".bak-" not in path.name
     )
 
 def ingest_all():
     ensure_collection()
-    md_files = [f for f in KB_DIR.glob("*.md") if should_ingest(f)]
+    md_files = [f for f in KB_DIR.iterdir() if f.is_file() and should_ingest(f)]
     if not md_files:
-        print(f"No eligible .md files found in {KB_DIR}")
+        print(f"No eligible files found in {KB_DIR}")
         return
-    print(f"[*] Ingesting {len(md_files)} files from {KB_DIR} ...")
+    print(f"[*] Ingesting {len(md_files)} file(s) from {KB_DIR} ...")
     for f in md_files:
         ingest_file(f)
     print("[*] Done.")
