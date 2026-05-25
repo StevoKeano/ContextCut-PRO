@@ -43,7 +43,7 @@ except ImportError:
     pass
 
 from qdrant_client import QdrantClient
-from qdrant_client.models import Distance, VectorParams, PointStruct, PointIdsList
+from qdrant_client.models import Distance, VectorParams, PointStruct, PointIdsList, Filter, FieldCondition, MatchValue
 
 # ── Config ────────────────────────────────────────────────────────────────────
 QDRANT_HOST  = os.getenv("CONTEXTCUT_QDRANT_HOST", "localhost")
@@ -78,6 +78,49 @@ def _get_embed_dim():
     return 1024
 
 EMBED_DIM = _get_embed_dim()
+
+# Per-model max input tokens for embedding (~25% below actual limit to account for tokenizer mismatch)
+def _get_embed_max_tokens():
+    if EMBED_MODE == "voyage" and VOYAGE_API_KEY:
+        return 30000
+    if OLLAMA_EMBED:
+        ctx = {
+            "nomic-embed-text": 1500,
+            "nomic-embed-text-v1.5": 6000,
+            "nomic-embed-text-v2-moe": 6000,
+            "mxbai-embed-large": 400,
+            "bge-m3": 6000,
+            "qwen3-embedding:0.6b": 24000,
+            "qwen3-embedding:4b": 24000,
+            "qwen3-embedding:8b": 24000,
+            "snowflake-arctic-embed-l": 6000,
+            "all-minilm": 6000,
+        }
+        base = OLLAMA_EMBED.split(":")[0]
+        return ctx.get(OLLAMA_EMBED, ctx.get(base, 1500))
+    return 1500
+
+MAX_EMBED_TOKENS = _get_embed_max_tokens()
+
+CHUNK_TOKENS = 512
+CHUNK_OVERLAP = 50
+
+def chunk_text(text: str) -> list[str]:
+    try:
+        import tiktoken
+        enc = tiktoken.get_encoding("cl100k_base")
+        tokens = enc.encode(text)
+    except ImportError:
+        return [text[:MAX_EMBED_TOKENS]]
+    if len(tokens) <= CHUNK_TOKENS:
+        return [text]
+    chunks = []
+    i = 0
+    while i < len(tokens):
+        chunk_tokens = tokens[i:i + CHUNK_TOKENS]
+        chunks.append(enc.decode(chunk_tokens))
+        i += CHUNK_TOKENS - CHUNK_OVERLAP
+    return chunks
 
 # Files to never ingest
 EXCLUDE_FILES = {"MEMORY.md", "MEMORY.txt", "MEMORY.py"}
@@ -153,39 +196,40 @@ processing_queue = set()
 
 def ingest_file(path: Path):
     if path.name in processing_queue:
-        return # Skip if already being processed
+        return
     processing_queue.add(path.name)
     
     try:
         if not path.exists:
-            return # Skip if it's been removed
+            return
         raw_text = path.read_text(encoding="utf-8", errors="ignore").strip()
         if not raw_text:
             return
         
-        # Sanitize before embedding
-        clean_text = sanitize_text(raw_text[:8000])
+        chunks = chunk_text(raw_text)
+        clean_chunks = [sanitize_text(c) for c in chunks]
         
-        # Pass the sanitized list to your safe_embed function
-        # clean_text is a string
-        result = safe_embed([clean_text], model=VOYAGE_MODEL, input_type="document")
-
-        vector = result.embeddings[0]
+        result = safe_embed(clean_chunks, model=VOYAGE_MODEL, input_type="document")
+        
         fid = file_id(path)
-        
-        qc.upsert(
-            collection_name=COLLECTION,
-            points=[PointStruct(
-                id=int(fid[:8], 16),
-                vector=vector,
+        points = []
+        for i, chunk_text_str in enumerate(clean_chunks):
+            chunk_id = int(hashlib.md5((fid + str(i)).encode()).hexdigest()[:8], 16)
+            points.append(PointStruct(
+                id=chunk_id,
+                vector=result.embeddings[i],
                 payload={
                     "filename": path.name,
                     "path": str(path),
-                    "text": clean_text[:4000],
+                    "chunk_index": i,
+                    "total_chunks": len(clean_chunks),
+                    "text": chunk_text_str[:4000],
                 }
-            )]
-        )
-        print(f"  [ok] {path.name}")
+            ))
+        
+        qc.upsert(collection_name=COLLECTION, points=points)
+        info = f"{len(points)} chunk(s)" if len(points) > 1 else "1 chunk"
+        print(f"  [ok] {path.name} ({info})")
     finally:
         processing_queue.remove(path.name)
 
@@ -288,13 +332,14 @@ def watch():
         def on_deleted(self, event):
             p = Path(event.src_path)
             if should_ingest(p) and self._debounce(event.src_path):
-                fid = int(file_id(p)[:8], 16)
                 try:
                     qc.delete(
                         collection_name=COLLECTION,
-                        points_selector=PointIdsList(points=[fid])
+                        points_selector=Filter(
+                            must=[FieldCondition(key="filename", match=MatchValue(value=p.name))]
+                        )
                     )
-                    print(f"  [del] {p.name} — removed from Qdrant")
+                    print(f"  [del] {p.name} — removed from Qdrant (all chunks)")
                 except Exception as e:
                     print(f"  [!] Failed to remove {p.name} from Qdrant: {e}")
 

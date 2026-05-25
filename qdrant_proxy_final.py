@@ -49,7 +49,7 @@ except ImportError:
     pass
 
 from qdrant_client import QdrantClient
-from qdrant_client.models import Distance, VectorParams, PointIdsList
+from qdrant_client.models import Distance, VectorParams, PointIdsList, Filter, FieldCondition, MatchValue
 
 EMBED_DIM_MAP = {
     "nomic-embed-text": 768,
@@ -76,10 +76,11 @@ def _file_id(path: Path) -> str:
 def _remove_qdrant_point(path: Path):
     try:
         qc = QdrantClient(host=QDRANT_HOST, port=QDRANT_PORT)
-        fid = int(_file_id(path)[:8], 16)
         qc.delete(
             collection_name=COLLECTION,
-            points_selector=PointIdsList(points=[fid])
+            points_selector=Filter(
+                must=[FieldCondition(key="filename", match=MatchValue(value=path.name))]
+            )
         )
         return True
     except Exception as e:
