@@ -1773,7 +1773,7 @@ async function clearContext() {{
 async function attachFile(input) {{
   const file = input.files[0];
   if (!file) return;
-  if (file.size > 512 * 1024) {{ alert('File too large (max 512KB): '+file.name); input.value = ''; return; }}
+  if (file.size > 10 * 1024 * 1024) {{ alert('File too large (max 10MB): '+file.name); input.value = ''; return; }}
   const ext = '.' + file.name.split('.').pop().toLowerCase();
   const allowed = {{'.md':1,'.txt':1,'.py':1,'.js':1,'.ts':1,'.html':1,'.css':1,'.csv':1,'.json':1,'.xml':1,'.yaml':1,'.yml':1,'.go':1,'.rs':1,'.rb':1,'.java':1,'.c':1,'.cpp':1,'.h':1,'.sh':1,'.sql':1,'.log':1,'.pdf':1,'.docx':1,'.xlsx':1}};
   if (!allowed[ext]) {{ alert('File type not supported: '+ext); input.value = ''; return; }}
@@ -3143,8 +3143,8 @@ class DashboardHandler(_SuppressBrokenPipe, BaseHTTPRequestHandler):
                     if content_b64:
                         import base64
                         raw_bytes = base64.b64decode(content_b64)
-                        if len(raw_bytes) > 1024 * 512:
-                            resp = json.dumps({"error": "Too large (max 512KB)"}).encode()
+                        if len(raw_bytes) > 10 * 1024 * 1024:
+                            resp = json.dumps({"error": "Too large (max 10MB)"}).encode()
                             self.send_response(400)
                         else:
                             fpath.write_bytes(raw_bytes)
@@ -3152,8 +3152,8 @@ class DashboardHandler(_SuppressBrokenPipe, BaseHTTPRequestHandler):
                             resp = json.dumps({"ok": True, "path": str(fpath)}).encode()
                             self.send_response(200)
                     else:
-                        if len(content) > 1024 * 512:
-                            resp = json.dumps({"error": "Too large (max 512KB)"}).encode()
+                        if len(content) > 10 * 1024 * 1024:
+                            resp = json.dumps({"error": "Too large (max 10MB)"}).encode()
                             self.send_response(400)
                         else:
                             fpath.write_text(content, encoding="utf-8")
