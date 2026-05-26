@@ -1480,7 +1480,7 @@ tr.cloud-off td{{background:#0a1a2e!important;color:#22c55e!important;border-top
           <div style="display:flex;gap:6px;align-items:center">
             <span id="embedBadge" class="badge" title="Current embedding backend">—</span>
             <button class="clear-btn" onclick="openEmbedSettings()" title="Configure embedding model">⚙ Embed</button>
-            <button class="clear-btn" onclick="clearContext()" title="New conversation — clears chat, session, and cache">New Chat</button>
+            <button class="clear-btn" onclick="clearContext()" title="Clears response cache and resets session context">Clear Context</button>
           </div>
         </div>
         <div class="ctx-track"><div class="ctx-fill" id="ctxBar"></div></div>
@@ -1653,7 +1653,7 @@ async function seedDemo() {{
 const tourSteps = [
   {{sel:'.logo',title:'Dashboard Header',text:'ContextCut PRO dashboard with live status indicator. Green dot means the proxy is running and accepting requests.',pos:'bottom'}},
   {{sel:'button[onclick*="seedDemo"]',title:'Demo Data',text:'Click this to seed the audit log with sample queries from various professions (law, accounting, real estate, etc.). Demonstrates how real-world queries appear with before/after token counts and matched knowledge base hits.',pos:'bottom'}},
-  {{sel:'button[onclick*="clearContext"]',title:'New Chat',text:'Clears the conversation, session, and response cache — starts fresh with no context.',pos:'bottom'}},
+  {{sel:'button[onclick*="clearContext"]',title:'Clear Context',text:'Clears the response cache and resets session context without removing chat history.',pos:'bottom'}},
   {{sel:'.hinfo',title:'Connection Info',text:'Shows your LLM provider, Qdrant host, minimum relevance score, and Top-K setting. All configurable via the Settings page.',pos:'bottom'}},
   {{sel:'.cards',title:'Statistics Cards',text:'Real-time metrics: license status, total requests, context compression %, tokens saved, peak token usage, context limit, and cache hits.',pos:'bottom'}},
   {{sel:'.ctx-wrap',title:'Context Usage Meter',text:'Visual bar showing how much of your token limit the most recent request consumed. Green = efficient. Red = nearing the limit.',pos:'bottom'}},
@@ -1774,7 +1774,14 @@ async function clearConversation() {{
 }}
 
 async function clearContext() {{
-  await clearConversation();
+  if (sessionId) {{
+    try {{ await fetch('/api/session/' + sessionId, {{method: 'DELETE'}}); }} catch(e) {{}}
+    conversationHistory = [];
+    try {{
+      const r = await fetch('/api/session/new');
+      if (r.ok) {{ const d = await r.json(); sessionId = d.session_id; updateSessionBadge(); }}
+    }} catch(e) {{}}
+  }}
   try {{
     const r = await fetch('/api/context/clear');
     if (r.ok) {{
