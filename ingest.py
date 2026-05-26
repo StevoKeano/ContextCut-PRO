@@ -102,8 +102,8 @@ def _get_embed_max_tokens():
 
 MAX_EMBED_TOKENS = _get_embed_max_tokens()
 
-CHUNK_TOKENS = 512
-CHUNK_OVERLAP = 50
+CHUNK_TOKENS = 2048 if (EMBED_MODE == "voyage" and VOYAGE_API_KEY) else 512
+CHUNK_OVERLAP = 200 if (EMBED_MODE == "voyage" and VOYAGE_API_KEY) else 50
 
 def chunk_text(text: str) -> list[str]:
     try:
