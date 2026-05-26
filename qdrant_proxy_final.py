@@ -157,6 +157,7 @@ ALLOWED_EXT = {
     ".csv", ".json", ".xml", ".yaml", ".yml",
     ".go", ".rs", ".rb", ".java", ".c", ".cpp", ".h",
     ".sh", ".sql", ".log",
+    ".pdf", ".docx", ".xlsx",
 }
 LISTEN_PORT    = int(os.getenv("CONTEXTCUT_PROXY_PORT",     "18788"))
 DASHBOARD_PORT = int(os.getenv("CONTEXTCUT_DASHBOARD_PORT", "18787"))
@@ -1532,8 +1533,8 @@ tr.cloud-off td{{background:#0a1a2e!important;color:#22c55e!important;border-top
         </div>
       </div>
       <div class="input-row">
-        <button class="att-btn" id="attachBtn" onclick="document.getElementById('fileInput').click()" title="Attach .md file to knowledge base">📎</button>
-        <input type="file" id="fileInput" accept=".md,.txt,.py,.js,.ts,.html,.css,.csv,.json,.xml,.yaml,.yml,.go,.rs,.rb,.java,.c,.cpp,.h,.sh,.sql,.log" style="display:none" onchange="attachFile(this)" />
+        <button class="att-btn" id="attachBtn" onclick="document.getElementById('fileInput').click()" title="Attach file to knowledge base">📎</button>
+        <input type="file" id="fileInput" accept=".md,.txt,.py,.js,.ts,.html,.css,.csv,.json,.xml,.yaml,.yml,.go,.rs,.rb,.java,.c,.cpp,.h,.sh,.sql,.log,.pdf,.docx,.xlsx" style="display:none" onchange="attachFile(this)" />
         <textarea class="chat-input" id="chatInput" rows="2" role="textbox" aria-label="Message input"
           placeholder="Type a message… (Enter to send, Shift+Enter for newline). Try: /clear, /help"
           onkeydown="handleKey(event)"></textarea>
@@ -1774,15 +1775,20 @@ async function attachFile(input) {{
   if (!file) return;
   if (file.size > 512 * 1024) {{ alert('File too large (max 512KB): '+file.name); input.value = ''; return; }}
   const ext = '.' + file.name.split('.').pop().toLowerCase();
-  const allowed = {{'.md':1,'.txt':1,'.py':1,'.js':1,'.ts':1,'.html':1,'.css':1,'.csv':1,'.json':1,'.xml':1,'.yaml':1,'.yml':1,'.go':1,'.rs':1,'.rb':1,'.java':1,'.c':1,'.cpp':1,'.h':1,'.sh':1,'.sql':1,'.log':1}};
+  const allowed = {{'.md':1,'.txt':1,'.py':1,'.js':1,'.ts':1,'.html':1,'.css':1,'.csv':1,'.json':1,'.xml':1,'.yaml':1,'.yml':1,'.go':1,'.rs':1,'.rb':1,'.java':1,'.c':1,'.cpp':1,'.h':1,'.sh':1,'.sql':1,'.log':1,'.pdf':1,'.docx':1,'.xlsx':1}};
   if (!allowed[ext]) {{ alert('File type not supported: '+ext); input.value = ''; return; }}
-  const text = await file.text();
+  const content_b64 = await new Promise((resolve, reject) => {{
+    const r = new FileReader();
+    r.onload = () => resolve(r.result.split(',')[1]);
+    r.onerror = () => reject(r.error);
+    r.readAsDataURL(file);
+  }});
   appendMsg('assistant', '\\uD83D\\uDCC4 Adding **'+esc(file.name)+'** to knowledge base and ingesting...', '');
   try {{
     const r = await fetch('/api/knowledge/upload', {{
       method: 'POST',
       headers: {{'Content-Type':'application/json'}},
-      body: JSON.stringify({{name: file.name, content: text}})
+      body: JSON.stringify({{name: file.name, content_b64: content_b64}})
     }});
     const d = await r.json();
     if (!d.ok) throw new Error(d.error||'upload failed');
@@ -2352,6 +2358,12 @@ function fbOpenFile(el) {{
     .then(r => r.json())
     .then(d => {{
       if (d.error) {{ document.getElementById('fbTextArea').value = 'Error: '+d.error; return; }}
+      if (d.binary) {{
+        document.getElementById('fbTextArea').value = '[Binary file - preview not available]';
+        document.getElementById('fbTextArea').disabled = true;
+        document.getElementById('fbSaveBtn').style.display = 'none';
+        return;
+      }}
       document.getElementById('fbTextArea').value = d.content;
       document.getElementById('fbTextArea').disabled = false;
       document.getElementById('fbTextArea').focus();
@@ -2413,9 +2425,11 @@ function fbDeleteFile() {{
 }}
 
 function fbUploadFile() {{
-  const name = prompt('New .md filename:', '');
+  const name = prompt('New filename (e.g. notes.md, data.csv):', '');
   if (!name) return;
-  if (!name.endsWith('.md')) {{ alert('Only .md files allowed.'); return; }}
+  const ext = '.' + name.split('.').pop().toLowerCase();
+  const allowed = {{'.md':1,'.txt':1,'.py':1,'.js':1,'.ts':1,'.html':1,'.css':1,'.csv':1,'.json':1,'.xml':1,'.yaml':1,'.yml':1,'.go':1,'.rs':1,'.rb':1,'.java':1,'.c':1,'.cpp':1,'.h':1,'.sh':1,'.sql':1,'.log':1,'.pdf':1,'.docx':1,'.xlsx':1}};
+  if (!allowed[ext]) {{ alert('File type not supported.'); return; }}
   if (name.includes('/') || name.includes('\\\\')) {{ alert('Invalid filename.'); return; }}
   fetch('/api/knowledge/upload', {{
     method: 'POST',
@@ -2647,8 +2661,12 @@ class DashboardHandler(_SuppressBrokenPipe, BaseHTTPRequestHandler):
                 self.end_headers()
                 self.wfile.write(body)
                 return
-            content = fpath.read_text(encoding="utf-8", errors="replace")
-            body = json.dumps({"name": fpath.name, "content": content}).encode()
+            BINARY_EXTS = {".pdf", ".docx", ".xlsx"}
+            if fpath.suffix.lower() in BINARY_EXTS:
+                body = json.dumps({"name": fpath.name, "content": None, "binary": True}).encode()
+            else:
+                content = fpath.read_text(encoding="utf-8", errors="replace")
+                body = json.dumps({"name": fpath.name, "content": content}).encode()
             self.send_response(200)
             self.send_header("Content-Type", "application/json")
             self.send_header("Content-Length", str(len(body)))
@@ -3084,6 +3102,9 @@ class DashboardHandler(_SuppressBrokenPipe, BaseHTTPRequestHandler):
                 if not fpath.suffix.lower() in ALLOWED_EXT or not fpath.resolve().absolute().as_posix().startswith(KB_DIR.resolve().absolute().as_posix()):
                     resp = json.dumps({"error": "Forbidden"}).encode()
                     self.send_response(403)
+                elif fpath.suffix.lower() in (".pdf", ".docx", ".xlsx"):
+                    resp = json.dumps({"error": "Cannot edit binary files"}).encode()
+                    self.send_response(400)
                 else:
                     fpath.write_text(content, encoding="utf-8")
                     print(f"[contextcut] File saved: {fpath.name}")
@@ -3108,23 +3129,37 @@ class DashboardHandler(_SuppressBrokenPipe, BaseHTTPRequestHandler):
             try:
                 body = json.loads(raw_body)
                 name = body.get("name", "").strip()
-                content = body.get("content", "")
                 ext = "." + name.rsplit(".", 1)[-1].lower() if "." in name else ""
                 if ext not in ALLOWED_EXT:
                     resp = json.dumps({"error": "File type not supported"}).encode()
-                    self.send_response(400)
-                elif len(content) > 1024 * 512:
-                    resp = json.dumps({"error": "File too large (max 512KB)"}).encode()
                     self.send_response(400)
                 elif "/" in name or "\\" in name:
                     resp = json.dumps({"error": "Invalid filename"}).encode()
                     self.send_response(400)
                 else:
                     fpath = KB_DIR / name
-                    fpath.write_text(content, encoding="utf-8")
-                    print(f"[contextcut] File created: {fpath.name}")
-                    resp = json.dumps({"ok": True, "path": str(fpath)}).encode()
-                    self.send_response(200)
+                    content_b64 = body.get("content_b64", "")
+                    content = body.get("content", "")
+                    if content_b64:
+                        import base64
+                        raw_bytes = base64.b64decode(content_b64)
+                        if len(raw_bytes) > 1024 * 512:
+                            resp = json.dumps({"error": "Too large (max 512KB)"}).encode()
+                            self.send_response(400)
+                        else:
+                            fpath.write_bytes(raw_bytes)
+                            print(f"[contextcut] File created: {fpath.name}")
+                            resp = json.dumps({"ok": True, "path": str(fpath)}).encode()
+                            self.send_response(200)
+                    else:
+                        if len(content) > 1024 * 512:
+                            resp = json.dumps({"error": "Too large (max 512KB)"}).encode()
+                            self.send_response(400)
+                        else:
+                            fpath.write_text(content, encoding="utf-8")
+                            print(f"[contextcut] File created: {fpath.name}")
+                            resp = json.dumps({"ok": True, "path": str(fpath)}).encode()
+                            self.send_response(200)
                 self.send_header("Content-Type", "application/json")
                 self.send_header("Content-Length", str(len(resp)))
                 self.end_headers()

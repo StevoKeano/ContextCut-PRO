@@ -131,6 +131,7 @@ ALLOWED_EXT = {
     ".csv", ".json", ".xml", ".yaml", ".yml",
     ".go", ".rs", ".rb", ".java", ".c", ".cpp", ".h",
     ".sh", ".sql", ".log",
+    ".pdf", ".docx", ".xlsx",
 }
 
 last_embed_time = 0
@@ -194,6 +195,39 @@ def sanitize_text(text: str) -> str:
 
 processing_queue = set()
 
+def extract_text(path: Path) -> str:
+    ext = path.suffix.lower()
+    if ext == ".pdf":
+        try:
+            import fitz
+            doc = fitz.open(path)
+            return "\n".join(page.get_text() for page in doc)
+        except (ImportError, Exception) as e:
+            print(f"  [!] PDF extraction failed for {path.name}: {e}")
+            return ""
+    elif ext == ".docx":
+        try:
+            from docx import Document
+            doc = Document(path)
+            return "\n".join(p.text for p in doc.paragraphs)
+        except (ImportError, Exception) as e:
+            print(f"  [!] DOCX extraction failed for {path.name}: {e}")
+            return ""
+    elif ext == ".xlsx":
+        try:
+            from openpyxl import load_workbook
+            wb = load_workbook(path, read_only=True, data_only=True)
+            rows = []
+            for sheet in wb.worksheets:
+                for row in sheet.iter_rows(values_only=True):
+                    rows.append("\t".join(str(c) if c is not None else "" for c in row))
+            return "\n".join(rows)
+        except (ImportError, Exception) as e:
+            print(f"  [!] XLSX extraction failed for {path.name}: {e}")
+            return ""
+    else:
+        return path.read_text(encoding="utf-8", errors="ignore").strip()
+
 def ingest_file(path: Path):
     if path.name in processing_queue:
         return
@@ -202,7 +236,7 @@ def ingest_file(path: Path):
     try:
         if not path.exists:
             return
-        raw_text = path.read_text(encoding="utf-8", errors="ignore").strip()
+        raw_text = extract_text(path)
         if not raw_text:
             return
         
@@ -358,6 +392,24 @@ def watch():
 
 # ── Main ──────────────────────────────────────────────────────────────────────
 if __name__ == "__main__":
+    parser = argparse.ArgumentParser(description="ContextCut ingest tool")
+    parser.add_argument("--watch", action="store_true", help="Watch KB_DIR for changes")
+    parser.add_argument("--query", type=str,            help="Test semantic search")
+    parser.add_argument("--clear", action="store_true", help="Wipe Qdrant collection")
+    args = parser.parse_args()
+
+    if args.clear:
+        clear()
+        sys.exit(0)
+    if args.query:
+        if not (EMBED_MODE == "ollama" and OLLAMA_EMBED) and not (VOYAGE_API_KEY and VOYAGE_AVAILABLE):
+            print("ERROR: No embedding backend configured.")
+            print("  Set VOYAGE_API_KEY or CONTEXTCUT_EMBED_MODEL")
+            sys.exit(1)
+        query(args.query)
+        sys.exit(0)
+
+    # watch or ingest_all need embed backend
     if EMBED_MODE == "voyage" and VOYAGE_API_KEY:
         print(f"[ingest] Embedding: Voyage AI (voyage-3)")
     elif EMBED_MODE == "ollama" and OLLAMA_EMBED:
@@ -378,17 +430,7 @@ if __name__ == "__main__":
         print(f"  Or set: export CONTEXTCUT_KB_DIR=/path/to/your/markdown/files")
         sys.exit(1)
 
-    parser = argparse.ArgumentParser(description="ContextCut ingest tool")
-    parser.add_argument("--watch", action="store_true", help="Watch KB_DIR for changes")
-    parser.add_argument("--query", type=str,            help="Test semantic search")
-    parser.add_argument("--clear", action="store_true", help="Wipe Qdrant collection")
-    args = parser.parse_args()
-
-    if args.clear:
-        clear()
-    elif args.query:
-        query(args.query)
-    elif args.watch:
+    if args.watch:
         watch()
     else:
         ingest_all()
