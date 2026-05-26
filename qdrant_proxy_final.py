@@ -903,7 +903,21 @@ class ProxyHandler(_SuppressBrokenPipe, BaseHTTPRequestHandler):
             tok_before = count_body_tokens(body)
             if query:
                 ctx, hits_meta = qdrant_context(query)
-                body     = inject_context(body, ctx)
+                body = inject_context(body, ctx)
+                tok_after = count_body_tokens(body)
+                if tok_after > CTX_LIMIT:
+                    pruned = 0
+                    for msg in body.get("messages", []):
+                        if msg.get("role") == "system" and msg["content"].startswith("## Relevant context"):
+                            parts = msg["content"].split("\n\n---\n\n")
+                            while len(parts) > 2 and count_body_tokens(body) > CTX_LIMIT:
+                                removed = parts.pop(-2)
+                                msg["content"] = "\n\n---\n\n".join(parts)
+                                pruned += 1
+                                tok_after = count_body_tokens(body)
+                            if pruned:
+                                print(f"[contextcut] context truncated: removed {pruned} chunk(s) to fit {CTX_LIMIT}")
+                            break
                 raw_body = json.dumps(body).encode()
             tok_after = count_body_tokens(body)
             pct = round(tok_after / CTX_LIMIT * 100, 1)
