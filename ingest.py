@@ -163,6 +163,8 @@ def _ollama_embed(texts, model):
         embeddings = data.get("embeddings", [])
         if embeddings:
             payloads.append(embeddings[0])
+        else:
+            payloads.append([0.0] * EMBED_DIM)
     return payloads
 
 # ── Collection ────────────────────────────────────────────────────────────────
@@ -241,9 +243,19 @@ def ingest_file(path: Path):
             return
         
         chunks = chunk_text(raw_text)
-        clean_chunks = [sanitize_text(c) for c in chunks]
+        clean_chunks = [c for c in (sanitize_text(c) for c in chunks) if c]
+        
+        if not clean_chunks:
+            print(f"  [!] {path.name}: all chunks empty after sanitization, skipping")
+            return
         
         result = safe_embed(clean_chunks, model=VOYAGE_MODEL, input_type="document")
+        
+        if len(result.embeddings) != len(clean_chunks):
+            print(f"  [!] {path.name}: expected {len(clean_chunks)} embeddings, got {len(result.embeddings)}")
+            n = min(len(result.embeddings), len(clean_chunks))
+            clean_chunks = clean_chunks[:n]
+            result.embeddings = result.embeddings[:n]
         
         fid = file_id(path)
         points = []
