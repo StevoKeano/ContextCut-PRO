@@ -288,11 +288,13 @@ MAX_HISTORY_TOKENS   = 4096
 _sessions: dict[str, dict] = {}
 _session_archive: list[dict] = []
 ARCHIVE_MAX = 50
+_archived_ids: set[str] = set()
 
 def _archive_current(sid: str):
-    if sid and sid in _sessions:
+    if sid and sid in _sessions and sid not in _archived_ids:
         session = _sessions[sid]
         if session.get("history"):
+            _archived_ids.add(sid)
             total_tok = sum(count_tokens(m["content"]) for m in session["history"])
             ctx_hit = session.get("ctx_limit_reached", False) or total_tok > CTX_LIMIT * 0.8
             title = ""
@@ -2632,6 +2634,7 @@ class DashboardHandler(_SuppressBrokenPipe, BaseHTTPRequestHandler):
                     if s["id"] == sid:
                         global _current_sid
                         _current_sid = sid
+                        _archived_ids.discard(sid)
                         _sessions[sid] = {"history": list(s["history"]), "msg_count": s["msg_count"], "created": s["created"]}
                         data = {"ok": True, "session": s}
                         break
