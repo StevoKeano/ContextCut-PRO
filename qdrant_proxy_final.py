@@ -1934,6 +1934,8 @@ async function clearContext() {{
   if (sessionId) {{
     try {{ await fetch('/api/session/' + sessionId, {{method: 'DELETE'}}); }} catch(e) {{}}
     conversationHistory = [];
+    const msgs = document.getElementById('messages');
+    msgs.innerHTML = '<div class="msg assistant"><div class="bubble">Context cleared. Starting fresh.</div></div>';
     try {{
       const r = await fetch('/api/session/new');
       if (r.ok) {{ const d = await r.json(); sessionId = d.session_id; updateSessionBadge(); }}
@@ -2923,14 +2925,6 @@ class DashboardHandler(_SuppressBrokenPipe, BaseHTTPRequestHandler):
                 }
                 _log.clear()
                 _sessions.clear()
-            try:
-                db = _get_db()
-                db.execute("DELETE FROM messages")
-                db.execute("DELETE FROM sessions")
-                db.commit()
-                db.close()
-            except Exception as e:
-                print(f"[contextcut] DB clear error: {e}")
             print("[contextcut] Context cache, sessions, and monitor history cleared")
             resp = json.dumps({"ok": True}).encode()
             self.send_response(200)
