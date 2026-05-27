@@ -26,6 +26,7 @@ import json
 import html
 import time
 import socket
+import sqlite3
 import random
 import threading
 import platform
@@ -33,6 +34,7 @@ import hashlib
 import base64
 import urllib.request
 import urllib.error
+import urllib.parse
 from collections import deque
 from pathlib import Path
 from datetime import datetime
@@ -286,45 +288,124 @@ MAX_HISTORY_MESSAGES = 50
 MAX_HISTORY_TOKENS   = 4096
 
 _sessions: dict[str, dict] = {}
-_session_archive: list[dict] = []
-ARCHIVE_MAX = 50
-_archived_ids: set[str] = set()
+_current_sid: str | None = None
 
-def _archive_current(sid: str):
-    if sid and sid in _sessions and sid not in _archived_ids:
-        session = _sessions[sid]
-        if session.get("history"):
-            _archived_ids.add(sid)
-            total_tok = sum(count_tokens(m["content"]) for m in session["history"])
-            ctx_hit = session.get("ctx_limit_reached", False) or total_tok > CTX_LIMIT * 0.8
-            title = ""
-            for m in session["history"]:
-                if m["role"] == "user":
-                    title = m["content"][:60]
-                    break
-            _session_archive.insert(0, {
-                "id": sid,
-                "title": title,
-                "created": session["created"],
-                "msg_count": session["msg_count"],
-                "total_tokens": total_tok,
-                "ctx_limit_reached": ctx_hit,
-                "preview": session["history"][0]["content"][:80] if session["history"] else "",
-                "history": session["history"],
-            })
-            if len(_session_archive) > ARCHIVE_MAX:
-                _session_archive.pop()
+# ── SQLite persistence ──────────────────────────────────────────────────────────
+
+SESSION_FILE = os.path.join(
+    os.path.dirname(os.path.abspath(__file__)), ".contextcut_sessions.db"
+)
+_JSON_LEGACY = os.path.join(
+    os.path.dirname(os.path.abspath(__file__)), ".contextcut_sessions.json"
+)
+
+def _get_db() -> sqlite3.Connection:
+    return sqlite3.connect(SESSION_FILE, check_same_thread=False)
+
+def _init_db():
+    db = _get_db()
+    db.executescript("""
+        CREATE TABLE IF NOT EXISTS sessions (
+            id               TEXT PRIMARY KEY,
+            title            TEXT DEFAULT '',
+            created          TEXT NOT NULL,
+            msg_count        INTEGER DEFAULT 0,
+            total_tokens     INTEGER DEFAULT 0,
+            ctx_limit_reached INTEGER DEFAULT 0,
+            preview          TEXT DEFAULT ''
+        );
+        CREATE TABLE IF NOT EXISTS messages (
+            id          INTEGER PRIMARY KEY AUTOINCREMENT,
+            session_id  TEXT NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,
+            role        TEXT NOT NULL,
+            content     TEXT NOT NULL,
+            tokens      INTEGER DEFAULT 0,
+            position    INTEGER NOT NULL
+        );
+        CREATE INDEX IF NOT EXISTS idx_messages_session ON messages(session_id);
+        CREATE INDEX IF NOT EXISTS idx_sessions_created  ON sessions(created DESC);
+    """)
+    db.commit()
+    db.close()
+
+def _migrate_json_to_sqlite():
+    if not os.path.exists(_JSON_LEGACY):
+        return
+    try:
+        with open(_JSON_LEGACY) as f:
+            data = json.load(f)
+    except Exception:
+        return
+    db = _get_db()
+    try:
+        for sid, sess in data.get("active", {}).items():
+            db.execute(
+                "INSERT OR IGNORE INTO sessions (id, title, created, msg_count, total_tokens, ctx_limit_reached, preview) VALUES (?,?,?,?,?,?,?)",
+                (sid, "", sess.get("created", ""), sess.get("msg_count", 0), 0, 0, ""),
+            )
+            history = sess.get("history", [])
+            for i, m in enumerate(history):
+                db.execute(
+                    "INSERT INTO messages (session_id, role, content, tokens, position) VALUES (?,?,?,?,?)",
+                    (sid, m["role"], m["content"], 0, i),
+                )
+            if history:
+                preview = history[0]["content"][:80]
+                title = ""
+                for m in history:
+                    if m["role"] == "user":
+                        title = m["content"][:60]
+                        break
+                total_tok = sum(count_tokens(m["content"]) for m in history)
+                db.execute(
+                    "UPDATE sessions SET title=?, preview=?, msg_count=?, total_tokens=? WHERE id=?",
+                    (title, preview, len(history), total_tok, sid),
+                )
+        for _, s in data.get("archive", {}).items():
+            sid = s["id"]
+            db.execute(
+                "INSERT OR IGNORE INTO sessions (id, title, created, msg_count, total_tokens, ctx_limit_reached, preview) VALUES (?,?,?,?,?,?,?)",
+                (sid, s.get("title", ""), s.get("created", ""), s.get("msg_count", 0),
+                 s.get("total_tokens", 0), 1 if s.get("ctx_limit_reached") else 0, s.get("preview", "")),
+            )
+            history = s.get("history", [])
+            for i, m in enumerate(history):
+                db.execute(
+                    "INSERT INTO messages (session_id, role, content, tokens, position) VALUES (?,?,?,?,?)",
+                    (sid, m["role"], m["content"], 0, i),
+                )
+        db.commit()
+        os.rename(_JSON_LEGACY, _JSON_LEGACY + ".migrated")
+        print(f"[contextcut] Migrated {_JSON_LEGACY} → {SESSION_FILE}")
+    except Exception as e:
+        db.rollback()
+        print(f"[contextcut] Migration error: {e}")
+    finally:
+        db.close()
 
 def new_session() -> str:
     global _current_sid
     if _current_sid:
-        _archive_current(_current_sid)
+        _update_session_on_disk(_current_sid)
     sid = str(uuid.uuid4())[:8]
-    _sessions[sid] = {"history": [], "created": datetime.now().isoformat(), "msg_count": 0, "ctx_limit_reached": False}
+    _sessions[sid] = {
+        "history": [],
+        "created": datetime.now().isoformat(),
+        "msg_count": 0,
+        "ctx_limit_reached": False,
+    }
     _current_sid = sid
+    try:
+        db = _get_db()
+        db.execute(
+            "INSERT INTO sessions (id, created) VALUES (?,?)",
+            (sid, _sessions[sid]["created"]),
+        )
+        db.commit()
+        db.close()
+    except Exception as e:
+        print(f"[contextcut] DB insert session error: {e}")
     return sid
-
-_current_sid: str | None = None
 
 def get_session(sid: str) -> dict | None:
     if sid and sid in _sessions:
@@ -338,9 +419,45 @@ def add_to_history(sid: str, role: str, content: str):
     session["history"].append({"role": role, "content": content})
     session["msg_count"] += 1
     _trim_history(session)
+    try:
+        db = _get_db()
+        pos = session["msg_count"] - 1
+        tok = count_tokens(content)
+        db.execute(
+            "INSERT INTO messages (session_id, role, content, tokens, position) VALUES (?,?,?,?,?)",
+            (sid, role, content, tok, pos),
+        )
+        db.commit()
+        db.close()
+    except Exception as e:
+        print(f"[contextcut] DB insert message error: {e}")
+
+def _update_session_on_disk(sid: str):
+    session = _sessions.get(sid)
+    if not session or not session.get("history"):
+        return
+    history = session["history"]
+    total_tok = sum(count_tokens(m["content"]) for m in history)
+    ctx_hit = session.get("ctx_limit_reached", False) or total_tok > CTX_LIMIT * 0.8
+    title = ""
+    for m in history:
+        if m["role"] == "user":
+            title = m["content"][:60]
+            break
+    preview = history[0]["content"][:80] if history else ""
+    try:
+        db = _get_db()
+        db.execute(
+            "UPDATE sessions SET title=?, preview=?, msg_count=?, total_tokens=?, ctx_limit_reached=? WHERE id=?",
+            (title, preview, len(history), total_tok, 1 if ctx_hit else 0, sid),
+        )
+        db.commit()
+        db.close()
+    except Exception as e:
+        print(f"[contextcut] DB update session error: {e}")
 
 def clear_session(sid: str):
-    _archive_current(sid)
+    _update_session_on_disk(sid)
     session = _sessions.get(sid)
     if session:
         session["history"] = []
@@ -377,34 +494,31 @@ def build_revision_prompt(last_user: str, last_assistant: str, revision_request:
         {"role": "user", "content": f"{revision_request}. Please revise your previous response accordingly."},
     ]
 
-SESSION_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), ".contextcut_sessions.json")
-
-def save_sessions():
-    try:
-        data = {}
-        with _lock:
-            for sid, sess in _sessions.items():
-                data[sid] = {"history": sess["history"], "created": sess["created"], "msg_count": sess["msg_count"]}
-        d = os.path.dirname(SESSION_FILE)
-        if d and not os.path.exists(d):
-            os.makedirs(d, exist_ok=True)
-        with open(SESSION_FILE, "w") as f:
-            json.dump(data, f)
-    except Exception as e:
-        print(f"[contextcut] Session save error: {e}")
-
 def load_sessions():
     if not os.path.exists(SESSION_FILE):
         return
     try:
-        with open(SESSION_FILE) as f:
-            data = json.load(f)
+        db = _get_db()
+        cur = db.execute("SELECT id, created, msg_count, ctx_limit_reached FROM sessions ORDER BY created")
+        rows = cur.fetchall()
         with _lock:
-            for sid, sess in data.items():
-                _sessions[sid] = {"history": sess["history"], "created": sess["created"], "msg_count": sess["msg_count"]}
-        print(f"[contextcut] Loaded {len(data)} sessions from {SESSION_FILE}")
+            for sid, created, msg_count, ctx_hit in rows:
+                mcur = db.execute(
+                    "SELECT role, content, tokens FROM messages WHERE session_id=? ORDER BY position",
+                    (sid,),
+                )
+                history = [{"role": r, "content": c} for r, c, _ in mcur.fetchall()]
+                _sessions[sid] = {
+                    "history": history,
+                    "created": created,
+                    "msg_count": msg_count or len(history),
+                    "ctx_limit_reached": bool(ctx_hit),
+                }
+        db.close()
+        print(f"[contextcut] Loaded {len(_sessions)} sessions from {SESSION_FILE}")
     except Exception as e:
         print(f"[contextcut] Session load error: {e}")
+
 def check_license_status() -> dict:
     with _lock:
         return dict(_license_state)
@@ -444,7 +558,8 @@ def shutdown_hook():
         return
     _shutdown_done = True
     release_license()
-    save_sessions()
+    if _current_sid:
+        _update_session_on_disk(_current_sid)
 import atexit
 atexit.register(shutdown_hook)
 
@@ -1533,6 +1648,7 @@ tr.cloud-off td{{background:#0a1a2e!important;color:#22c55e!important;border-top
           <tbody id="tblBody">{rows_html if rows_html else no_rows}</tbody>
         </table>
         <div class="tbl-footer">Token counting: {TOKEN_METHOD} · auto-refreshes on each request</div>
+        <div class="tbl-footer" style="border-top:none;padding-top:0">Chats saved to <code>.contextcut_sessions.db</code> &middot; Explore with <a href="https://github.com/simonw/datasette" target="_blank" style="color:var(--accent)">Datasette</a></div>
       </div>
     </div>
   </div>
@@ -2323,9 +2439,6 @@ function reIngestKnowledgeBase() {{
 
 async function openHistory() {{
   try {{
-    const r = await fetch('/api/sessions/archive');
-    if (!r.ok) return;
-    const sessions = await r.json();
     const overlay = document.createElement('div');
     overlay.style.cssText = 'position:fixed;top:0;left:0;right:0;bottom:0;background:rgba(0,0,0,0.6);z-index:1000;display:flex;align-items:center;justify-content:center;font-family:JetBrains Mono,monospace;font-size:12px';
     overlay.onclick = (e) => {{ if (e.target === overlay) overlay.remove(); }};
@@ -2333,7 +2446,7 @@ async function openHistory() {{
     panel.style.cssText = 'background:#1E293B;border:1px solid #334155;border-radius:8px;width:560px;max-width:90vw;max-height:80vh;display:flex;flex-direction:column';
     const hdr = document.createElement('div');
     hdr.style.cssText = 'display:flex;justify-content:space-between;align-items:center;padding:16px 20px;border-bottom:1px solid #334155';
-    hdr.innerHTML = '<span style="font-weight:600;color:var(--text)">Session History</span><span style="color:var(--muted);font-size:10px" id="histCount">' + sessions.length + ' past session(s)</span>';
+    hdr.innerHTML = '<span style="font-weight:600;color:var(--text)">Session History</span><span style="color:var(--muted);font-size:10px" id="histCount"></span>';
     const closeBtn = document.createElement('button');
     closeBtn.textContent = '\\u2715';
     closeBtn.style.cssText = 'background:none;border:none;color:var(--muted);cursor:pointer;font-size:14px';
@@ -2344,47 +2457,52 @@ async function openHistory() {{
     searchBox.type = 'text';
     searchBox.placeholder = 'Search sessions...';
     searchBox.style.cssText = 'margin:8px 20px;padding:6px 10px;background:#0F172A;border:1px solid #334155;border-radius:4px;color:var(--text);font-family:inherit;font-size:11px;outline:none';
-    searchBox.oninput = function() {{ filterHistory(this.value, sessions); }};
+    let debounceTimer;
+    searchBox.oninput = function() {{
+      clearTimeout(debounceTimer);
+      debounceTimer = setTimeout(() => loadHistory(this.value), 250);
+    }};
     panel.appendChild(searchBox);
     const list = document.createElement('div');
     list.id = 'histList';
     list.style.cssText = 'overflow-y:auto;padding:8px 0;flex:1';
-    renderHistoryList(list, sessions, '');
     panel.appendChild(list);
     overlay.appendChild(panel);
     document.body.appendChild(overlay);
+    loadHistory('');
     setTimeout(() => searchBox.focus(), 100);
   }} catch(e) {{ console.error('history error:', e); }}
 }}
 
-function renderHistoryList(list, sessions, filter) {{
-  const f = filter.toLowerCase().trim();
-  const filtered = f ? sessions.filter(s => (s.title||s.preview||'').toLowerCase().includes(f) || (s.history||[]).some(m => m.content.toLowerCase().includes(f))) : sessions;
-  const countEl = document.getElementById('histCount');
-  if (countEl) countEl.textContent = filtered.length + '/' + sessions.length + ' session(s)';
-  if (!filtered.length) {{
-    list.innerHTML = '<div style="padding:24px;text-align:center;color:var(--muted)">' + (f ? 'No sessions match "' + esc(f) + '".' : 'No past sessions yet.') + '</div>';
-    return;
-  }}
-  list.innerHTML = '';
-  for (const s of filtered) {{
-    const item = document.createElement('div');
-    const warn = s.ctx_limit_reached ? ' <span style="color:#f87171">\\u26a0</span>' : '';
-    const title = esc(s.title || s.preview || '(empty session)');
-    const detail = s.created + ' \\u2022 ' + s.msg_count + ' msg(s) \\u2022 ' + s.total_tokens + ' tokens';
-    item.style.cssText = 'display:flex;justify-content:space-between;align-items:center;padding:10px 20px;cursor:pointer;border-bottom:1px solid rgba(51,65,85,0.5)';
-    item.onmouseenter = () => item.style.background = '#1a2536';
-    item.onmouseleave = () => item.style.background = 'transparent';
-    item.onclick = () => recallSession(s.id);
-    item.innerHTML = '<div style="flex:1;min-width:0;padding-right:12px"><div style="color:var(--text);font-size:12px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">' + title + ' ' + warn + '</div><div style="color:var(--muted);font-size:10px;margin-top:3px">' + detail + '</div></div>';
-    item.innerHTML += '<span style="color:var(--accent);font-size:11px;flex-shrink:0">Load \\u2192</span>';
-    list.appendChild(item);
-  }}
-}}
-
-function filterHistory(text, sessions) {{
+async function loadHistory(q) {{
   const list = document.getElementById('histList');
-  if (list) renderHistoryList(list, sessions, text);
+  if (!list) return;
+  try {{
+    const url = q ? '/api/sessions/archive?q=' + encodeURIComponent(q) : '/api/sessions/archive';
+    const r = await fetch(url);
+    if (!r.ok) return;
+    const sessions = await r.json();
+    const countEl = document.getElementById('histCount');
+    if (countEl) countEl.textContent = sessions.length + ' session(s)';
+    if (!sessions.length) {{
+      list.innerHTML = '<div style="padding:24px;text-align:center;color:var(--muted)">' + (q ? 'No sessions match "' + esc(q) + '".' : 'No past sessions yet.') + '</div>';
+      return;
+    }}
+    list.innerHTML = '';
+    for (const s of sessions) {{
+      const item = document.createElement('div');
+      const warn = s.ctx_limit_reached ? ' <span style="color:#f87171">\\u26a0</span>' : '';
+      const title = esc(s.title || s.preview || '(empty session)');
+      const detail = s.created + ' \\u2022 ' + s.msg_count + ' msg(s) \\u2022 ' + s.total_tokens + ' tokens';
+      item.style.cssText = 'display:flex;justify-content:space-between;align-items:center;padding:10px 20px;cursor:pointer;border-bottom:1px solid rgba(51,65,85,0.5)';
+      item.onmouseenter = () => item.style.background = '#1a2536';
+      item.onmouseleave = () => item.style.background = 'transparent';
+      item.onclick = () => recallSession(s.id);
+      item.innerHTML = '<div style="flex:1;min-width:0;padding-right:12px"><div style="color:var(--text);font-size:12px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">' + title + ' ' + warn + '</div><div style="color:var(--muted);font-size:10px;margin-top:3px">' + detail + '</div></div>';
+      item.innerHTML += '<span style="color:var(--accent);font-size:11px;flex-shrink:0">Load \\u2192</span>';
+      list.appendChild(item);
+    }}
+  }} catch(e) {{ console.error('loadHistory error:', e); }}
 }}
 
 async function recallSession(sid) {{
@@ -2630,21 +2748,35 @@ class DashboardHandler(_SuppressBrokenPipe, BaseHTTPRequestHandler):
             sid = self.path.split("/api/session/recall/")[-1]
             data = {"ok": False, "error": "Session not found"}
             with _lock:
-                for s in _session_archive:
-                    if s["id"] == sid:
-                        global _current_sid
-                        _current_sid = sid
-                        _archived_ids.discard(sid)
-                        _sessions[sid] = {"history": list(s["history"]), "msg_count": s["msg_count"], "created": s["created"]}
-                        data = {"ok": True, "session": s}
-                        break
-                if not data.get("ok") and sid in _sessions:
+                if sid in _sessions:
                     s = _sessions[sid]
+                    total_tok = sum(count_tokens(m["content"]) for m in s["history"])
                     data = {"ok": True, "session": {
                         "id": sid, "history": s["history"],
                         "msg_count": s["msg_count"], "created": s["created"],
-                        "ctx_limit_reached": False,
+                        "total_tokens": total_tok,
+                        "ctx_limit_reached": s.get("ctx_limit_reached", False),
                     }}
+                else:
+                    try:
+                        db = _get_db()
+                        cur = db.execute("SELECT id, title, created, msg_count, total_tokens, ctx_limit_reached, preview FROM sessions WHERE id=?", (sid,))
+                        row = cur.fetchone()
+                        if row:
+                            mcur = db.execute("SELECT role, content FROM messages WHERE session_id=? ORDER BY position", (sid,))
+                            history = [{"role": r, "content": c} for r, c in mcur.fetchall()]
+                            global _current_sid
+                            _current_sid = sid
+                            _sessions[sid] = {"history": list(history), "msg_count": row[3] or len(history), "created": row[2], "ctx_limit_reached": bool(row[5])}
+                            data = {"ok": True, "session": {
+                                "id": row[0], "title": row[1], "created": row[2],
+                                "msg_count": row[3] or len(history), "total_tokens": row[4],
+                                "ctx_limit_reached": bool(row[5]), "preview": row[6],
+                                "history": history,
+                            }}
+                        db.close()
+                    except Exception as e:
+                        print(f"[contextcut] Recall DB error: {e}")
             body = json.dumps(data).encode()
             self.send_response(200)
             self.send_header("Content-Type", "application/json")
@@ -2746,9 +2878,30 @@ class DashboardHandler(_SuppressBrokenPipe, BaseHTTPRequestHandler):
             self.end_headers()
             self.wfile.write(body)
             return
-        if self.path == "/api/sessions/archive":
-            with _lock:
-                archive = list(_session_archive)
+        if self.path == "/api/sessions/archive" or self.path.startswith("/api/sessions/archive?"):
+            from urllib.parse import urlparse, parse_qs
+            q = (parse_qs(urlparse(self.path).query).get("q") or [""])[0].strip().lower()
+            archive = []
+            try:
+                db = _get_db()
+                if q:
+                    cur = db.execute(
+                        "SELECT id, title, created, msg_count, total_tokens, ctx_limit_reached, preview FROM sessions WHERE LOWER(title) LIKE ? OR LOWER(preview) LIKE ? OR id IN (SELECT DISTINCT session_id FROM messages WHERE LOWER(content) LIKE ?) ORDER BY created DESC LIMIT 50",
+                        (f"%{q}%", f"%{q}%", f"%{q}%"),
+                    )
+                else:
+                    cur = db.execute(
+                        "SELECT id, title, created, msg_count, total_tokens, ctx_limit_reached, preview FROM sessions ORDER BY created DESC LIMIT 50"
+                    )
+                for row in cur.fetchall():
+                    archive.append({
+                        "id": row[0], "title": row[1] or "", "created": row[2],
+                        "msg_count": row[3], "total_tokens": row[4],
+                        "ctx_limit_reached": bool(row[5]), "preview": row[6] or "",
+                    })
+                db.close()
+            except Exception as e:
+                print(f"[contextcut] Archive query error: {e}")
             body = json.dumps(archive).encode()
             self.send_response(200)
             self.send_header("Content-Type", "application/json")
@@ -2770,9 +2923,14 @@ class DashboardHandler(_SuppressBrokenPipe, BaseHTTPRequestHandler):
                 }
                 _log.clear()
                 _sessions.clear()
-            # Wipe session file on disk
-            if os.path.exists(SESSION_FILE):
-                os.remove(SESSION_FILE)
+            try:
+                db = _get_db()
+                db.execute("DELETE FROM messages")
+                db.execute("DELETE FROM sessions")
+                db.commit()
+                db.close()
+            except Exception as e:
+                print(f"[contextcut] DB clear error: {e}")
             print("[contextcut] Context cache, sessions, and monitor history cleared")
             resp = json.dumps({"ok": True}).encode()
             self.send_response(200)
@@ -3457,6 +3615,8 @@ if __name__ == "__main__":
 
     ensure_collection_dim()
 
+    _init_db()
+    _migrate_json_to_sqlite()
     load_sessions()
 
     if LICENSE_KEY:

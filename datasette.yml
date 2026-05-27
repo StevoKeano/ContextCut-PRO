@@ -1,0 +1,42 @@
+title: ContextCut-Pro Session History
+databases:
+  .contextcut_sessions:
+    queries:
+      search_messages:
+        title: Search all messages
+        description: Find every message containing a word or phrase
+        sql: |-
+          SELECT s.title AS session, s.created, m.role, m.position, m.content, m.tokens
+          FROM messages m
+          JOIN sessions s ON s.id = m.session_id
+          WHERE m.content LIKE '%' || :search || '%'
+          ORDER BY m.position
+      session_detail:
+        title: Full session transcript
+        description: View all messages in a session ordered by position
+        sql: |-
+          SELECT m.role, m.position, m.content, m.tokens
+          FROM messages m
+          WHERE m.session_id = :session_id
+          ORDER BY m.position
+      top_sessions:
+        title: Sessions by total token usage
+        description: Sessions ranked by how many tokens they consumed
+        sql: |-
+          SELECT s.id, s.title, s.created, s.msg_count,
+                 SUM(m.tokens) AS total_tokens,
+                 s.ctx_limit_reached
+          FROM sessions s
+          JOIN messages m ON m.session_id = s.id
+          GROUP BY s.id
+          ORDER BY total_tokens DESC
+      context_limit_hits:
+        title: Sessions that hit the context limit
+        sql: |-
+          SELECT * FROM sessions
+          WHERE ctx_limit_reached = 1
+          ORDER BY created DESC
+      all_sessions:
+        title: All sessions
+        sql: |-
+          SELECT * FROM sessions ORDER BY created DESC
