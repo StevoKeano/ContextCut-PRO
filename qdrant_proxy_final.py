@@ -3044,8 +3044,8 @@ class DashboardHandler(_SuppressBrokenPipe, BaseHTTPRequestHandler):
                             print(f"[contextcut] Re-ingest timed out after 5 minutes")
                         except Exception as e:
                             print(f"[contextcut] Re-ingest error: {e}")
-                except Exception as e:
-                    print(f"[contextcut] Dimension check warning: {e}")
+                    except Exception as e:
+                        print(f"[contextcut] Dimension check warning: {e}")
 
                 print(f"[contextcut] Embed mode: {_EMBED_MODE} | model: {_LOCAL_EMBED or 'voyage-3'}")
                 resp = json.dumps({"ok": True, "mode": _EMBED_MODE}).encode()
