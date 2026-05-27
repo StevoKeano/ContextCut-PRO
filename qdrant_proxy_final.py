@@ -2166,11 +2166,7 @@ function openEmbedSettings() {{
           '<input type="checkbox" id="emDangerCheck" style="margin-top:2px;accent-color:#ef4444;width:16px;height:16px" />' +
           '<span style="color:#f87171;font-size:10px;line-height:1.4">I understand this will delete all existing embeddings and I will need to re-ingest my knowledge base.</span>' +
         '</label>' +
-        '<div id="emReingestSection" style="display:none;margin-top:16px;padding-top:16px;border-top:1px solid var(--border)">' +
-          '<div style="color:var(--green);font-size:11px;margin-bottom:8px">\\u2713 Settings saved. Click below to re-ingest your knowledge base with the new embedding model.</div>' +
-          '<button id="emReingestBtn" onclick="reIngestKnowledgeBase()" style="width:100%;background:#16a34a;color:#fff;border:none;border-radius:4px;padding:8px 16px;font-size:12px;cursor:pointer;font-family:inherit;font-weight:600">Re-ingest '+kbDir+'</button>' +
-          '<div id="emReingestMsg" style="margin-top:8px;font-size:10px;color:var(--muted)"></div>' +
-        '</div>' +
+
       '</div>';
 
       overlay.innerHTML = html;
@@ -2232,9 +2228,8 @@ function saveEmbedConfig() {{
   .then(resp => {{
     if (resp.ok) {{
       msg.style.color = 'var(--green)';
-      msg.textContent = '\\u2713 Saved! Embedding backend updated.';
+      msg.textContent = '\\u2713 Embedding model changed. Knowledge base re-ingested with ' + resp.mode + '.';
       loadEmbedBadge();
-      document.getElementById('emReingestSection').style.display = 'block';
       document.getElementById('emDangerCheck').checked = false;
     }} else {{
       msg.style.color = 'var(--red)';
