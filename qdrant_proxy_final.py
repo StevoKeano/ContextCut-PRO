@@ -295,8 +295,14 @@ def _archive_current(sid: str):
         if session.get("history"):
             total_tok = sum(count_tokens(m["content"]) for m in session["history"])
             ctx_hit = session.get("ctx_limit_reached", False) or total_tok > CTX_LIMIT * 0.8
+            title = ""
+            for m in session["history"]:
+                if m["role"] == "user":
+                    title = m["content"][:60]
+                    break
             _session_archive.insert(0, {
                 "id": sid,
+                "title": title,
                 "created": session["created"],
                 "msg_count": session["msg_count"],
                 "total_tokens": total_tok,
@@ -2322,37 +2328,61 @@ async function openHistory() {{
     overlay.style.cssText = 'position:fixed;top:0;left:0;right:0;bottom:0;background:rgba(0,0,0,0.6);z-index:1000;display:flex;align-items:center;justify-content:center;font-family:JetBrains Mono,monospace;font-size:12px';
     overlay.onclick = (e) => {{ if (e.target === overlay) overlay.remove(); }};
     const panel = document.createElement('div');
-    panel.style.cssText = 'background:#1E293B;border:1px solid #334155;border-radius:8px;width:520px;max-width:90vw;max-height:80vh;display:flex;flex-direction:column';
+    panel.style.cssText = 'background:#1E293B;border:1px solid #334155;border-radius:8px;width:560px;max-width:90vw;max-height:80vh;display:flex;flex-direction:column';
     const hdr = document.createElement('div');
     hdr.style.cssText = 'display:flex;justify-content:space-between;align-items:center;padding:16px 20px;border-bottom:1px solid #334155';
-    hdr.innerHTML = '<span style="font-weight:600;color:var(--text)">Session History</span><span style="color:var(--muted);font-size:10px">' + sessions.length + ' past session(s)</span>';
+    hdr.innerHTML = '<span style="font-weight:600;color:var(--text)">Session History</span><span style="color:var(--muted);font-size:10px" id="histCount">' + sessions.length + ' past session(s)</span>';
     const closeBtn = document.createElement('button');
     closeBtn.textContent = '\\u2715';
     closeBtn.style.cssText = 'background:none;border:none;color:var(--muted);cursor:pointer;font-size:14px';
     closeBtn.onclick = () => overlay.remove();
     hdr.appendChild(closeBtn);
     panel.appendChild(hdr);
+    const searchBox = document.createElement('input');
+    searchBox.type = 'text';
+    searchBox.placeholder = 'Search sessions...';
+    searchBox.style.cssText = 'margin:8px 20px;padding:6px 10px;background:#0F172A;border:1px solid #334155;border-radius:4px;color:var(--text);font-family:inherit;font-size:11px;outline:none';
+    searchBox.oninput = function() {{ filterHistory(this.value, sessions); }};
+    panel.appendChild(searchBox);
     const list = document.createElement('div');
+    list.id = 'histList';
     list.style.cssText = 'overflow-y:auto;padding:8px 0;flex:1';
-    if (!sessions.length) {{
-      list.innerHTML = '<div style="padding:24px;text-align:center;color:var(--muted)">No past sessions yet.</div>';
-    }} else {{
-      for (const s of sessions) {{
-        const item = document.createElement('div');
-        const warn = s.ctx_limit_reached ? ' <span style="color:#f87171">\\u26a0 Context limit</span>' : '';
-        item.style.cssText = 'display:flex;justify-content:space-between;align-items:center;padding:10px 20px;cursor:pointer;border-bottom:1px solid rgba(51,65,85,0.5)';
-        item.onmouseenter = () => item.style.background = '#1a2536';
-        item.onmouseleave = () => item.style.background = 'transparent';
-        item.onclick = () => recallSession(s.id);
-        item.innerHTML = '<div><div style="color:var(--text);font-size:12px">' + esc(s.preview || '(empty)') + '</div><div style="color:var(--muted);font-size:10px;margin-top:3px">' + s.created + ' \\u2022 ' + s.msg_count + ' msg(s) \\u2022 ' + s.total_tokens + ' tokens' + warn + '</div></div>';
-        item.innerHTML += '<span style="color:var(--accent);font-size:11px">Load \\u2192</span>';
-        list.appendChild(item);
-      }}
-    }}
+    renderHistoryList(list, sessions, '');
     panel.appendChild(list);
     overlay.appendChild(panel);
     document.body.appendChild(overlay);
+    setTimeout(() => searchBox.focus(), 100);
   }} catch(e) {{ console.error('history error:', e); }}
+}}
+
+function renderHistoryList(list, sessions, filter) {{
+  const f = filter.toLowerCase().trim();
+  const filtered = f ? sessions.filter(s => (s.title||s.preview||'').toLowerCase().includes(f) || (s.history||[]).some(m => m.content.toLowerCase().includes(f))) : sessions;
+  const countEl = document.getElementById('histCount');
+  if (countEl) countEl.textContent = filtered.length + '/' + sessions.length + ' session(s)';
+  if (!filtered.length) {{
+    list.innerHTML = '<div style="padding:24px;text-align:center;color:var(--muted)">' + (f ? 'No sessions match "' + esc(f) + '".' : 'No past sessions yet.') + '</div>';
+    return;
+  }}
+  list.innerHTML = '';
+  for (const s of filtered) {{
+    const item = document.createElement('div');
+    const warn = s.ctx_limit_reached ? ' <span style="color:#f87171">\\u26a0</span>' : '';
+    const title = esc(s.title || s.preview || '(empty session)');
+    const detail = s.created + ' \\u2022 ' + s.msg_count + ' msg(s) \\u2022 ' + s.total_tokens + ' tokens';
+    item.style.cssText = 'display:flex;justify-content:space-between;align-items:center;padding:10px 20px;cursor:pointer;border-bottom:1px solid rgba(51,65,85,0.5)';
+    item.onmouseenter = () => item.style.background = '#1a2536';
+    item.onmouseleave = () => item.style.background = 'transparent';
+    item.onclick = () => recallSession(s.id);
+    item.innerHTML = '<div style="flex:1;min-width:0;padding-right:12px"><div style="color:var(--text);font-size:12px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">' + title + ' ' + warn + '</div><div style="color:var(--muted);font-size:10px;margin-top:3px">' + detail + '</div></div>';
+    item.innerHTML += '<span style="color:var(--accent);font-size:11px;flex-shrink:0">Load \\u2192</span>';
+    list.appendChild(item);
+  }}
+}}
+
+function filterHistory(text, sessions) {{
+  const list = document.getElementById('histList');
+  if (list) renderHistoryList(list, sessions, text);
 }}
 
 async function recallSession(sid) {{
