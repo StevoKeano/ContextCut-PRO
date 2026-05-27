@@ -286,11 +286,37 @@ MAX_HISTORY_MESSAGES = 50
 MAX_HISTORY_TOKENS   = 4096
 
 _sessions: dict[str, dict] = {}
+_session_archive: list[dict] = []
+ARCHIVE_MAX = 50
+
+def _archive_current(sid: str):
+    if sid and sid in _sessions:
+        session = _sessions[sid]
+        if session.get("history"):
+            total_tok = sum(count_tokens(m["content"]) for m in session["history"])
+            ctx_hit = session.get("ctx_limit_reached", False) or total_tok > CTX_LIMIT * 0.8
+            _session_archive.insert(0, {
+                "id": sid,
+                "created": session["created"],
+                "msg_count": session["msg_count"],
+                "total_tokens": total_tok,
+                "ctx_limit_reached": ctx_hit,
+                "preview": session["history"][0]["content"][:80] if session["history"] else "",
+                "history": session["history"],
+            })
+            if len(_session_archive) > ARCHIVE_MAX:
+                _session_archive.pop()
 
 def new_session() -> str:
+    global _current_sid
+    if _current_sid:
+        _archive_current(_current_sid)
     sid = str(uuid.uuid4())[:8]
-    _sessions[sid] = {"history": [], "created": datetime.now().isoformat(), "msg_count": 0}
+    _sessions[sid] = {"history": [], "created": datetime.now().isoformat(), "msg_count": 0, "ctx_limit_reached": False}
+    _current_sid = sid
     return sid
+
+_current_sid: str | None = None
 
 def get_session(sid: str) -> dict | None:
     if sid and sid in _sessions:
@@ -306,6 +332,7 @@ def add_to_history(sid: str, role: str, content: str):
     _trim_history(session)
 
 def clear_session(sid: str):
+    _archive_current(sid)
     session = _sessions.get(sid)
     if session:
         session["history"] = []
@@ -917,6 +944,8 @@ class ProxyHandler(_SuppressBrokenPipe, BaseHTTPRequestHandler):
                                 tok_after = count_body_tokens(body)
                             if pruned:
                                 print(f"[contextcut] context truncated: removed {pruned} chunk(s) to fit {CTX_LIMIT}")
+                                if session_id and session_id in _sessions:
+                                    _sessions[session_id]["ctx_limit_reached"] = True
                             break
                 raw_body = json.dumps(body).encode()
             tok_after = count_body_tokens(body)
@@ -966,6 +995,9 @@ def make_stats_json() -> dict:
         "hits":          r.get("hits", []),
         "total_saved":   s["total_saved"],
         "total_requests":s["total_requests"],
+        "max_tokens_seen": s["max_tokens_seen"],
+        "cache_hits":    s["cache_hits"],
+        "start_time":    s["start_time"],
     }
 
 def make_dashboard() -> str:
@@ -1470,7 +1502,7 @@ tr.cloud-off td{{background:#0a1a2e!important;color:#22c55e!important;border-top
         <div class="card"><div class="card-label">Requests</div><div class="card-val" id="cardReq">{s['total_requests']}</div></div>
         <div class="card"><div class="card-label">Last CTX</div><div class="card-val {'green' if last_pct<60 else 'yellow' if last_pct<80 else 'red'}" id="cardCtx">{last_pct}%</div></div>
         <div class="card"><div class="card-label">Tokens Saved</div><div class="card-val green" id="cardSave">{s.get('total_saved',0):,}</div></div>
-        <div class="card"><div class="card-label">Peak Tokens</div><div class="card-val {'red' if s['max_tokens_seen']>CTX_LIMIT*0.8 else ''}">{s['max_tokens_seen']:,}</div></div>
+        <div class="card"><div class="card-label">Peak Tokens</div><div class="card-val {'red' if s['max_tokens_seen']>CTX_LIMIT*0.8 else ''}" id="cardPeak">{s['max_tokens_seen']:,}</div></div>
         <div class="card"><div class="card-label">CTX Limit</div><div class="card-val">{CTX_LIMIT:,}</div></div>
         <div class="card"><div class="card-label">Cache Hits</div><div class="card-val" style="font-size:13px" id="cardCache">{s.get('cache_hits',0)}</div></div>
         </div>
@@ -1479,6 +1511,7 @@ tr.cloud-off td{{background:#0a1a2e!important;color:#22c55e!important;border-top
           <div class="ctx-label" style="margin-bottom:0">Most Recent Context Usage</div>
           <div style="display:flex;gap:6px;align-items:center">
             <span id="embedBadge" class="badge" title="Current embedding backend">—</span>
+            <button class="clear-btn" onclick="openHistory()" title="Browse past chat sessions" id="histBtn">History</button>
             <button class="clear-btn" onclick="openEmbedSettings()" title="Configure embedding model">⚙ Embed</button>
             <button class="clear-btn" onclick="clearContext()" title="Clears response cache and resets session context">Clear Context</button>
           </div>
@@ -2280,6 +2313,71 @@ function reIngestKnowledgeBase() {{
   }});
 }}
 
+async function openHistory() {{
+  try {{
+    const r = await fetch('/api/sessions/archive');
+    if (!r.ok) return;
+    const sessions = await r.json();
+    const overlay = document.createElement('div');
+    overlay.style.cssText = 'position:fixed;top:0;left:0;right:0;bottom:0;background:rgba(0,0,0,0.6);z-index:1000;display:flex;align-items:center;justify-content:center;font-family:JetBrains Mono,monospace;font-size:12px';
+    overlay.onclick = (e) => {{ if (e.target === overlay) overlay.remove(); }};
+    const panel = document.createElement('div');
+    panel.style.cssText = 'background:#1E293B;border:1px solid #334155;border-radius:8px;width:520px;max-width:90vw;max-height:80vh;display:flex;flex-direction:column';
+    const hdr = document.createElement('div');
+    hdr.style.cssText = 'display:flex;justify-content:space-between;align-items:center;padding:16px 20px;border-bottom:1px solid #334155';
+    hdr.innerHTML = '<span style="font-weight:600;color:var(--text)">Session History</span><span style="color:var(--muted);font-size:10px">' + sessions.length + ' past session(s)</span>';
+    const closeBtn = document.createElement('button');
+    closeBtn.textContent = '\\u2715';
+    closeBtn.style.cssText = 'background:none;border:none;color:var(--muted);cursor:pointer;font-size:14px';
+    closeBtn.onclick = () => overlay.remove();
+    hdr.appendChild(closeBtn);
+    panel.appendChild(hdr);
+    const list = document.createElement('div');
+    list.style.cssText = 'overflow-y:auto;padding:8px 0;flex:1';
+    if (!sessions.length) {{
+      list.innerHTML = '<div style="padding:24px;text-align:center;color:var(--muted)">No past sessions yet.</div>';
+    }} else {{
+      for (const s of sessions) {{
+        const item = document.createElement('div');
+        const warn = s.ctx_limit_reached ? ' <span style="color:#f87171">\\u26a0 Context limit</span>' : '';
+        item.style.cssText = 'display:flex;justify-content:space-between;align-items:center;padding:10px 20px;cursor:pointer;border-bottom:1px solid rgba(51,65,85,0.5)';
+        item.onmouseenter = () => item.style.background = '#1a2536';
+        item.onmouseleave = () => item.style.background = 'transparent';
+        item.onclick = () => recallSession(s.id);
+        item.innerHTML = '<div><div style="color:var(--text);font-size:12px">' + esc(s.preview || '(empty)') + '</div><div style="color:var(--muted);font-size:10px;margin-top:3px">' + s.created + ' \\u2022 ' + s.msg_count + ' msg(s) \\u2022 ' + s.total_tokens + ' tokens' + warn + '</div></div>';
+        item.innerHTML += '<span style="color:var(--accent);font-size:11px">Load \\u2192</span>';
+        list.appendChild(item);
+      }}
+    }}
+    panel.appendChild(list);
+    overlay.appendChild(panel);
+    document.body.appendChild(overlay);
+  }} catch(e) {{ console.error('history error:', e); }}
+}}
+
+async function recallSession(sid) {{
+  try {{
+    const r = await fetch('/api/session/recall/' + sid);
+    if (!r.ok) return;
+    const data = await r.json();
+    if (!data.ok) return;
+    const s = data.session;
+    if (!s.history || !s.history.length) return;
+    if (s.ctx_limit_reached && !confirm('This session reached the context limit (' + s.total_tokens + ' tokens). Continuing may produce degraded responses.\\n\\nLoad anyway?')) return;
+    await fetch('/api/session/' + sessionId, {{method: 'DELETE'}});
+    await fetch('/api/session/recall/' + s.id);
+    sessionId = s.id;
+    updateSessionBadge();
+    conversationHistory = s.history.map(m => ({{role: m.role, content: m.content}}));
+    const msgs = document.getElementById('messages');
+    if (msgs) {{
+      msgs.innerHTML = s.history.map(m => '<div class="msg ' + m.role + '"><div class="bubble">' + esc(m.content) + '</div></div>').join('');
+      msgs.querySelector('.bubble:last-of-type')?.scrollIntoView({{behavior:'instant', block:'end'}});
+    }}
+    document.querySelectorAll('[style*="z-index:1000"]').forEach(el => el.remove());
+  }} catch(e) {{ console.error('recall error:', e); }}
+}}
+
 function loadEmbedBadge() {{
   fetch('/api/embed/config')
     .then(r => r.json())
@@ -2496,6 +2594,31 @@ class DashboardHandler(_SuppressBrokenPipe, BaseHTTPRequestHandler):
             self.end_headers()
             self.wfile.write(body)
             return
+        if self.path.startswith("/api/session/recall/"):
+            sid = self.path.split("/api/session/recall/")[-1]
+            data = {"ok": False, "error": "Session not found"}
+            with _lock:
+                for s in _session_archive:
+                    if s["id"] == sid:
+                        global _current_sid
+                        _current_sid = sid
+                        _sessions[sid] = {"history": list(s["history"]), "msg_count": s["msg_count"], "created": s["created"]}
+                        data = {"ok": True, "session": s}
+                        break
+                if not data.get("ok") and sid in _sessions:
+                    s = _sessions[sid]
+                    data = {"ok": True, "session": {
+                        "id": sid, "history": s["history"],
+                        "msg_count": s["msg_count"], "created": s["created"],
+                        "ctx_limit_reached": False,
+                    }}
+            body = json.dumps(data).encode()
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+            return
         if self.path == "/api/logs/export":
             with _lock:
                 rows = list(_log)
@@ -2584,6 +2707,16 @@ class DashboardHandler(_SuppressBrokenPipe, BaseHTTPRequestHandler):
             with _lock:
                 sessions = {sid: {"msg_count": s["msg_count"], "created": s["created"]} for sid, s in _sessions.items()}
             body = json.dumps({"sessions": sessions}).encode()
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+            return
+        if self.path == "/api/sessions/archive":
+            with _lock:
+                archive = list(_session_archive)
+            body = json.dumps(archive).encode()
             self.send_response(200)
             self.send_header("Content-Type", "application/json")
             self.send_header("Content-Length", str(len(body)))
