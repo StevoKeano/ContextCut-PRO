@@ -2966,6 +2966,8 @@ class DashboardHandler(_SuppressBrokenPipe, BaseHTTPRequestHandler):
                     else:
                         raise RuntimeError(f"pip install failed: {result.stderr[:200]}")
 
+                old_mode = _EMBED_MODE
+                old_model = _LOCAL_EMBED
                 _EMBED_MODE = proposed_mode
                 incoming_key = body.get("voyage_key", "").strip()
                 if incoming_key and incoming_key != "••••••••••••••••":
@@ -2998,14 +3000,11 @@ class DashboardHandler(_SuppressBrokenPipe, BaseHTTPRequestHandler):
                 except Exception as e:
                     print(f"[contextcut] .env update warning: {e}")
 
-                # Check Qdrant collection dimension and recreate if needed
-                try:
-                    expected_dim = _get_embed_dim(_LOCAL_EMBED)
-                    qclient = QdrantClient(host=QDRANT_HOST, port=QDRANT_PORT)
-                    info = qclient.get_collection(COLLECTION)
-                    actual_dim = info.config.params.vectors.size
-                    if actual_dim != expected_dim:
-                        print(f"[contextcut] Dimension change: {actual_dim} → {expected_dim}. Recreating collection...")
+                # Recreate collection whenever embed mode/model changes (different dimensions = mixed embedding spaces = broken retrieval)
+                if old_mode != _EMBED_MODE or old_model != _LOCAL_EMBED:
+                    try:
+                        expected_dim = _get_embed_dim(_LOCAL_EMBED)
+                        qclient = QdrantClient(host=QDRANT_HOST, port=QDRANT_PORT)
                         qclient.delete_collection(COLLECTION)
                         import time
                         time.sleep(2)
