@@ -48,7 +48,10 @@ python3 validate_tests.py
 python3 run_tests.py
 
 # Run against a remote proxy
-python3 run_tests.py --proxy http://192.168.137.252:18788
+python3 run_tests.py --proxy http://192.168.137.252:18787
+
+# Specify a model, wait between queries
+python3 run_tests.py --model "qwen3:14b-q8_0" --wait 2
 
 # Only run hallucination entrapment tests
 python3 run_tests.py --entrapment-only
@@ -61,8 +64,11 @@ python3 run_tests.py --filter qbi
 # Verbose mode (show queries + response previews)
 python3 run_tests.py --verbose
 
-# Specify a model, wait between queries
-python3 run_tests.py --model "qwen3:14b-q8_0" --wait 2
+# Quick connectivity check only
+python3 run_tests.py --ping
+
+# Increase timeout for large models (default 300s)
+python3 run_tests.py --timeout 600
 ```
 
 The test runner connects to the proxy's `/v1/chat/completions` endpoint, posts each query (non-streaming), and validates the response against **required_facts**, **forbidden_terms**, and **expected_citations**. Three entrapment tests use fabricated cases/statutes to detect hallucination. Each fact re-check uses fuzzy matching (case-insensitive, word-level, and exact phrase matching).

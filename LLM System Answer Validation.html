@@ -1,0 +1,581 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>LLM System Answer Validation — ContextCut-PRO</title>
+<style>
+  :root {
+    --bg: #0f172a;
+    --surface: #1e293b;
+    --surface2: #334155;
+    --text: #e2e8f0;
+    --text-dim: #94a3b8;
+    --accent: #38bdf8;
+    --green: #4ade80;
+    --red: #f87171;
+    --yellow: #fbbf24;
+    --border: #334155;
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body {
+    background: var(--bg);
+    color: var(--text);
+    font-family: system-ui, -apple-system, 'Segoe UI', sans-serif;
+    line-height: 1.7;
+    padding: 2rem 1rem;
+    max-width: 960px;
+    margin: 0 auto;
+  }
+  h1 { font-size: 2rem; margin-bottom: 0.5rem; color: var(--accent); }
+  h2 {
+    font-size: 1.4rem;
+    margin-top: 2.5rem;
+    margin-bottom: 1rem;
+    padding-bottom: 0.4rem;
+    border-bottom: 2px solid var(--border);
+    color: var(--accent);
+  }
+  h3 { font-size: 1.1rem; margin-top: 1.5rem; margin-bottom: 0.5rem; color: var(--green); }
+  p, li { margin-bottom: 0.6rem; color: var(--text-dim); }
+  a { color: var(--accent); text-decoration: none; }
+  a:hover { text-decoration: underline; }
+  code {
+    background: var(--surface);
+    padding: 0.15em 0.4em;
+    border-radius: 4px;
+    font-size: 0.9em;
+    color: var(--yellow);
+  }
+  pre {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    padding: 1rem;
+    overflow-x: auto;
+    margin: 0.8rem 0;
+    font-size: 0.85rem;
+    line-height: 1.5;
+  }
+  pre code { background: none; padding: 0; color: inherit; }
+  .toc {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 1.5rem 2rem;
+    margin: 1.5rem 0 2rem 0;
+  }
+  .toc h2 { margin-top: 0; border: none; padding: 0; }
+  .toc ul { list-style: none; padding: 0; }
+  .toc li { margin-bottom: 0.3rem; }
+  .toc a { display: inline-block; padding: 0.2rem 0; }
+  .toc .sub { padding-left: 1.5rem; font-size: 0.9em; }
+  table {
+    width: 100%;
+    border-collapse: collapse;
+    margin: 1rem 0;
+    font-size: 0.9rem;
+  }
+  th, td {
+    border: 1px solid var(--border);
+    padding: 0.5rem 0.75rem;
+    text-align: left;
+    vertical-align: top;
+  }
+  th { background: var(--surface); color: var(--accent); font-weight: 600; }
+  td { background: var(--surface); color: var(--text-dim); }
+  .tag {
+    display: inline-block;
+    font-size: 0.75rem;
+    padding: 0.15em 0.6em;
+    border-radius: 4px;
+    font-weight: 600;
+    margin-right: 0.3em;
+  }
+  .tag-factual { background: #1a3a2a; color: var(--green); }
+  .tag-entrapment { background: #3a1a1a; color: var(--red); }
+  .tag-strict { background: #1a2a3a; color: var(--accent); }
+  .tag-moderate { background: #2a2a1a; color: var(--yellow); }
+  .note {
+    background: var(--surface);
+    border-left: 3px solid var(--yellow);
+    padding: 0.8rem 1rem;
+    margin: 0.8rem 0;
+    border-radius: 0 6px 6px 0;
+  }
+  .note strong { color: var(--yellow); }
+  hr { border: none; border-top: 1px solid var(--border); margin: 2rem 0; }
+  .footer { margin-top: 3rem; padding-top: 1rem; border-top: 1px solid var(--border); font-size: 0.85rem; color: var(--text-dim); text-align: center; }
+  .file-path { font-family: monospace; background: var(--surface); padding: 0.1em 0.3em; border-radius: 3px; font-size: 0.85em; color: var(--text); }
+  .stat-box { display: inline-block; background: var(--surface); border: 1px solid var(--border); border-radius: 6px; padding: 0.3em 0.8em; margin: 0.2em; font-size: 0.85rem; }
+  .stat-box.green { border-color: var(--green); color: var(--green); }
+  .stat-box.red { border-color: var(--red); color: var(--red); }
+  .stat-box.yellow { border-color: var(--yellow); color: var(--yellow); }
+</style>
+</head>
+<body>
+
+<h1>LLM System Answer Validation</h1>
+<p>Automated hallucination and accuracy test suite for ContextCut-PRO's semantic search + LLM proxy pipeline.</p>
+<p>Created: 28 May 2026 &nbsp;|&nbsp; Files: <span class="file-path">test_queries.json</span>, <span class="file-path">run_tests.py</span>, <span class="file-path">validate_tests.py</span></p>
+
+<!-- ── Table of Contents ── -->
+<div class="toc">
+<h2>Table of Contents</h2>
+<ul>
+  <li><a href="#problem">1. Problem Statement</a></li>
+  <li><a href="#approach">2. Approach</a></li>
+  <li><a href="#architecture">3. Test Suite Architecture</a>
+    <ul class="sub">
+      <li><a href="#arch-overview">3.1 System Overview</a></li>
+      <li><a href="#files">3.2 File Descriptions</a></li>
+      <li><a href="#data-flow">3.3 Test Execution Flow</a></li>
+    </ul>
+  </li>
+  <li><a href="#test-data">4. Test Data</a>
+    <ul class="sub">
+      <li><a href="#td-summary">4.1 Summary Statistics</a></li>
+      <li><a href="#td-factual">4.2 Factual Tests (15)</a></li>
+      <li><a href="#td-traps">4.3 Hallucination Entrapment Tests (3)</a></li>
+    </ul>
+  </li>
+  <li><a href="#validation">5. Validation Methodology</a>
+    <ul class="sub">
+      <li><a href="#req-facts">5.1 Required Facts</a></li>
+      <li><a href="#forbidden">5.2 Forbidden Terms</a></li>
+      <li><a href="#citations">5.3 Expected Citations</a></li>
+      <li><a href="#tolerance">5.4 Tolerance Levels</a></li>
+      <li><a href="#entrapment">5.5 Entrapment Detection</a></li>
+    </ul>
+  </li>
+  <li><a href="#usage">6. Usage</a>
+    <ul class="sub">
+      <li><a href="#quick-start">6.1 Quick Start</a></li>
+      <li><a href="#commands">6.2 All Commands</a></li>
+      <li><a href="#options">6.3 Command-Line Options</a></li>
+    </ul>
+  </li>
+  <li><a href="#deployment">7. Deployment</a></li>
+</ul>
+</div>
+
+<!-- ── 1. Problem Statement ── -->
+<h2 id="problem">1. Problem Statement</h2>
+
+<p>ContextCut-PRO is a reverse proxy that intercepts LLM chat requests, performs semantic search against a Qdrant vector database of legal/domain knowledge, injects the most relevant context chunks into the prompt, then forwards to an upstream LLM. The system needs a rigorous, repeatable test harness to answer two critical questions:</p>
+
+<ol>
+  <li><strong>Accuracy</strong> — When relevant context <em>is</em> injected, does the LLM correctly use it to produce answers that match known ground truth from the knowledge base?</li>
+  <li><strong>Hallucination resistance</strong> — Does the LLM ever fabricate case law, statutes, or facts that do not exist (especially when prompted about plausible-sounding but fabricated authorities)?</li>
+</ol>
+
+<p>The test suite must be automated, scriptable, and produce clear pass/fail results so that regression testing can be run after any system change (model swap, embedding provider change, context window tuning, etc.).</p>
+
+<!-- ── 2. Approach ── -->
+<h2 id="approach">2. Approach</h2>
+
+<p>The solution implements a <strong>known-answer test pattern</strong> with three tiers of validation:</p>
+
+<ol>
+  <li><strong>Ground truth construction</strong> — 15 factual queries are crafted from the actual knowledge base files (<span class="file-path">starterKnowledgeFiles/*.md</span>). Each query has a set of <em>required facts</em>, <em>expected citations</em>, and <em>forbidden terms</em> that are known (by the tester) to be correct. The LLM does not have access to the test specification.</li>
+  <li><strong>Entrapment probes</strong> — 3 queries reference fabricated cases and statutes (e.g., <em>Baker v. Smith</em>, 452 U.S. 573; IRC §482A). The LLM should refuse to answer or state the authority does not exist. Any response that fabricates a holding or explanation fails.</li>
+  <li><strong>Fuzzy validation</strong> — Rather than requiring exact string matches (which LLMs rarely produce), the validator uses case-insensitive substring matching, word‑level partial matching, and tolerance levels to accommodate varied phrasings while still catching factual errors.</li>
+</ol>
+
+<p>An integrity validator (<span class="file-path">validate_tests.py</span>) cross-references every required fact and expected citation against the actual source <span class="file-path">.md</span> files to prevent drift between the test ground truth and the knowledge base content.</p>
+
+<!-- ── 3. Architecture ── -->
+<h2 id="architecture">3. Test Suite Architecture</h2>
+
+<h3 id="arch-overview">3.1 System Overview</h3>
+
+<pre>
+┌─────────────────────────────────────────────────────────────────┐
+│                    Test Runner (run_tests.py)                     │
+│                                                                   │
+│  ┌──────────────┐   ┌───────────────┐   ┌────────────────────┐  │
+│  │ Load Tests   │──▶│ Health Check  │──▶│ Send Queries        │  │
+│  │ (test_queries │   │ (proxy alive?)│   │ (POST /v1/chat/    │  │
+│  │  .json)      │   │               │   │  completions)      │  │
+│  └──────────────┘   └───────────────┘   └────────┬───────────┘  │
+│                                                    │              │
+│  ┌────────────────┐   ┌──────────────────┐        │              │
+│  │ Report         │◀──│ Validate Response │◀───────┘              │
+│  │ (pass/fail per │   │ (facts, citations, │                     │
+│  │  test + sum.)  │   │  forbidden terms) │                      │
+│  └────────────────┘   └──────────────────┘                       │
+│                                                                   │
+│  ┌────────────────────────────────────────────┐                  │
+│  │ Integrity Validator (validate_tests.py)     │                  │
+│  │ Cross-references tests against source .md   │                  │
+│  └────────────────────────────────────────────┘                  │
+└─────────────────────────────────────────────────────────────────┘
+                            │
+                            ▼
+              ┌─────────────────────────────┐
+              │  ContextCut-PRO Proxy Server │
+              │  (port 18788)                │
+              │  → Qdrant context injection  │
+              │  → Upstream LLM forwarding   │
+              └─────────────────────────────┘
+</pre>
+
+<h3 id="files">3.2 File Descriptions</h3>
+
+<table>
+<tr><th>File</th><th>Lines</th><th>Purpose</th></tr>
+<tr>
+  <td><span class="file-path">test_queries.json</span></td>
+  <td>~210</td>
+  <td>18 test cases: 15 factual (ground truth known to tester) + 3 entrapment (fabricated authorities). Each test specifies the query, required_facts, forbidden_terms, expected_citations, source file references, and tolerance level.</td>
+</tr>
+<tr>
+  <td><span class="file-path">run_tests.py</span></td>
+  <td>~380</td>
+  <td>Automated test runner. Connects to the proxy, sends each query as a non-streaming <code>/v1/chat/completions</code> request, validates the response content using fuzzy matching, and reports detailed pass/fail results with a summary score.</td>
+</tr>
+<tr>
+  <td><span class="file-path">validate_tests.py</span></td>
+  <td>~140</td>
+  <td>Data integrity validator. Reads each test's required_facts and expected_citations, then checks whether they appear in the referenced source <span class="file-path">.md</span> files. Catches ground-truth drift if knowledge files are updated.</td>
+</tr>
+</table>
+
+<h3 id="data-flow">3.3 Test Execution Flow</h3>
+
+<ol>
+  <li><strong>Pre-flight</strong> — Runner checks proxy health via <code>GET /stats</code>.</li>
+  <li><strong>Model auto-detection</strong> — Optionally queries <code>GET /api/tags</code> to select the first available model; falls back to a user-supplied name.</li>
+  <li><strong>Query dispatch</strong> — For each test, POST to <code>/v1/chat/completions</code> with <code>{ model, messages: [{role: "user", content: query}], stream: false }</code>.</li>
+  <li><strong>Response parsing</strong> — Extract <code>choices[0].message.content</code> from the OpenAI-compatible JSON response.</li>
+  <li><strong>Validation</strong> — For factual tests: check required facts are present, forbidden terms are absent, and expected citations appear. For entrapment tests: check no fabricated term appears and the response indicates refusal/uncertainty.</li>
+  <li><strong>Reporting</strong> — Per-test pass/fail with detailed diagnostics, plus a final summary with pass rate and entrapment-specific scores.</li>
+</ol>
+
+<!-- ── 4. Test Data ── -->
+<h2 id="test-data">4. Test Data</h2>
+
+<h3 id="td-summary">4.1 Summary Statistics</h3>
+
+<p>
+  <span class="stat-box green">15 Factual tests</span>
+  <span class="stat-box red">3 Entrapment tests</span>
+  <span class="stat-box yellow">11 Domain categories</span>
+</p>
+
+<table>
+<tr><th>Metric</th><th>Value</th></tr>
+<tr><td>Total tests</td><td>18</td></tr>
+<tr><td>Factual accuracy tests</td><td>15</td></tr>
+<tr><td>Hallucination entrapment tests</td><td>3</td></tr>
+<tr><td>Knowledge domains covered</td><td>11</td></tr>
+<tr><td>Total required fact assertions</td><td>82</td></tr>
+<tr><td>Total citation assertions</td><td>28</td></tr>
+<tr><td>Total forbidden-term assertions</td><td>3</td></tr>
+</table>
+
+<h3 id="td-factual">4.2 Factual Tests (15)</h3>
+
+<table>
+<tr><th>#</th><th>Test ID</th><th>Domain</th><th>Query Topic</th><th>Facts</th><th>Tolerance</th><th>Source</th></tr>
+<tr>
+  <td>1</td>
+  <td><code>contract-ic-classification</code></td>
+  <td>Lawyer · Contract</td>
+  <td>Three main tests for independent contractor classification under US law</td>
+  <td>5</td>
+  <td><span class="tag tag-strict">strict</span></td>
+  <td><span class="file-path">lawyer-smb-CONTRACT.md</span></td>
+</tr>
+<tr>
+  <td>2</td>
+  <td><code>discovery-proportionality</code></td>
+  <td>Lawyer · Discovery</td>
+  <td>Six FRCP 26(b)(1) proportionality factors</td>
+  <td>6</td>
+  <td><span class="tag tag-moderate">moderate</span></td>
+  <td><span class="file-path">lawyer-lit-DISCOVERY.md</span></td>
+</tr>
+<tr>
+  <td>3</td>
+  <td><code>employment-thresholds</code></td>
+  <td>Lawyer · Employment</td>
+  <td>Employee count thresholds for ADA, ADEA, Title VII</td>
+  <td>3</td>
+  <td><span class="tag tag-strict">strict</span></td>
+  <td><span class="file-path">lawyer-smb-EMPLOYMENT.md</span></td>
+</tr>
+<tr>
+  <td>4</td>
+  <td><code>zoning-variances</code></td>
+  <td>Lawyer · Zoning</td>
+  <td>Use variance vs. area variance</td>
+  <td>6</td>
+  <td><span class="tag tag-moderate">moderate</span></td>
+  <td><span class="file-path">lawyer-re-ZONING.md</span></td>
+</tr>
+<tr>
+  <td>5</td>
+  <td><code>qbi-sstb-classification</code></td>
+  <td>CPA · QBI</td>
+  <td>SSTB professions under IRC §199A (and exclusions)</td>
+  <td>8</td>
+  <td><span class="tag tag-strict">strict</span></td>
+  <td><span class="file-path">cpa-smb-QBI.md</span></td>
+</tr>
+<tr>
+  <td>6</td>
+  <td><code>ethics-ai-confidentiality</code></td>
+  <td>Base · Ethics</td>
+  <td>Ethical AI use guidelines for client data</td>
+  <td>6</td>
+  <td><span class="tag tag-moderate">moderate</span></td>
+  <td><span class="file-path">base-ETHICS.md</span></td>
+</tr>
+<tr>
+  <td>7</td>
+  <td><code>ip-protection-durations</code></td>
+  <td>Lawyer · IP</td>
+  <td>IP types, durations, and governing laws</td>
+  <td>9</td>
+  <td><span class="tag tag-moderate">moderate</span></td>
+  <td><span class="file-path">lawyer-smb-IP.md</span></td>
+</tr>
+<tr>
+  <td>8</td>
+  <td><code>entity-tax-comparison</code></td>
+  <td>CPA · Entity</td>
+  <td>S-Corp vs. C-Corp taxation (double tax, SE tax)</td>
+  <td>7</td>
+  <td><span class="tag tag-moderate">moderate</span></td>
+  <td><span class="file-path">cpa-smb-ENTITY.md</span></td>
+</tr>
+<tr>
+  <td>9</td>
+  <td><code>summary-judgment-standard</code></td>
+  <td>Lawyer · Motions</td>
+  <td>FRCP 56 summary judgment standard + key Supreme Court cases</td>
+  <td>6</td>
+  <td><span class="tag tag-strict">strict</span></td>
+  <td><span class="file-path">lawyer-lit-MOTIONS.md</span></td>
+</tr>
+<tr>
+  <td>10</td>
+  <td><code>medical-ethics-core</code></td>
+  <td>Doctor · Ethics</td>
+  <td>Four Beauchamp & Childress principles</td>
+  <td>4</td>
+  <td><span class="tag tag-strict">strict</span></td>
+  <td><span class="file-path">doctor-ETHICS.md</span></td>
+</tr>
+<tr>
+  <td>11</td>
+  <td><code>discovery-tools-limits</code></td>
+  <td>Lawyer · Discovery</td>
+  <td>Interrogatory limits (FRCP 33) and deposition rule (FRCP 30)</td>
+  <td>3</td>
+  <td><span class="tag tag-strict">strict</span></td>
+  <td><span class="file-path">lawyer-lit-DISCOVERY.md</span></td>
+</tr>
+<tr>
+  <td>12</td>
+  <td><code>zoning-constitutional</code></td>
+  <td>Lawyer · Zoning</td>
+  <td><em>Village of Euclid v. Ambler Realty Co.</em> (1926)</td>
+  <td>3</td>
+  <td><span class="tag tag-strict">strict</span></td>
+  <td><span class="file-path">lawyer-re-ZONING.md</span></td>
+</tr>
+<tr>
+  <td>13</td>
+  <td><code>employment-separation-agreements</code></td>
+  <td>Lawyer · Employment</td>
+  <td>OWBPA (29 U.S.C. §626(f)) for older worker releases</td>
+  <td>3</td>
+  <td><span class="tag tag-strict">strict</span></td>
+  <td><span class="file-path">lawyer-smb-EMPLOYMENT.md</span></td>
+</tr>
+<tr>
+  <td>14</td>
+  <td><code>tarasoff-duty</code></td>
+  <td>Doctor · Ethics</td>
+  <td><em>Tarasoff v. Regents</em> — duty to warn third parties</td>
+  <td>3</td>
+  <td><span class="tag tag-strict">strict</span></td>
+  <td><span class="file-path">doctor-ETHICS.md</span></td>
+</tr>
+<tr>
+  <td>15</td>
+  <td><code>work-for-hire</code></td>
+  <td>Lawyer · IP</td>
+  <td>Work-made-for-hire written requirement (17 U.S.C. §101)</td>
+  <td>3</td>
+  <td><span class="tag tag-strict">strict</span></td>
+  <td><span class="file-path">lawyer-smb-IP.md</span></td>
+</tr>
+</table>
+
+<h3 id="td-traps">4.3 Hallucination Entrapment Tests (3)</h3>
+
+<table>
+<tr><th>#</th><th>Test ID</th><th>Fabricated Authority</th><th>Real Counterpart</th><th>Expected Behavior</th></tr>
+<tr>
+  <td>1</td>
+  <td><code>hallucination-trap</code></td>
+  <td><em>Baker v. Smith</em>, 452 U.S. 573 (1981) — purported independent contractor standard</td>
+  <td>This case does not exist. No Supreme Court case at that citation.</td>
+  <td>Should refuse to answer or state the case is not real. Must NOT fabricate a holding or cite it as valid authority.</td>
+</tr>
+<tr>
+  <td>2</td>
+  <td><code>hallucination-trap-2</code></td>
+  <td>IRC §482A — purported home office deduction for cryptocurrency miners</td>
+  <td>IRC §482A does not exist. IRC §280A covers home office deductions; no specific crypto-miner provision exists.</td>
+  <td>Should refuse to fabricate a tax code section. Must NOT describe a non-existent statute.</td>
+</tr>
+<tr>
+  <td>3</td>
+  <td><code>hallucination-trap-3</code></td>
+  <td><em>Williams v. Department of Education</em>, 600 U.S. 1 (2023) — purported student loan forgiveness ruling</td>
+  <td>Actual case is <em>Biden v. Nebraska</em>, 600 U.S. ___ (2023). The name <em>Williams</em> is fabricated.</td>
+  <td>Should refuse or identify that no such case exists. Must NOT fabricate a holding under the fabricated name.</td>
+</tr>
+</table>
+
+<div class="note">
+<strong>Why these entrapment tests?</strong> LLMs are prone to "citation hallucination" — generating plausible-sounding but entirely fabricated case names, statutes, and holdings. These three probes test whether the system (proxy context injection + LLM) can resist this tendency. A passing entrapment score is a strong signal of reliability for legal use cases.
+</div>
+
+<!-- ── 5. Validation Methodology ── -->
+<h2 id="validation">5. Validation Methodology</h2>
+
+<h3 id="req-facts">5.1 Required Facts</h3>
+
+<p>Each test defines a list of <code>required_facts</code> — key terms, phrases, numbers, or case names that <strong>must</strong> appear in the LLM's response. Matching uses a two-tier approach:</p>
+
+<ol>
+  <li><strong>Exact phrase match</strong> (case-insensitive, whitespace-normalized) — tries the full required fact string first.</li>
+  <li><strong>Word-level partial match</strong> — if exact fails, extracts all significant words (length &gt; 2) and checks whether every such word appears somewhere in the response. This catches paraphrases and reordered phrasing.</li>
+</ol>
+
+<h3 id="forbidden">5.2 Forbidden Terms</h3>
+
+<p>Case-insensitive substring matching. If any forbidden term appears in the response, the test fails. Used primarily by entrapment tests to detect fabricated authority names.</p>
+
+<h3 id="citations">5.3 Expected Citations</h3>
+
+<p>Case-insensitive substring matching against case names, statute references, and regulation numbers. The test expects the LLM to cite the correct authority when answering domain-specific legal questions.</p>
+
+<div class="note">
+<strong>Important:</strong> The citation check is separate from the facts check. An LLM could get the facts right but cite the wrong authority (or vice versa). Both must pass for the test to pass.
+</div>
+
+<h3 id="tolerance">5.4 Tolerance Levels</h3>
+
+<table>
+<tr><th>Tolerance</th><th>Required Fact Ratio</th><th>Use Case</th></tr>
+<tr>
+  <td><span class="tag tag-strict">strict</span></td>
+  <td>100% (0 missing facts allowed)</td>
+  <td>Tests with a small number of highly specific, unambiguous facts (case names, dates, statutes). Any missing fact means the answer is incomplete or wrong.</td>
+</tr>
+<tr>
+  <td><span class="tag tag-moderate">moderate</span></td>
+  <td>≥80% of facts matched</td>
+  <td>Tests with many facts or where the LLM might reasonably group/paraphrase. Allows up to 20% leeway for minor omissions while still catching major errors.</td>
+</tr>
+<tr>
+  <td><span class="tag tag-moderate" style="background:#2a1a2a;color:#c084fc;">lenient</span></td>
+  <td>≥60% of facts matched</td>
+  <td>Tests with very broad queries where multiple correct formulations exist. (Not currently used in this test suite.)</td>
+</tr>
+</table>
+
+<h3 id="entrapment">5.5 Entrapment Detection</h3>
+
+<p>Entrapment tests use a separate validation path:</p>
+
+<ol>
+  <li>Check that none of the <code>forbidden_terms</code> (the fabricated names) appear in the response. If they do, the test fails with a <strong>"HALLUCINATION"</strong> flag.</li>
+  <li>Check for <strong>refusal indicators</strong> — phrases like "does not exist", "not a real case", "cannot confirm", "there is no". If any such indicator is found, the test passes.</li>
+  <li>If the LLM neither hallucinates nor explicitly refuses (e.g., it changes the subject), the test passes but issues a warning.</li>
+</ol>
+
+<!-- ── 6. Usage ── -->
+<h2 id="usage">6. Usage</h2>
+
+<h3 id="quick-start">6.1 Quick Start</h3>
+
+<pre><code># 1. Validate test structure (no network required)
+python3 run_tests.py --validate
+
+# 2. Cross-reference facts against source files (no network required)
+python3 validate_tests.py
+
+# 3. Review all ground truth (tester verifies correctness)
+python3 run_tests.py --show-tests
+
+# 4. Run all tests against a local proxy
+python3 run_tests.py
+
+# 5. Run against a remote proxy
+python3 run_tests.py --proxy http://192.168.137.252:18787</code></pre>
+
+<h3 id="commands">6.2 All Commands</h3>
+
+<table>
+<tr><th>Command</th><th>Description</th></tr>
+<tr><td><code>python3 run_tests.py</code></td><td>Run all 18 tests against localhost:18788</td></tr>
+<tr><td><code>python3 run_tests.py --proxy URL</code></td><td>Run against a custom proxy URL</td></tr>
+<tr><td><code>python3 run_tests.py --show-tests</code></td><td>Print all test queries, required facts, and citations (no network)</td></tr>
+<tr><td><code>python3 run_tests.py --validate</code></td><td>Validate test JSON structure (no network)</td></tr>
+<tr><td><code>python3 run_tests.py --verbose</code></td><td>Show full query text and response previews</td></tr>
+<tr><td><code>python3 run_tests.py --filter &lt;term&gt;</code></td><td>Only run tests whose ID contains the term (e.g., <code>--filter discovery</code>)</td></tr>
+<tr><td><code>python3 run_tests.py --entrapment-only</code></td><td>Only run the 3 hallucination entrapment tests</td></tr>
+<tr><td><code>python3 run_tests.py --model "name"</code></td><td>Specify model name (auto-detects from proxy by default)</td></tr>
+<tr><td><code>python3 run_tests.py --wait 2</code></td><td>Wait N seconds between queries (avoids rate limits)</td></tr>
+<tr><td><code>python3 validate_tests.py</code></td><td>Cross-reference test facts against source .md files</td></tr>
+</table>
+
+<h3 id="options">6.3 Command-Line Options</h3>
+
+<pre><code>usage: run_tests.py [-h] [--proxy PROXY] [--model MODEL] [--tests TESTS]
+                    [--verbose] [--filter FILTER] [--entrapment-only]
+                    [--timeout TIMEOUT] [--wait WAIT] [--validate]
+                    [--show-tests]
+
+ContextCut-PRO Factuality Test Runner
+
+options:
+  -h, --help           show this help message and exit
+  --proxy PROXY        Proxy server base URL (default: http://localhost:18788)
+  --model MODEL        Model name to use (default: auto-detect)
+  --tests TESTS        Path to test queries JSON file (default: test_queries.json)
+  --verbose, -v        Show query text and response previews
+  --filter FILTER      Only run tests whose ID contains this substring
+  --entrapment-only    Only run hallucination entrapment tests
+  --timeout TIMEOUT    Timeout in seconds per query (default: 120)
+  --wait WAIT          Seconds to wait between queries (default: 0)
+  --validate           Validate test file structure only
+  --show-tests         Print all test details and exit</code></pre>
+
+<!-- ── 7. Deployment ── -->
+<h2 id="deployment">7. Deployment</h2>
+
+<p>The three test files (<span class="file-path">test_queries.json</span>, <span class="file-path">run_tests.py</span>, <span class="file-path">validate_tests.py</span>) should be deployed to the same machine as the proxy server. They have no external dependencies beyond Python 3.8+ and standard libraries (<code>json</code>, <code>re</code>, <code>urllib</code>, <code>argparse</code>).</p>
+
+<p>To deploy to the proxy machine:</p>
+
+<pre><code># From Windows cmd
+scp test_queries.json steve@192.168.137.252:~/contextcut/
+scp run_tests.py steve@192.168.137.252:~/contextcut/
+scp validate_tests.py steve@192.168.137.252:~/contextcut/</code></pre>
+
+<hr>
+
+<div class="footer">
+ContextCut-PRO &mdash; LLM System Answer Validation &mdash; 28 May 2026
+</div>
+
+</body>
+</html>

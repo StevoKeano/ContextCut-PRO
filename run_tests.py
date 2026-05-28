@@ -333,8 +333,8 @@ Examples:
     )
     parser.add_argument(
         "--proxy",
-        default="http://localhost:18788",
-        help="Proxy server base URL (default: http://localhost:18788)",
+        default="http://localhost:18787",
+        help="Proxy server base URL (default: http://localhost:18787)",
     )
     parser.add_argument(
         "--model",
@@ -365,8 +365,8 @@ Examples:
     parser.add_argument(
         "--timeout",
         type=int,
-        default=120,
-        help="Timeout in seconds per query (default: 120)",
+        default=300,
+        help="Timeout in seconds per query (default: 300)",
     )
     parser.add_argument(
         "--wait",
@@ -383,6 +383,11 @@ Examples:
         "--show-tests",
         action="store_true",
         help="Print all test queries with their expected facts and exit",
+    )
+    parser.add_argument(
+        "--ping",
+        action="store_true",
+        help="Quick connectivity check only — test full proxy chain and exit",
     )
 
     args = parser.parse_args()
@@ -497,6 +502,36 @@ Examples:
         except Exception:
             model = "test-model"
             print(yellow(f"  Could not auto-detect model, using '{model}'"))
+
+    # ── Connectivity test (quick check that chat completions actually work) ─────
+    print(f"  Testing chat completions with model '{model}' ...", end=" ")
+    sys.stdout.flush()
+    quick = send_query(proxy_base, model, "Say OK", timeout=15)
+    if not quick["success"]:
+        print(red("FAILED"))
+        print()
+        print(red(f"  Chat completions request failed: {quick['error']}"))
+        print(yellow(f"  The dashboard is alive but can't reach the backend proxy or LLM."))
+        print(yellow(f"  Common causes:"))
+        print(yellow(f"    1. Proxy backend (port 18788) not running"))
+        print(yellow(f"    2. LLM upstream (Ollama/OpenAI) not running or unreachable"))
+        print(yellow(f"    3. Model '{model}' not available or too large"))
+        print(yellow(f"  Try:"))
+        print(yellow(f"    - Check if qdrant_proxy_final.py is running"))
+        print(yellow(f"    - Verify Ollama is running: curl http://localhost:11434/api/tags"))
+        print(yellow(f"    - Use --model to specify a smaller model"))
+        sys.exit(2)
+    print(green("OK"))
+
+    # ── Ping mode — quick connectivity check only ───────────────────────────────
+    if args.ping:
+        print()
+        print(green(f"  Full proxy chain is operational:"))
+        print(f"    Dashboard:  {proxy_base} (health check: OK)")
+        print(f"    Model:      {model}")
+        print(f"    Response:   {quick['content'][:100]}")
+        print()
+        sys.exit(0)
 
     # ── Run tests ───────────────────────────────────────────────────────────────
     results = []
