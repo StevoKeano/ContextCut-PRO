@@ -167,7 +167,7 @@ DASHBOARD_PORT = int(os.getenv("CONTEXTCUT_DASHBOARD_PORT", "18787"))
 CTX_LIMIT      = int(os.getenv("CONTEXTCUT_CTX_LIMIT",   "8192"))
 TOP_K          = int(os.getenv("CONTEXTCUT_TOP_K",       "5"))
 MIN_SCORE      = float(os.getenv("CONTEXTCUT_MIN_SCORE", "0.50"))
-DEFAULT_MODEL  = os.getenv("CONTEXTCUT_MODEL",           "")
+DEFAULT_MODEL  = os.getenv("CONTEXTCUT_MODEL",           "qwen3:14b-q8_0")
 
 # ── Dynamic Provider Settings ────────────────────────────────────────────────
 PROVIDERS = {
@@ -1610,6 +1610,7 @@ tr.cloud-off td{{background:#0a1a2e!important;color:#22c55e!important;border-top
   <button onclick="openFileBrowser()" style="background:transparent;border:1px solid var(--border);color:var(--muted);border-radius:3px;padding:3px 10px;font-size:11px;cursor:pointer;font-family:'JetBrains Mono',monospace">Browse Files 📂</button>
   <a href="/api/logs/export" style="background:transparent;border:1px solid var(--border);color:var(--muted);border-radius:3px;padding:3px 8px;font-size:11px;cursor:pointer;font-family:'JetBrains Mono',monospace;text-decoration:none" title="Download audit log CSV">Export Log</a>
   <button onclick="seedDemo()" style="background:transparent;border:1px solid var(--border);color:var(--muted);border-radius:3px;padding:3px 8px;font-size:11px;cursor:pointer;font-family:'JetBrains Mono',monospace" title="Load sample data for demo">Demo Data</button>
+  <button onclick="openHistory()" style="background:transparent;border:1px solid var(--border);color:var(--muted);border-radius:3px;padding:3px 8px;font-size:11px;cursor:pointer;font-family:'JetBrains Mono',monospace" title="Browse past chat sessions" id="histBtn">History</button>
   <button onclick="startTour()" style="background:transparent;border:1px solid var(--border);color:var(--muted);border-radius:3px;padding:3px 8px;font-size:11px;cursor:pointer;font-family:'JetBrains Mono',monospace" title="Guided tour">Tour</button>
   <div class="live"><span class="dot"></span>live</div>
 </div>
@@ -1635,7 +1636,6 @@ tr.cloud-off td{{background:#0a1a2e!important;color:#22c55e!important;border-top
           <div class="ctx-label" style="margin-bottom:0">Most Recent Context Usage</div>
           <div style="display:flex;gap:6px;align-items:center">
             <span id="embedBadge" class="badge" title="Current embedding backend">—</span>
-            <button class="clear-btn" onclick="openHistory()" title="Browse past chat sessions" id="histBtn">History</button>
             <button class="clear-btn" onclick="openEmbedSettings()" title="Configure embedding model">⚙ Embed</button>
             <button class="clear-btn" onclick="clearContext()" title="Clears response cache and resets session context">Clear Context</button>
           </div>
