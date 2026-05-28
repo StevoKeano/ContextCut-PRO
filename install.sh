@@ -326,7 +326,7 @@ source "$INSTALL_DIR/venv/bin/activate"
 
 echo "  Installing Python dependencies..."
 pip install --upgrade pip -q 2>/dev/null
-pip install qdrant-client watchdog cryptography -q
+pip install qdrant-client watchdog cryptography PyMuPDF python-docx openpyxl -q
 if [ -n "$VOYAGE_KEY" ]; then
   pip install voyageai -q && echo "  voyageai installed" || echo "  WARNING: voyageai install failed (Voyage AI mode will not work)"
 fi
@@ -334,8 +334,11 @@ pip install tiktoken -q 2>/dev/null && echo "  tiktoken installed (exact token c
 
 # ── Download scripts ──────────────────────────────────────────────────────────
 echo "  Downloading ContextCut scripts..."
-curl -sf "$REPO/qdrant_proxy_final.py" -o "$INSTALL_DIR/qdrant_proxy_final.py"
-curl -sf "$REPO/ingest.py"       -o "$INSTALL_DIR/ingest.py"
+curl -sf "$REPO/qdrant_proxy_final.py"  -o "$INSTALL_DIR/qdrant_proxy_final.py"
+curl -sf "$REPO/ingest.py"              -o "$INSTALL_DIR/ingest.py"
+curl -sf "$REPO/datasette.yml"          -o "$INSTALL_DIR/datasette.yml"
+curl -sf "$REPO/run_datasette.sh"       -o "$INSTALL_DIR/run_datasette.sh"
+chmod +x "$INSTALL_DIR/run_datasette.sh"
 
 # ── Download starter knowledge files ─────────────────────────────────────────
 STARTER_DIR="$INSTALL_DIR/starterKnowledgeFiles"
