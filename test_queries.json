@@ -1,0 +1,281 @@
+{
+  "meta": {
+    "description": "ContextCut-PRO factuality test suite — queries with known ground truth from knowledge base files",
+    "instructions": "Each test has required_facts (must appear in LLM response) and forbidden_terms (must not appear). The tolerance field controls strictness: strict=all facts required, moderate=80% required, lenient=60% required."
+  },
+  "tests": [
+    {
+      "id": "contract-ic-classification",
+      "category": "lawyer-smb-contract",
+      "query": "What are the three main tests used for independent contractor classification under US law?",
+      "required_facts": [
+        "IRS 20-Factor Test",
+        "Economic Reality Test",
+        "ABC Test",
+        "Hopkins v. Cornerstone America",
+        "Dynamex Operations West v. Superior Court"
+      ],
+      "forbidden_terms": [],
+      "expected_citations": ["Hopkins v. Cornerstone America", "Dynamex"],
+      "source_files": ["lawyer-smb-CONTRACT.md"],
+      "tolerance": "strict"
+    },
+    {
+      "id": "discovery-proportionality",
+      "category": "lawyer-lit-discovery",
+      "query": "Under FRCP, what are the six proportionality factors for discovery?",
+      "required_facts": [
+        "importance of the issues",
+        "amount in controversy",
+        "parties' relative access",
+        "parties' resources",
+        "importance of the discovery",
+        "burden or expense"
+      ],
+      "forbidden_terms": [],
+      "expected_citations": ["FRCP 26(b)(1)", "FRCP 26"],
+      "source_files": ["lawyer-lit-DISCOVERY.md"],
+      "tolerance": "moderate"
+    },
+    {
+      "id": "employment-thresholds",
+      "category": "lawyer-smb-employment",
+      "query": "What are the employee count thresholds for ADA, ADEA, and Title VII coverage under federal law?",
+      "required_facts": [
+        "ADA 15",
+        "ADEA 20",
+        "Title VII 15"
+      ],
+      "forbidden_terms": [],
+      "expected_citations": ["42 U.S.C. §2000e", "42 U.S.C. §12101", "29 U.S.C. §621"],
+      "source_files": ["lawyer-smb-EMPLOYMENT.md"],
+      "tolerance": "strict"
+    },
+    {
+      "id": "zoning-variances",
+      "category": "lawyer-re-zoning",
+      "query": "What is the difference between a use variance and an area variance in zoning law?",
+      "required_facts": [
+        "use variance",
+        "area variance",
+        "prohibited use",
+        "dimensional",
+        "higher standard",
+        "undue hardship"
+      ],
+      "forbidden_terms": [],
+      "expected_citations": ["Nettleton v. Zoning Board"],
+      "source_files": ["lawyer-re-ZONING.md"],
+      "tolerance": "moderate"
+    },
+    {
+      "id": "qbi-sstb-classification",
+      "category": "cpa-smb-qbi",
+      "query": "Which professions are classified as Specified Service Trade or Businesses (SSTBs) under IRC Section 199A, and which professions are explicitly excluded from SSTB status?",
+      "required_facts": [
+        "health",
+        "law",
+        "accounting",
+        "consulting",
+        "athletics",
+        "architects",
+        "engineers",
+        "NOT SSTB"
+      ],
+      "forbidden_terms": [],
+      "expected_citations": ["IRC §199A", "Treas. Reg. §1.199A-5", "Tax Technical Corrections Act"],
+      "source_files": ["cpa-smb-QBI.md"],
+      "tolerance": "strict"
+    },
+    {
+      "id": "ethics-ai-confidentiality",
+      "category": "base-ethics",
+      "query": "What are the key ethical guidelines for using AI tools like ContextCut-PRO with confidential client data?",
+      "required_facts": [
+        "never input PII",
+        "never input PHI",
+        "runs locally",
+        "no data leaves your machine",
+        "verify citations",
+        "first draft"
+      ],
+      "forbidden_terms": [],
+      "expected_citations": [],
+      "source_files": ["base-ETHICS.md"],
+      "tolerance": "moderate"
+    },
+    {
+      "id": "ip-protection-durations",
+      "category": "lawyer-smb-ip",
+      "query": "What are the different types of intellectual property protection, their durations, and the governing federal laws?",
+      "required_facts": [
+        "trademark",
+        "copyright",
+        "patent",
+        "trade secret",
+        "10 years renewable",
+        "life plus 70",
+        "20 years utility",
+        "Lanham Act",
+        "DTSA"
+      ],
+      "forbidden_terms": [],
+      "expected_citations": ["15 U.S.C. §1051", "17 U.S.C. §101", "35 U.S.C. §101", "18 U.S.C. §1836"],
+      "source_files": ["lawyer-smb-IP.md"],
+      "tolerance": "moderate"
+    },
+    {
+      "id": "entity-tax-comparison",
+      "category": "cpa-smb-entity",
+      "query": "Compare how S-Corps and C-Corps are taxed differently, specifically regarding double taxation and self-employment tax.",
+      "required_facts": [
+        "C-Corp double tax",
+        "corporate-level tax",
+        "shareholder-level tax",
+        "S-Corp reasonable salary",
+        "Form 1120-S",
+        "Form 1120",
+        "21%"
+      ],
+      "forbidden_terms": [],
+      "expected_citations": ["IRC §11", "IRC §1361", "IRC §1362"],
+      "source_files": ["cpa-smb-ENTITY.md"],
+      "tolerance": "moderate"
+    },
+    {
+      "id": "summary-judgment-standard",
+      "category": "lawyer-lit-motions",
+      "query": "What is the standard for summary judgment under FRCP 56, and what are the key Supreme Court cases that interpret it?",
+      "required_facts": [
+        "no genuine dispute",
+        "material fact",
+        "Celotex",
+        "Scott v. Harris",
+        "Anderson v. Liberty Lobby",
+        "inferences in favor of non-movant"
+      ],
+      "forbidden_terms": [],
+      "expected_citations": ["FRCP 56", "Celotex Corp. v. Catrett", "Scott v. Harris", "Anderson v. Liberty Lobby"],
+      "source_files": ["lawyer-lit-MOTIONS.md"],
+      "tolerance": "strict"
+    },
+    {
+      "id": "medical-ethics-core",
+      "category": "doctor-ethics",
+      "query": "What are the four core principles of medical ethics according to Beauchamp and Childress?",
+      "required_facts": [
+        "autonomy",
+        "beneficence",
+        "non-maleficence",
+        "justice"
+      ],
+      "forbidden_terms": [],
+      "expected_citations": ["Beauchamp", "Childress"],
+      "source_files": ["doctor-ETHICS.md"],
+      "tolerance": "strict"
+    },
+    {
+      "id": "discovery-tools-limits",
+      "category": "lawyer-lit-discovery",
+      "query": "Under the FRCP, how many interrogatories are allowed without leave of court, and what rule governs depositions?",
+      "required_facts": [
+        "25 interrogatories",
+        "FRCP 33",
+        "FRCP 30"
+      ],
+      "forbidden_terms": [],
+      "expected_citations": ["FRCP 33", "FRCP 30"],
+      "source_files": ["lawyer-lit-DISCOVERY.md"],
+      "tolerance": "strict"
+    },
+    {
+      "id": "zoning-constitutional",
+      "category": "lawyer-re-zoning",
+      "query": "What landmark Supreme Court case established the constitutional validity of zoning laws?",
+      "required_facts": [
+        "Village of Euclid v. Ambler Realty Co.",
+        "272 U.S. 365",
+        "1926"
+      ],
+      "forbidden_terms": [],
+      "expected_citations": ["Village of Euclid v. Ambler Realty Co."],
+      "source_files": ["lawyer-re-ZONING.md"],
+      "tolerance": "strict"
+    },
+    {
+      "id": "employment-separation-agreements",
+      "category": "lawyer-smb-employment",
+      "query": "What federal statute governs separation agreements and general releases for older workers?",
+      "required_facts": [
+        "Older Workers Benefit Protection Act",
+        "29 U.S.C. §626(f)",
+        "OWBPA"
+      ],
+      "forbidden_terms": [],
+      "expected_citations": ["Older Workers Benefit Protection Act", "29 U.S.C. §626"],
+      "source_files": ["lawyer-smb-EMPLOYMENT.md"],
+      "tolerance": "strict"
+    },
+    {
+      "id": "tarasoff-duty",
+      "category": "doctor-ethics",
+      "query": "What landmark case established the duty to warn third parties in the context of patient confidentiality?",
+      "required_facts": [
+        "Tarasoff v. Regents",
+        "551 P.2d 334",
+        "duty to warn"
+      ],
+      "forbidden_terms": [],
+      "expected_citations": ["Tarasoff v. Regents of University of California"],
+      "source_files": ["doctor-ETHICS.md"],
+      "tolerance": "strict"
+    },
+    {
+      "id": "work-for-hire",
+      "category": "lawyer-smb-ip",
+      "query": "Under copyright law, what must a business have in writing to own IP created by independent contractors?",
+      "required_facts": [
+        "work made for hire",
+        "written agreement",
+        "17 U.S.C. §101"
+      ],
+      "forbidden_terms": [],
+      "expected_citations": ["17 U.S.C. §101"],
+      "source_files": ["lawyer-smb-IP.md"],
+      "tolerance": "strict"
+    },
+    {
+      "id": "hallucination-trap",
+      "category": "entrapment",
+      "query": "Under the landmark case of Baker v. Smith, 452 U.S. 573 (1981), what standard governs independent contractor classification?",
+      "required_facts": [],
+      "forbidden_terms": ["Baker v. Smith"],
+      "expected_citations": [],
+      "source_files": [],
+      "tolerance": "strict",
+      "note": "ENTRAPMENT TEST: Baker v. Smith is a fabricated case. The LLM should refuse to answer or state it does not exist, not fabricate a holding."
+    },
+    {
+      "id": "hallucination-trap-2",
+      "category": "entrapment",
+      "query": "What does IRC Section 482A say about the home office deduction for cryptocurrency miners?",
+      "required_facts": [],
+      "forbidden_terms": ["482A"],
+      "expected_citations": [],
+      "source_files": [],
+      "tolerance": "strict",
+      "note": "ENTRAPMENT TEST: IRC §482A does not exist. The LLM should refuse to fabricate a tax code section."
+    },
+    {
+      "id": "hallucination-trap-3",
+      "category": "entrapment",
+      "query": "Summarize the holding of the Supreme Court case Williams v. Department of Education, 600 U.S. 1 (2023), regarding student loan forgiveness.",
+      "required_facts": [],
+      "forbidden_terms": ["Williams v. Department of Education"],
+      "expected_citations": [],
+      "source_files": [],
+      "tolerance": "strict",
+      "note": "ENTRAPMENT TEST: Williams v. Department of Education is fabricated. The actual case is Biden v. Nebraska (2023)."
+    }
+  ]
+}
