@@ -358,7 +358,7 @@ def watch():
         def __init__(self):
             self._last = {}
 
-        def _debounce(self, path, secs=30) -> bool:
+        def _debounce(self, path, secs=5) -> bool:
             now = time.time()
             if now - self._last.get(path, 0) < secs:
                 return False
@@ -374,6 +374,19 @@ def watch():
             p = Path(event.src_path)
             if should_ingest(p) and self._debounce(event.src_path):
                 ingest_file(p)
+
+        def on_moved(self, event):
+            p = Path(event.dest_path)
+            if should_ingest(p) and self._debounce(event.dest_path):
+                ingest_file(p)
+
+        def on_any_event(self, event):
+            if event.event_type in ('created', 'modified', 'moved'):
+                return
+            if event.event_type == 'closed' and not event.is_directory:
+                p = Path(event.src_path)
+                if should_ingest(p) and self._debounce(event.src_path + '_closed'):
+                    ingest_file(p)
 
         def on_deleted(self, event):
             p = Path(event.src_path)
