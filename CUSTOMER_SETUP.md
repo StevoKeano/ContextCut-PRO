@@ -24,7 +24,7 @@ You'll be prompted for your license key and Voyage API key during setup.
 
 - Python 3.10+
 - [Voyage AI API key](https://dash.voyageai.com)
-- [Qdrant](https://qdrant.tech) running locally
+- [Qdrant](https://qdrant.tech) (auto-installed by the installer if not found)
 - Ollama or any OpenAI-compatible LLM endpoint
 - Your PRO license key (provided at purchase)
 

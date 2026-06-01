@@ -43,7 +43,7 @@ Most RAG implementations stuff your entire knowledge base into every prompt. Con
 
 - Python 3.10+
 - [Voyage AI API key](https://dash.voyageai.com) (free tier works)
-- [Qdrant](https://qdrant.tech) running locally or on your LAN
+- [Qdrant](https://qdrant.tech) (auto-installed by the installer if not found)
 - Ollama or any OpenAI-compatible LLM endpoint
 - Valid PRO license key (delivered via email at purchase)
 

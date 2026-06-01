@@ -301,7 +301,7 @@ body{background:#0F172A;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',
       <h3>&#9654; Before you start &mdash; Prerequisites</h3>
       <ul>
         <li><b>Ollama</b> &mdash; Install from <a href="https://ollama.com" target="_blank">ollama.com</a> &nbsp;|&nbsp; Pull a model: <code>ollama pull nomic-embed-text</code> &nbsp;|&nbsp; Requires 8 GB+ RAM</li>
-        <li><b>Qdrant</b> &mdash; Must be running (install <a href="https://docker.com" target="_blank">Docker Desktop</a> first, then the installer will start Qdrant for you)</li>
+        <li><b>Qdrant</b> &mdash; Auto-installed by the installer (or install <a href="https://docker.com" target="_blank">Docker Desktop</a> for Docker mode)</li>
         <li><b>Python 3</b> &mdash; Pre-installed on macOS/Linux. The installer creates a virtual environment.</li>
         <li><b>Storage</b> &mdash; ~500 MB for the app + your documents. Qdrant storage grows with your knowledge base.</li>
       </ul>
