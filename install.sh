@@ -348,7 +348,26 @@ for f in $STARTER_FILES; do
   curl -sf "$REPO/starterKnowledgeFiles/$f" -o "$STARTER_DIR/$f"
 done
 echo "  Starter knowledge files: $(echo $STARTER_FILES | wc -w) files in starterKnowledgeFiles/"
-echo "  (Copy the ones you need into knowledge/)"
+# Copy selected categories to knowledge base
+if [ -n "$STARTER_CATEGORIES" ]; then
+  KB_DIR="${KB_DIR:-$INSTALL_DIR/knowledge}"
+  echo "  Copying selected starter files to $KB_DIR ..."
+  OLD_IFS="$IFS"; IFS=','
+  for cat in $STARTER_CATEGORIES; do
+    count=0
+    if [ "$cat" = "customer_setup" ]; then
+      cp "$STARTER_DIR/customer_setup.md" "$KB_DIR/" 2>/dev/null && count=1
+    else
+      for f in "$STARTER_DIR/$cat-"*; do
+        if [ -f "$f" ]; then
+          cp "$f" "$KB_DIR/" 2>/dev/null && count=$((count+1))
+        fi
+      done
+    fi
+    [ $count -gt 0 ] && echo "    $cat: $count files copied"
+  done
+  IFS="$OLD_IFS"
+fi
 echo ""
 
 # ── Privacy: disable Ollama telemetry ────────────────────────────────────────

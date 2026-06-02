@@ -23,6 +23,46 @@ After editing files:
    scp {filename} steve@192.168.137.252:~/contextcut/{filename}
    ```
 
+## Ingestion (ingest.py)
+
+Qdrant knowledge base ingestion tool. Ingest files from `KB_DIR` (default `~/contextcut/knowledge`).
+
+| Mode | Command | Behavior |
+|---|---|---|
+| One-shot | `python3 ingest.py` | Ingest all files from KB_DIR |
+| Watch | `python3 ingest.py --watch` | `ingest_all()` then watch for changes |
+| Clear | `python3 ingest.py --clear` | Delete the Qdrant collection |
+
+### Watcher event handling
+
+The `Handler` class in `watch()` handles these events:
+- `on_created` — new files
+- `on_modified` — edits
+- `on_moved` — bulk moves into KB_DIR (was missing — the root cause of missed files)
+- `on_any_event` — catch-all for `closed` events (some editors use temp-file + rename)
+- `on_deleted` — removes all chunks with matching filename from Qdrant
+
+Debounce: **5s** (was 30s — reduced for rapid bulk ops). Observer runs with `recursive=False`.
+
+### Deploy after editing ingest.py
+
+1. **Copy to user's repo:**
+   ```bash
+   cp /mnt/e/dev/opencode/ContextCut-PRO/ingest.py /mnt/e/Dev/contextcut-pro/ingest.py
+   ```
+
+2. **SCP to proxy** (from Windows cmd at `E:\Dev\contextcut-pro`):
+   ```
+   scp ingest.py steve@192.168.137.252:~/contextcut/ingest.py
+   ```
+
+3. **Restart watcher on proxy**:
+   ```bash
+   kill $(pgrep -f "ingest.py --watch")
+   python3 ~/contextcut/ingest.py --clear
+   python3 ~/contextcut/ingest.py --watch &
+   ```
+
 ## Factuality Test Suite
 
 Three files implement an automated hallucination/accuracy test system:

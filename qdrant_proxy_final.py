@@ -877,15 +877,29 @@ def qdrant_context(query: str) -> tuple[str, list[dict]]:
         return "", []
 
 # ── Context injection ─────────────────────────────────────────────────────────
+SYSTEM_BASE = (
+    "You are a helpful AI assistant. "
+    "If asked about a case, statute, regulation, or other authority you are "
+    "not certain exists, state that you cannot confirm it rather than fabricating details."
+)
+
 def inject_context(body: dict, context: str) -> dict:
-    if not context:
-        return body
-    prefix = "## Relevant context (semantic search):\n\n" + context + "\n\n---\n\n"
     messages = body.get("messages", [])
-    if messages and messages[0].get("role") == "system":
-        messages[0]["content"] = prefix + messages[0]["content"]
+    has_system = bool(messages and messages[0].get("role") == "system")
+    ctx_block = ""
+    if context:
+        ctx_block = "## Relevant context (semantic search):\n\n" + context + "\n\n---"
+    if has_system:
+        existing = messages[0]["content"]
+        parts = [existing, SYSTEM_BASE]
+        if ctx_block:
+            parts.append(ctx_block)
+        messages[0]["content"] = "\n\n".join(parts)
     else:
-        messages.insert(0, {"role": "system", "content": prefix})
+        parts = [SYSTEM_BASE]
+        if ctx_block:
+            parts.append(ctx_block)
+        messages.insert(0, {"role": "system", "content": "\n\n".join(parts)})
     body["messages"] = messages
     return body
 
