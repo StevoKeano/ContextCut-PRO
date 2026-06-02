@@ -237,13 +237,13 @@ def is_file_current(path: Path) -> bool:
     ch = file_content_hash(path)
     result, _ = qc.scroll(
         collection_name=COLLECTION,
-        filter=Filter(
+        scroll_filter=Filter(
             must=[
                 FieldCondition(key="filename", match=MatchValue(value=path.name)),
                 FieldCondition(key="content_hash", match=MatchValue(value=ch)),
             ]
         ),
-        limit=1, with_vectors=False, with_payload=False
+        limit=1
     )
     return len(result) > 0
 
