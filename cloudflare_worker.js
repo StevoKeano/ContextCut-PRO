@@ -275,7 +275,16 @@ body{background:#0F172A;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',
 .pre a{color:#0EA5E9;text-decoration:none}
 .foot{font-size:13px;color:#64748B;text-align:center}
 .foot a{color:#0EA5E9;text-decoration:none}
-@media(max-width:560px){.form-grid{grid-template-columns:1fr}}
+.starter-sec{border:1px solid #334155;border-radius:8px;padding:16px 20px;margin-bottom:24px}
+.starter-sec h3{font-size:13px;font-weight:700;color:#0EA5E9;margin-bottom:10px;text-transform:uppercase;letter-spacing:1px}
+.starter-grid{display:grid;grid-template-columns:1fr 1fr;gap:6px}
+.starter-cb{display:flex;align-items:center;gap:8px;padding:6px 10px;border-radius:4px;cursor:pointer;transition:background .1s;font-size:13px;color:#CBD5E1;user-select:none}
+.starter-cb:hover{background:#1E293B}
+.starter-cb input{accent-color:#0EA5E9;width:15px;height:15px;cursor:pointer}
+.starter-cb input:disabled{opacity:.6;cursor:default}
+.starter-cb .badge{font-size:9px;color:#64748B;text-transform:uppercase;letter-spacing:.5px}
+.starter-hint{font-size:11px;color:#475569;margin-top:8px}
+@media(max-width:560px){.form-grid{grid-template-columns:1fr}.starter-grid{grid-template-columns:1fr}}
 </style>
 </head>
 <body>
@@ -355,6 +364,26 @@ body{background:#0F172A;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',
         <input type="text" id="f-score" value="0.50">
         <span class="hint">0.0 – 1.0 &nbsp;|&nbsp; Lower = more results</span>
       </div>
+    </div>
+
+    <div class="starter-sec">
+      <h3>Starter Knowledge Categories</h3>
+      <div class="starter-grid">
+        <label class="starter-cb"><input type="checkbox" class="starter-chk" value="base" checked disabled><span>Base</span> <span class="badge">required</span></label>
+        <label class="starter-cb"><input type="checkbox" class="starter-chk" value="advisor"><span>Advisor</span> <span class="badge">financial</span></label>
+        <label class="starter-cb"><input type="checkbox" class="starter-chk" value="architect"><span>Architect</span></label>
+        <label class="starter-cb"><input type="checkbox" class="starter-chk" value="consultant"><span>Consultant</span></label>
+        <label class="starter-cb"><input type="checkbox" class="starter-chk" value="corp"><span>CPA &mdash; Corp</span></label>
+        <label class="starter-cb"><input type="checkbox" class="starter-chk" value="personal"><span>CPA &mdash; Personal</span></label>
+        <label class="starter-cb"><input type="checkbox" class="starter-chk" value="smb"><span>CPA &mdash; SMB</span></label>
+        <label class="starter-cb"><input type="checkbox" class="starter-chk" value="customer_setup"><span>Customer Setup</span></label>
+        <label class="starter-cb"><input type="checkbox" class="starter-chk" value="doctor"><span>Doctor</span></label>
+        <label class="starter-cb"><input type="checkbox" class="starter-chk" value="lit"><span>Lawyer &mdash; Litigation</span></label>
+        <label class="starter-cb"><input type="checkbox" class="starter-chk" value="re"><span>Lawyer &mdash; Real Estate</span></label>
+        <label class="starter-cb"><input type="checkbox" class="starter-chk" value="realtor"><span>Realtor</span></label>
+        <label class="starter-cb"><input type="checkbox" class="starter-chk" value="tech"><span>Tech</span></label>
+      </div>
+      <div class="starter-hint">Selected categories will be pre-loaded into your knowledge base during installation.</div>
     </div>
 
     <button class="gen-btn" id="genBtn" data-install-url="${installUrl}">Generate Install Command</button>
@@ -467,6 +496,7 @@ function generate(){
   var dport=document.getElementById('f-dash-port').value||'18787';
   var ctx=document.getElementById('f-ctx').value||'8192';
   var score=document.getElementById('f-score').value||'0.50';
+  var cats=[].map.call(document.querySelectorAll('.starter-chk:checked'),function(cb){return cb.value}).join(',');
   var lines=[
     'curl -fsSL "'+esc(installUrl)+'" -o /tmp/cc-install.sh \\\\',
     '  && VOYAGE_KEY="'+esc(voyage)+'" \\\\',
@@ -479,6 +509,7 @@ function generate(){
     '  DASH_PORT="'+esc(dport)+'" \\\\',
     '  CTX_LIMIT="'+esc(ctx)+'" \\\\',
     '  MIN_SCORE="'+esc(score)+'" \\\\',
+    '  STARTER_CATEGORIES="'+esc(cats)+'" \\\\',
     '  bash /tmp/cc-install.sh \\\\',
     '  && rm -f /tmp/cc-install.sh'
   ];
