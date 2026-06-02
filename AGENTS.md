@@ -113,6 +113,38 @@ python3 run_tests.py --timeout 600
 
 The test runner connects to the proxy's `/v1/chat/completions` endpoint, posts each query (non-streaming), and validates the response against **required_facts**, **forbidden_terms**, and **expected_citations**. Three entrapment tests use fabricated cases/statutes to detect hallucination. Each fact re-check uses fuzzy matching (case-insensitive, word-level, and exact phrase matching).
 
+## Free Version (cc-free.py)
+
+| File | Purpose |
+|---|---|
+| `cc-free.py` | Standalone single-file free version — FAISS, SQLite, Ollama, DuckDuckGo, 50-file limit, no license |
+| `install-free.sh` | Install script — downloads cc-free.py, installs deps, sets up systemd service |
+| `cloudflare_worker_free.js` | Cloudflare Worker landing page — serves config form + install command |
+
+**cc-free.py** uses FAISS (no Qdrant server needed), SQLite sessions (same schema as PRO), and DuckDuckGo web search (with HTML fallback, no API key). Hard 50-file limit with "Upgrade to PRO" prompt. Listens on `127.0.0.1:18788` by default (configurable via `CC_PORT`).
+
+### Deploy after editing cc-free files
+
+1. **Copy to user's repo:**
+   ```bash
+   cp /mnt/e/dev/opencode/ContextCut-PRO/{filename} /mnt/e/Dev/contextcut-pro/{filename}
+   ```
+
+2. **SCP cc-free.py to proxy** (from Windows cmd at `E:\Dev\contextcut-pro`):
+   ```
+   scp cc-free.py steve@192.168.137.252:~/contextcut/cc-free.py
+   ```
+
+3. **Deploy Cloudflare Worker** (from WSL):
+   ```bash
+   cd /mnt/e/Dev/contextcut-pro && npx wrangler deploy cloudflare_worker_free.js
+   ```
+
+4. **Install on Ubuntu** (SSH into proxy):
+   ```bash
+   curl -sSf https://raw.githubusercontent.com/anomalco/contextcut-pro/main/install-free.sh | bash -s -- --host 192.168.137.1 --port 11434 --chat-model qwen2.5:7b
+   ```
+
 ## Constraints
 - NEVER git commit/push from own directory.
 - NEVER touch files outside `/mnt/e/dev/opencode/ContextCut-PRO` without asking.

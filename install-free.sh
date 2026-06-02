@@ -1,0 +1,122 @@
+#!/usr/bin/env bash
+# ContextCut-Free installer — local RAG chat, one file, no Docker, no license.
+set -euo pipefail
+
+REPO_BASE="${REPO_BASE:-https://raw.githubusercontent.com/anomalco/contextcut-pro/main}"
+INSTALL_DIR="${CC_INSTALL_DIR:-$HOME/.contextcut-free}"
+KB_DIR="${CC_KB_DIR:-$HOME/contextcut-free/knowledge}"
+OLLAMA_HOST="${CC_OLLAMA_HOST:-localhost}"
+OLLAMA_PORT="${CC_OLLAMA_PORT:-11434}"
+CHAT_MODEL="${CC_CHAT_MODEL:-qwen2.5:7b}"
+EMBED_MODEL="${CC_EMBED_MODEL:-nomic-embed-text}"
+CTX_LIMIT="${CC_CTX_LIMIT:-32768}"
+CC_PORT="${CC_PORT:-18788}"
+
+PYTHON=$(command -v python3 || command -v python || true)
+
+RED='\033[0;31m'; GREEN='\033[0;32m'; CYAN='\033[0;36m'; NC='\033[0m'
+info() { echo -e "${CYAN}==>${NC} $1"; }
+ok()   { echo -e "${GREEN}  OK${NC} $1"; }
+err()  { echo -e "${RED}  FAIL${NC} $1"; }
+
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --host) OLLAMA_HOST="$2"; shift 2 ;;
+    --port) OLLAMA_PORT="$2"; shift 2 ;;
+    --chat-model) CHAT_MODEL="$2"; shift 2 ;;
+    --embed-model) EMBED_MODEL="$2"; shift 2 ;;
+    --ctx-limit) CTX_LIMIT="$2"; shift 2 ;;
+    --cc-port) CC_PORT="$2"; shift 2 ;;
+    --no-systemd) NO_SYSTEMD=true; shift ;;
+    --help|-h)
+      echo "Usage: bash install-free.sh [options]"
+      echo "  --host <host>       Ollama host (default: $OLLAMA_HOST)"
+      echo "  --port <port>       Ollama port (default: $OLLAMA_PORT)"
+      echo "  --chat-model <m>    Chat model (default: $CHAT_MODEL)"
+      echo "  --embed-model <m>   Embed model (default: $EMBED_MODEL)"
+      echo "  --ctx-limit <n>     Context limit (default: $CTX_LIMIT)"
+      echo "  --cc-port <n>       Dashboard port (default: $CC_PORT)"
+      echo "  --no-systemd        Skip systemd service setup"
+      exit 0 ;;
+    *) err "Unknown: $1"; exit 1 ;;
+  esac
+done
+
+if [ -z "$PYTHON" ]; then err "Python 3 not found (install python3)"; exit 1; fi
+PYVER=$($PYTHON --version 2>&1 | grep -oP '\d+\.\d+' || echo "0")
+if [ "${PYVER%%.*}" -lt 3 ]; then err "Python 3+ required, found $PYVER"; exit 1; fi
+if ! command -v curl &>/dev/null; then err "curl not found"; exit 1; fi
+
+echo ""
+info "ContextCut-Free Installer"
+info "Target:   $INSTALL_DIR"
+info "KB dir:   $KB_DIR"
+info "Ollama:   ${OLLAMA_HOST}:${OLLAMA_PORT}"
+info "Chat:     ${CHAT_MODEL}"
+info "Embed:    ${EMBED_MODEL}"
+info "Context:  ${CTX_LIMIT}"
+info "Port:     ${CC_PORT}"
+echo ""
+
+mkdir -p "$INSTALL_DIR" "$KB_DIR"
+
+info "Downloading cc-free.py..."
+curl -sSf "$REPO_BASE/cc-free.py" -o "$INSTALL_DIR/cc-free.py"
+chmod +x "$INSTALL_DIR/cc-free.py"
+ok "cc-free.py saved"
+
+cat > "$INSTALL_DIR/env" <<ENVEOF
+OLLAMA_HOST=$OLLAMA_HOST
+OLLAMA_PORT=$OLLAMA_PORT
+CC_CHAT_MODEL=$CHAT_MODEL
+CC_EMBED_MODEL=$EMBED_MODEL
+CC_CTX_LIMIT=$CTX_LIMIT
+CC_PORT=$CC_PORT
+CC_DATA_DIR=$INSTALL_DIR
+CC_KB_DIR=$KB_DIR
+ENVEOF
+ok "Config written to $INSTALL_DIR/env"
+
+info "Installing Python dependencies..."
+$PYTHON -m pip install --quiet --upgrade pip 2>/dev/null || true
+$PYTHON -m pip install --quiet faiss-cpu numpy 2>/dev/null && ok "faiss-cpu + numpy" || warn "faiss install failed"
+$PYTHON -m pip install --quiet duckduckgo_search 2>/dev/null && ok "duckduckgo_search" || true
+
+if command -v systemctl &>/dev/null && [ "${NO_SYSTEMD:-false}" = false ]; then
+  info "Setting up systemd service..."
+  START_CMD="$PYTHON $INSTALL_DIR/cc-free.py"
+  sudo tee /etc/systemd/system/contextcut-free.service >/dev/null <<SERVICEEOF
+[Unit]
+Description=ContextCut-Free — local RAG chat
+After=network-online.target
+
+[Service]
+Type=simple
+User=$USER
+ExecStart=$START_CMD
+EnvironmentFile=$INSTALL_DIR/env
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=default.target
+SERVICEEOF
+  sudo systemctl daemon-reload
+  sudo systemctl enable contextcut-free
+  sudo systemctl restart contextcut-free
+  ok "Service contextcut-free started"
+  LOG_CMD="journalctl -u contextcut-free -f"
+else
+  LOG_CMD="(run manually: $PYTHON $INSTALL_DIR/cc-free.py &)"
+  warn "systemd not available — start in background:"
+  warn "  $LOG_CMD"
+fi
+
+echo ""
+ok "ContextCut-Free installed!"
+info "Dashboard: http://localhost:${CC_PORT}"
+info "Config:    $INSTALL_DIR/env"
+info "KB dir:    $KB_DIR"
+info "Logs:      ${LOG_CMD}"
+echo ""
+info "Upgrade to PRO: https://api.contextcut-pro.com"
