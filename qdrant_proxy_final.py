@@ -2590,6 +2590,8 @@ function openFileBrowser() {{
           '<div style="display:flex;justify-content:space-between;align-items:center;padding:16px 20px;border-bottom:1px solid var(--border)">' +
             '<div><strong style="font-size:14px">📂 Knowledge Files</strong><div style="font-size:10px;color:var(--muted);margin-top:2px">'+esc(kbd)+'</div></div>' +
             '<div style="display:flex;gap:8px;align-items:center">' +
+              '<button onclick="document.getElementById(\'fbFileInput\').click()" style="background:none;border:none;font-size:15px;cursor:pointer;line-height:1" title="Attach file to knowledge base">📎</button>' +
+              '<input type="file" id="fbFileInput" accept=".md,.txt,.py,.js,.ts,.html,.css,.csv,.json,.xml,.yaml,.yml,.go,.rs,.rb,.java,.c,.cpp,.h,.sh,.sql,.log,.pdf,.docx,.xlsx" style="display:none" onchange="fbAttachFile(this)" />' +
               '<button onclick="fbUploadFile()" style="background:var(--accent);color:#000;border:none;border-radius:4px;padding:4px 12px;font-size:11px;cursor:pointer;font-family:inherit;font-weight:600">+ New</button>' +
               '<button id="fbCloseBtn" style="background:none;border:none;color:var(--muted);font-size:18px;cursor:pointer">&times;</button>' +
             '</div>' +
@@ -2706,6 +2708,56 @@ function fbDeleteFile() {{
   }});
 }}
 
+function fbAttachFile(input) {{
+  const file = input.files[0];
+  if (!file) return;
+  if (file.size > 10 * 1024 * 1024) {{ alert('File too large (max 10MB): '+file.name); input.value = ''; return; }}
+  const ext = '.' + file.name.split('.').pop().toLowerCase();
+  const allowed = {{'.md':1,'.txt':1,'.py':1,'.js':1,'.ts':1,'.html':1,'.css':1,'.csv':1,'.json':1,'.xml':1,'.yaml':1,'.yml':1,'.go':1,'.rs':1,'.rb':1,'.java':1,'.c':1,'.cpp':1,'.h':1,'.sh':1,'.sql':1,'.log':1,'.pdf':1,'.docx':1,'.xlsx':1}};
+  if (!allowed[ext]) {{ alert('File type not supported: '+ext); input.value = ''; return; }}
+  document.getElementById('fbMsg').textContent = 'Uploading '+file.name+'...';
+  const reader = new FileReader();
+  reader.onload = function(e) {{
+    const content_b64 = e.target.result.split(',')[1];
+    fetch('/api/knowledge/upload', {{
+      method: 'POST',
+      headers: {{'Content-Type':'application/json'}},
+      body: JSON.stringify({{name: file.name, content_b64: content_b64}})
+    }})
+    .then(r => r.json())
+    .then(d => {{
+      if (!d.ok) throw new Error(d.error||'upload failed');
+      return fetch('/api/embed/reingest', {{method: 'POST'}});
+    }})
+    .then(r => r.json())
+    .then(dd => {{
+      if (!dd.ok) throw new Error(dd.error||'re-ingest failed');
+      document.getElementById('fbMsg').innerHTML = '<span style="color:#4ade80">'+esc(file.name)+' added and ingested</span>';
+      fbRefreshList();
+    }})
+    .catch(err => {{
+      document.getElementById('fbMsg').innerHTML = '<span style="color:#f87171">Error: '+esc(err.message)+'</span>';
+    }});
+  }};
+  reader.readAsDataURL(file);
+  input.value = '';
+}}
+
+function fbRefreshList() {{
+  fetch('/api/knowledge/files')
+    .then(r => r.json())
+    .then(data => {{
+      const container = document.getElementById('fbFileList');
+      if (!container) return;
+      container.innerHTML = data.files.map(f =>
+        '<div class="fb-file" data-path="'+escAttr(f.path)+'" onclick="fbOpenFile(this)" style="padding:6px 10px;cursor:pointer;border-radius:4px;display:flex;justify-content:space-between">' +
+          '<span>'+esc(f.name)+'</span>' +
+          '<span style="color:var(--muted);font-size:10px">'+(f.size||0)+'B</span>' +
+        '</div>'
+      ).join('') || '<div style="color:var(--muted);padding:20px;text-align:center">No .md files found</div>';
+    }});
+}}
+
 function fbUploadFile() {{
   const name = prompt('New filename (e.g. notes.md, data.csv):', '');
   if (!name) return;
@@ -2721,8 +2773,14 @@ function fbUploadFile() {{
   .then(r => r.json())
   .then(d => {{
     if (d.ok) {{
-      closeFB(document.getElementById('fbOverlay'));
-      openFileBrowser();
+      fbRefreshList();
+      const items = document.querySelectorAll('.fb-file');
+      for (let i = 0; i < items.length; i++) {{
+        if (items[i].dataset.path === d.path) {{
+          fbOpenFile(items[i]);
+          break;
+        }}
+      }}
     }} else {{
       alert('Upload failed: '+(d.error||''));
     }}
