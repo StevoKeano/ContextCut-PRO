@@ -237,10 +237,10 @@ def is_file_current(path: Path) -> bool:
     ch = file_content_hash(path)
     result, _ = qc.scroll(
         collection_name=COLLECTION,
-        filter=models.Filter(
+        filter=Filter(
             must=[
-                models.FieldCondition(key="filename", match=models.MatchValue(value=path.name)),
-                models.FieldCondition(key="content_hash", match=models.MatchValue(value=ch)),
+                FieldCondition(key="filename", match=MatchValue(value=path.name)),
+                FieldCondition(key="content_hash", match=MatchValue(value=ch)),
             ]
         ),
         limit=1, with_vectors=False, with_payload=False
