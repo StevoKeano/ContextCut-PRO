@@ -41,7 +41,7 @@ if [ -n "$CONTEXTCUT_LICENSE_KEY" ]; then
     KB_DIR="${KB_DIR:-$INSTALL_DIR/knowledge}"
     PROXY_PORT="${PROXY_PORT:-18788}"
     DASH_PORT="${DASH_PORT:-18787}"
-    CTX_LIMIT="${CTX_LIMIT:-8192}"
+    CTX_LIMIT="${CTX_LIMIT:-32768}"
     MIN_SCORE="${MIN_SCORE:-0.50}"
   else
     AUTO_INSTALL=true
@@ -92,8 +92,8 @@ if ! $NONINTERACTIVE; then
     read -p "  Dashboard port [18787]: " DASH_PORT
     DASH_PORT="${DASH_PORT:-18787}"
 
-    read -p "  Model context limit [8192]: " CTX_LIMIT
-    CTX_LIMIT="${CTX_LIMIT:-8192}"
+    read -p "  Model context limit [32768]: " CTX_LIMIT
+    CTX_LIMIT="${CTX_LIMIT:-32768}"
 
     read -p "  Minimum relevance score 0.0-1.0 [0.50]: " MIN_SCORE
     MIN_SCORE="${MIN_SCORE:-0.50}"
@@ -159,8 +159,8 @@ if ! $NONINTERACTIVE; then
     read -p "  Dashboard port [18787]: " DASH_PORT
     DASH_PORT="${DASH_PORT:-18787}"
 
-    read -p "  Model context limit [8192]: " CTX_LIMIT
-    CTX_LIMIT="${CTX_LIMIT:-8192}"
+    read -p "  Model context limit [32768]: " CTX_LIMIT
+    CTX_LIMIT="${CTX_LIMIT:-32768}"
 
     read -p "  Minimum relevance score 0.0-1.0 [0.50]: " MIN_SCORE
     MIN_SCORE="${MIN_SCORE:-0.50}"
@@ -702,7 +702,7 @@ echo "  If using Ollama on Windows, run an Admin cmd (one time) to disable telem
 echo "    setx OLLAMA_NO_CLOUD true /M"
 echo "  Then close all Ollama windows and restart Ollama — it reads env vars only at"
 echo '  startup. On Linux, add `export OLLAMA_NO_CLOUD=true` to your Ollama service.'
-echo "  Performance: OLLAMA_CONTEXT_LENGTH=8192 reduces KV cache from 5GB to ~1.25GB"
+echo "  Performance: OLLAMA_CONTEXT_LENGTH=32768 reduces KV cache from 5GB to ~1.25GB"
 echo "  on a 14B q8_0 model, preventing GPU VRAM eviction."
 echo ""
 echo "  ── Reboot-proof (auto-start on boot) ──"

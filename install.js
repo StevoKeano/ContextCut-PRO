@@ -331,7 +331,7 @@ body{background:#0F172A;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',
       </div>
       <div class="fg">
         <label>Context Limit</label>
-        <input type="text" id="f-ctx" value="8192">
+        <input type="text" id="f-ctx" value="32768">
         <span class="hint">Max tokens per request</span>
       </div>
       <div class="fg">
@@ -413,7 +413,7 @@ function generate(){
   var qport=document.getElementById('f-qdrant-port').value||'6333';
   var pport=document.getElementById('f-proxy-port').value||'18788';
   var dport=document.getElementById('f-dash-port').value||'18787';
-  var ctx=document.getElementById('f-ctx').value||'8192';
+  var ctx=document.getElementById('f-ctx').value||'32768';
   var score=document.getElementById('f-score').value||'0.20';
   var lines=[
     'curl -fsSL "'+esc(installUrl)+'" -o /tmp/cc-install.sh \\\\',

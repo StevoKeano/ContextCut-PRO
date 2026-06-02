@@ -12,7 +12,7 @@ Configuration via environment variables (all optional — defaults shown):
   CONTEXTCUT_COLLECTION      contextcut               Qdrant collection name
   CONTEXTCUT_PROXY_PORT      18788                    Proxy listen port
   CONTEXTCUT_DASHBOARD_PORT  18787                    Dashboard listen port
-  CONTEXTCUT_CTX_LIMIT       8192                     Model context window size
+  CONTEXTCUT_CTX_LIMIT       32768                    Model context window size
   CONTEXTCUT_TOP_K           5                        Max Qdrant chunks to retrieve
   CONTEXTCUT_MIN_SCORE       0.30                     Minimum relevance score (0.0-1.0)
   CONTEXTCUT_MODEL                                    Default model name for chat tab
@@ -43,7 +43,7 @@ QDRANT_PORT    = int(os.getenv("CONTEXTCUT_QDRANT_PORT", "6333"))
 COLLECTION     = os.getenv("CONTEXTCUT_COLLECTION",      "contextcut")
 LISTEN_PORT    = int(os.getenv("CONTEXTCUT_PROXY_PORT",     "18788"))
 DASHBOARD_PORT = int(os.getenv("CONTEXTCUT_DASHBOARD_PORT", "18787"))
-CTX_LIMIT      = int(os.getenv("CONTEXTCUT_CTX_LIMIT",   "8192"))
+CTX_LIMIT      = int(os.getenv("CONTEXTCUT_CTX_LIMIT",   "32768"))
 TOP_K          = int(os.getenv("CONTEXTCUT_TOP_K",       "5"))
 MIN_SCORE      = float(os.getenv("CONTEXTCUT_MIN_SCORE", "0.30"))
 DEFAULT_MODEL  = os.getenv("CONTEXTCUT_MODEL",           "")

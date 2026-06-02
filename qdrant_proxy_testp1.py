@@ -12,7 +12,7 @@ Configuration via environment variables (all optional — defaults shown):
   CONTEXTCUT_COLLECTION      contextcut               Qdrant collection name
   CONTEXTCUT_PROXY_PORT      18788                    Proxy listen port
   CONTEXTCUT_DASHBOARD_PORT  18787                    Dashboard listen port
-  CONTEXTCUT_CTX_LIMIT       8192                     Model context window size
+  CONTEXTCUT_CTX_LIMIT       32768                    Model context window size
   CONTEXTCUT_TOP_K           5                        Max Qdrant chunks to retrieve
   CONTEXTCUT_MIN_SCORE       0.30                     Minimum relevance score (0.0-1.0)
   CONTEXTCUT_MODEL                                    Default model name for chat tab
@@ -152,7 +152,7 @@ COLLECTION     = os.getenv("CONTEXTCUT_COLLECTION",      "contextcut")
 KB_DIR         = Path(os.getenv("CONTEXTCUT_KB_DIR", str(Path.home() / "contextcut" / "knowledge"))).expanduser()
 LISTEN_PORT    = int(os.getenv("CONTEXTCUT_PROXY_PORT",     "18788"))
 DASHBOARD_PORT = int(os.getenv("CONTEXTCUT_DASHBOARD_PORT", "18787"))
-CTX_LIMIT      = int(os.getenv("CONTEXTCUT_CTX_LIMIT",   "8192"))
+CTX_LIMIT      = int(os.getenv("CONTEXTCUT_CTX_LIMIT",   "32768"))
 TOP_K          = int(os.getenv("CONTEXTCUT_TOP_K",       "5"))
 MIN_SCORE      = float(os.getenv("CONTEXTCUT_MIN_SCORE", "0.50"))
 DEFAULT_MODEL  = os.getenv("CONTEXTCUT_MODEL",           "")
@@ -1572,7 +1572,7 @@ tr.cloud-off td{{background:#0a1a2e!important;color:#22c55e!important;border-top
             <span class="param-val" id="minscoreVal">{MIN_SCORE}</span>
           </div>
           <div style="font-size:9px;color:var(--muted);margin-top:6px;border-top:1px solid var(--border);padding-top:6px">
-            ⚡ 32K context = 5GB VRAM for KV cache. If responses take &gt;5s, your GPU is swapping models — set <code>OLLAMA_CONTEXT_LENGTH=8192</code> on the Ollama host to fit both embed &amp; chat models in VRAM.
+            ⚡ 128K context = 5GB VRAM for KV cache. If responses take &gt;5s, your GPU is swapping models — set <code>OLLAMA_CONTEXT_LENGTH=32768</code> on the Ollama host to fit both embed &amp; chat models in VRAM.
           </div>
         </div>
       </div>
@@ -2784,8 +2784,8 @@ class DashboardHandler(_SuppressBrokenPipe, BaseHTTPRequestHandler):
                 total_before = total_after = 0
                 for i, (q, b, a, hits) in enumerate(demo_queries):
                     ts = datetime.fromtimestamp(now - (len(demo_queries) - i) * 120).strftime("%H:%M:%S")
-                    pct = round(a / 8192 * 100, 1)
-                    _log.appendleft({"ts": ts, "query": q, "tokens_before": b, "tokens_after": a, "ctx_limit": 8192, "pct": pct, "hits": hits})
+                    pct = round(a / 32768 * 100, 1)
+                    _log.appendleft({"ts": ts, "query": q, "tokens_before": b, "tokens_after": a, "ctx_limit": 32768, "pct": pct, "hits": hits})
                     total_before += b
                     total_after += a
                 _stats = {
