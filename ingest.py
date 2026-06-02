@@ -230,6 +230,23 @@ def extract_text(path: Path) -> str:
     else:
         return path.read_text(encoding="utf-8", errors="ignore").strip()
 
+def file_content_hash(path: Path) -> str:
+    return hashlib.md5(path.read_bytes()).hexdigest()
+
+def is_file_current(path: Path) -> bool:
+    ch = file_content_hash(path)
+    result, _ = qc.scroll(
+        collection_name=COLLECTION,
+        filter=models.Filter(
+            must=[
+                models.FieldCondition(key="filename", match=models.MatchValue(value=path.name)),
+                models.FieldCondition(key="content_hash", match=models.MatchValue(value=ch)),
+            ]
+        ),
+        limit=1, with_vectors=False, with_payload=False
+    )
+    return len(result) > 0
+
 def ingest_file(path: Path):
     if path.name in processing_queue:
         return
@@ -258,6 +275,7 @@ def ingest_file(path: Path):
             result.embeddings = result.embeddings[:n]
         
         fid = file_id(path)
+        ch = file_content_hash(path)
         points = []
         for i, chunk_text_str in enumerate(clean_chunks):
             chunk_id = int(hashlib.md5((fid + str(i)).encode()).hexdigest()[:8], 16)
@@ -269,6 +287,7 @@ def ingest_file(path: Path):
                     "path": str(path),
                     "chunk_index": i,
                     "total_chunks": len(clean_chunks),
+                    "content_hash": ch,
                     "text": chunk_text_str[:4000],
                 }
             ))
@@ -324,10 +343,23 @@ def ingest_all():
     if not md_files:
         print(f"No eligible files found in {KB_DIR}")
         return
-    print(f"[*] Ingesting {len(md_files)} file(s) from {KB_DIR} ...")
+    print(f"[*] Checking {len(md_files)} file(s) in {KB_DIR} ...")
+    new_count = 0
+    skip_count = 0
     for f in md_files:
+        if is_file_current(f):
+            skip_count += 1
+            continue
         ingest_file(f)
-    print("[*] Done.")
+        new_count += 1
+    if skip_count:
+        print(f"[*] {skip_count} file(s) unchanged, skipped.")
+    if new_count:
+        print(f"[*] {new_count} file(s) ingested.")
+    if not new_count and skip_count:
+        print("[*] All files up to date.")
+    if not new_count and not skip_count:
+        print("[*] Done.")
 
 # ── Query ─────────────────────────────────────────────────────────────────────
 def query(q: str, top_k: int = 5):
@@ -367,7 +399,7 @@ def watch():
 
         def on_modified(self, event):
             p = Path(event.src_path)
-            if should_ingest(p) and self._debounce(event.src_path):
+            if should_ingest(p) and self._debounce(event.src_path) and not is_file_current(p):
                 ingest_file(p)
 
         def on_created(self, event):
@@ -385,7 +417,7 @@ def watch():
                 return
             if event.event_type == 'closed' and not event.is_directory:
                 p = Path(event.src_path)
-                if should_ingest(p) and self._debounce(event.src_path + '_closed'):
+                if should_ingest(p) and self._debounce(event.src_path + '_closed') and not is_file_current(p):
                     ingest_file(p)
 
         def on_deleted(self, event):
