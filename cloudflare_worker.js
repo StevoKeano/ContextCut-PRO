@@ -328,7 +328,7 @@ body{background:#0F172A;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',
       </div>
       <div class="fg">
         <label>Ollama Host</label>
-        <input type="text" id="f-ollama-host" value="192.168.1.101">
+        <input type="text" id="f-ollama-host" value="localhost">
         <span class="hint">Your Ollama server address</span>
       </div>
       <div class="fg">
