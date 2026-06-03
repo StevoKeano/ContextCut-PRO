@@ -3,7 +3,7 @@
 set -euo pipefail
 VERSION="1.0.0"
 
-REPO_BASE="${REPO_BASE:-https://raw.githubusercontent.com/anomalco/contextcut-pro/main}"
+REPO_BASE="${REPO_BASE:-https://raw.githubusercontent.com/StevoKeano/ContextCut-PRO/main}"
 INSTALL_DIR="${CC_INSTALL_DIR:-$HOME/.contextcut-free}"
 KB_DIR="${CC_KB_DIR:-$HOME/contextcut-free/knowledge}"
 OLLAMA_HOST="${CC_OLLAMA_HOST:-localhost}"
