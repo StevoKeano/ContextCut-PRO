@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 """ContextCut-Free — local RAG chat. One file, no Docker, no license."""
+VERSION = "1.0.0"
 import os, sys, json, time, hashlib, sqlite3, urllib.request, urllib.parse, http.server, mimetypes, threading, re
 from pathlib import Path
 from datetime import datetime
@@ -763,6 +764,7 @@ class Handler(http.server.BaseHTTPRequestHandler):
 def main():
     if not HAVE_FAISS:
         print("[cc-free] FAISS not installed — pip install faiss-cpu numpy")
+    print(f"[cc-free] v{VERSION}")
     print(f"[cc-free] Dashboard: http://localhost:{PROXY_PORT}")
     print(f"[cc-free] Ollama:    {OLLAMA_URL}")
     print(f"[cc-free] KB dir:    {KB_DIR}")

@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 # ContextCut-Free installer — local RAG chat, one file, no Docker, no license.
 set -euo pipefail
+VERSION="1.0.0"
 
 REPO_BASE="${REPO_BASE:-https://raw.githubusercontent.com/anomalco/contextcut-pro/main}"
 INSTALL_DIR="${CC_INSTALL_DIR:-$HOME/.contextcut-free}"
@@ -28,8 +29,12 @@ while [[ $# -gt 0 ]]; do
     --ctx-limit) CTX_LIMIT="$2"; shift 2 ;;
     --cc-port) CC_PORT="$2"; shift 2 ;;
     --no-systemd) NO_SYSTEMD=true; shift ;;
+    --uninstall) UNINSTALL=true; shift ;;
     --help|-h)
+      echo "ContextCut-Free v${VERSION} installer"
       echo "Usage: bash install-free.sh [options]"
+      echo ""
+      echo "Install options:"
       echo "  --host <host>       Ollama host (default: $OLLAMA_HOST)"
       echo "  --port <port>       Ollama port (default: $OLLAMA_PORT)"
       echo "  --chat-model <m>    Chat model (default: $CHAT_MODEL)"
@@ -37,10 +42,37 @@ while [[ $# -gt 0 ]]; do
       echo "  --ctx-limit <n>     Context limit (default: $CTX_LIMIT)"
       echo "  --cc-port <n>       Dashboard port (default: $CC_PORT)"
       echo "  --no-systemd        Skip systemd service setup"
+      echo ""
+      echo "Other:"
+      echo "  --uninstall         Remove ContextCut-Free and all data"
+      echo "  --help              Show this help"
       exit 0 ;;
     *) err "Unknown: $1"; exit 1 ;;
   esac
 done
+
+if [ "${UNINSTALL:-false}" = true ]; then
+  echo ""
+  info "ContextCut-Free v${VERSION} — Uninstall"
+  echo ""
+  if command -v systemctl &>/dev/null; then
+    info "Stopping and removing systemd service..."
+    sudo systemctl stop contextcut-free 2>/dev/null || true
+    sudo systemctl disable contextcut-free 2>/dev/null || true
+    sudo rm -f /etc/systemd/system/contextcut-free.service
+    sudo systemctl daemon-reload
+    ok "Service removed"
+  fi
+  if [ -d "$INSTALL_DIR" ]; then
+    info "Removing $INSTALL_DIR ..."
+    rm -rf "$INSTALL_DIR"
+    ok "Install directory removed"
+  fi
+  echo ""
+  ok "ContextCut-Free uninstalled."
+  info "KB dir preserved at: $KB_DIR (remove manually if desired)"
+  exit 0
+fi
 
 if [ -z "$PYTHON" ]; then err "Python 3 not found (install python3)"; exit 1; fi
 PYVER=$($PYTHON --version 2>&1 | grep -oP '\d+\.\d+' || echo "0")
@@ -48,7 +80,7 @@ if [ "${PYVER%%.*}" -lt 3 ]; then err "Python 3+ required, found $PYVER"; exit 1
 if ! command -v curl &>/dev/null; then err "curl not found"; exit 1; fi
 
 echo ""
-info "ContextCut-Free Installer"
+info "ContextCut-Free v${VERSION} Installer"
 info "Target:   $INSTALL_DIR"
 info "KB dir:   $KB_DIR"
 info "Ollama:   ${OLLAMA_HOST}:${OLLAMA_PORT}"
