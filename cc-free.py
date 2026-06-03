@@ -405,7 +405,7 @@ async function loadSessions(){
       div.className='sitem'+(s.sid===_sid?' act':'');
       div.onclick=()=>loadSession(s.sid);
       div.innerHTML='<span class="sitem-name">'+esc(s.name||'Session')+'</span>'+
-        '<button class="sitem-del" onclick="event.stopPropagation();delSession(\\''+s.sid+'\\')">&times;</button>';
+        '<button class="sitem-del" onclick="event.stopPropagation();delSession(\''+s.sid+'\')">&times;</button>';
       list.appendChild(div);
     });
   }catch(e){console.error('sessions',e)}
