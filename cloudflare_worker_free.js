@@ -75,8 +75,8 @@ tr:last-child td{border-bottom:none}
     <p class="sub">Drop-in RAG for any local LLM. One file, no Docker, no license, no API keys. FAISS + SQLite + DuckDuckGo — everything runs locally.</p>
     <div class="actions">
       <button class="btn" id="installBtn">Get Install Command</button>
-      <a class="btn btn-outline" href="https://github.com/anomalco/contextcut-pro?${FOOTER_UTM}" target="_blank" rel="noopener">GitHub</a>
-      <a class="btn btn-outline" href="https://api.contextcut-pro.com?${FOOTER_UTM}" target="_blank" rel="noopener">PRO Version →</a>
+      <a class="btn btn-outline" href="https://github.com/StevoKeano/ContextCut-PRO?${FOOTER_UTM}" target="_blank" rel="noopener">GitHub</a>
+      <a class="btn btn-outline" href="https://api.contextcut-pro.com/promo?${FOOTER_UTM}" target="_blank" rel="noopener">PRO Version →</a>
     </div>
   </div>
 
@@ -173,11 +173,11 @@ tr:last-child td{border-bottom:none}
   </div>
 
   <div class="ftr">
-    <a href="https://github.com/anomalco/contextcut-pro?${FOOTER_UTM}" target="_blank" rel="noopener">GitHub</a> &middot;
-    <a href="https://api.contextcut-pro.com?${FOOTER_UTM}" target="_blank" rel="noopener">ContextCut-PRO</a> &middot;
-    <a href="https://github.com/anomalco/contextcut-pro/issues?${FOOTER_UTM}" target="_blank" rel="noopener">Report Issue</a>
+    <a href="https://github.com/StevoKeano/ContextCut-PRO?${FOOTER_UTM}" target="_blank" rel="noopener">GitHub</a> &middot;
+    <a href="https://api.contextcut-pro.com/promo?${FOOTER_UTM}" target="_blank" rel="noopener">ContextCut-PRO</a> &middot;
+    <a href="https://github.com/StevoKeano/ContextCut-PRO/issues?${FOOTER_UTM}" target="_blank" rel="noopener">Report Issue</a>
     <br>
-    Unlimited files, Qdrant vector DB, real-time dashboard, multi-provider, 60+ starter templates — <a href="https://api.contextcut-pro.com?${FOOTER_UTM}">Upgrade to PRO</a>
+    Unlimited files, Qdrant vector DB, real-time dashboard, multi-provider, 60+ starter templates — <a href="https://api.contextcut-pro.com/promo?${FOOTER_UTM}">Upgrade to PRO</a>
   </div>
 </div>
 
@@ -189,7 +189,7 @@ function genCmd(){
   const em=document.getElementById('embedModel').value||'nomic-embed-text';
   const cl=document.getElementById('ctxLimit').value||'32768';
   const cp=document.getElementById('ccPort').value||'18788';
-  const base='https://raw.githubusercontent.com/anomalco/contextcut-pro/main/install-free.sh';
+  const base='https://raw.githubusercontent.com/StevoKeano/ContextCut-PRO/main/install-free.sh';
   return 'curl -sSf ' + base + ' | bash -s -- --host ' + h + ' --port ' + p + ' --chat-model ' + cm + ' --embed-model ' + em + ' --ctx-limit ' + cl + ' --cc-port ' + cp;
 }
 

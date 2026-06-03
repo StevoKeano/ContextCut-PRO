@@ -1,0 +1,365 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>ContextCut-PRO — Deployment Guide</title>
+<style>
+*{box-sizing:border-box;margin:0;padding:0}
+body{background:#0b1120;color:#e2e8f0;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Arial,sans-serif;font-size:15px;line-height:1.7;padding:0 20px}
+.c{max-width:800px;width:100%;margin:0 auto;padding:48px 0 80px}
+h1{font-size:30px;font-weight:800;letter-spacing:-.5px}
+h2{font-size:20px;font-weight:700;color:#f1f5f9;margin:40px 0 12px;padding-bottom:6px;border-bottom:1px solid #1e293b}
+h3{font-size:15px;font-weight:700;color:#10b981;margin:24px 0 8px}
+.topo{background:#1e293b;border:1px solid #334155;border-radius:10px;padding:24px;margin:20px 0;font-family:'SF Mono','Consolas',monospace;font-size:13px;line-height:1.8;color:#94a3b8}
+.topo .arrow{color:#10b981}
+.topo .hl{color:#f59e0b}
+.topo .dim{color:#475569}
+code{background:#1e293b;padding:2px 6px;border-radius:4px;font-family:'SF Mono','Consolas',monospace;font-size:13px;color:#10b981}
+pre{background:#0f172a;border:1px solid #1e293b;border-radius:8px;padding:16px;overflow-x:auto;font-family:'SF Mono','Consolas',monospace;font-size:13px;color:#94a3b8;line-height:1.6;margin:12px 0}
+pre .hl{color:#f59e0b}
+pre .grn{color:#10b981}
+pre .red{color:#ef4444}
+pre .dim{color:#475569}
+.kbd{display:inline-block;background:#1e293b;border:1px solid #334155;border-radius:4px;padding:1px 8px;font-family:'SF Mono','Consolas',monospace;font-size:12px;color:#94a3b8}
+.step{display:flex;gap:14px;margin:20px 0;padding:20px;background:#1e293b;border:1px solid #334155;border-radius:10px}
+.step-num{flex-shrink:0;width:32px;height:32px;background:#10b981;color:#000;border-radius:50%;display:flex;align-items:center;justify-content:center;font-weight:700;font-size:14px}
+.step-body{flex:1}
+.step-body h4{font-size:15px;font-weight:700;color:#f1f5f9;margin-bottom:6px}
+.step-body p{color:#94a3b8;font-size:14px;margin-bottom:8px}
+.step-body p:last-child{margin-bottom:0}
+.note{background:#0f172a;border-left:3px solid #f59e0b;padding:12px 16px;border-radius:0 6px 6px 0;margin:12px 0;font-size:13px;color:#94a3b8}
+.note strong{color:#f59e0b}
+.warn{background:#0f172a;border-left:3px solid #ef4444;padding:12px 16px;border-radius:0 6px 6px 0;margin:12px 0;font-size:13px;color:#94a3b8}
+.warn strong{color:#ef4444}
+table{width:100%;border-collapse:collapse;font-size:13px;margin:12px 0}
+th,td{text-align:left;padding:10px 12px;border-bottom:1px solid #1e293b}
+th{color:#64748b;font-weight:600;font-size:11px;text-transform:uppercase;letter-spacing:.3px}
+td{color:#cbd5e1;font-family:'SF Mono','Consolas',monospace;font-size:12px}
+tr:last-child td{border-bottom:none}
+.port{color:#10b981;font-weight:600}
+.tag{display:inline-block;font-size:10px;padding:1px 8px;border-radius:3px;font-weight:700;letter-spacing:.3px;margin-right:4px}
+.tag-pro{background:#f59e0b;color:#000}
+.tag-free{background:#10b981;color:#000}
+.tag-net{background:#3b82f6;color:#fff}
+.tag-wsl{background:#6366f1;color:#fff}
+</style>
+</head>
+<body>
+<div class="c">
+
+<h1>ContextCut-PRO <span class="tag tag-pro">DEPLOYMENT GUIDE</span></h1>
+<p style="color:#64748b;margin-top:8px">Two-machine setup: Ollama on Windows, proxy on Ubuntu, development from WSL.</p>
+
+<!-- ─── Network Topology ─── -->
+
+<h2>Network Topology</h2>
+
+<div class="topo">
+<span class="hl">Windows (RTX4090)</span>   <span class="dim">192.168.137.1</span>
+├── Ollama<span class="dim">:11434</span>      <span class="arrow">← LLM inference</span>
+├── Git repo                     <span class="arrow">← dev + commits</span>
+└── WSL<span class="dim"> (Ubuntu)</span>          <span class="arrow">← runs tests, wrangler</span>
+    │
+    │  <span class="dim">SSH / SCP / HTTP</span>
+    ▼
+<span class="hl">Ubuntu (openclaw)</span>        <span class="dim">192.168.137.252</span>
+├── qdrant_proxy_final.py       <span class="arrow">← proxy + dashboard</span>
+│   ├── <span class="port">18787</span>  Dashboard        <span class="dim">(0.0.0.0)</span>
+│   └── <span class="port">18788</span>  OpenAI API proxy <span class="dim">(0.0.0.0)</span>
+├── cc-free.py                  <span class="arrow">← free version</span>
+│   └── <span class="port">18988</span>  Free dashboard    <span class="dim">(127.0.0.1)</span>
+├── ingest.py <span class="dim">--watch</span>          <span class="arrow">← file watcher</span>
+├── Qdrant<span class="dim">:6333</span>              <span class="arrow">← vector database</span>
+└── ~/contextcut/knowledge/     <span class="arrow">← markdown knowledge base</span>
+</div>
+
+<!-- ─── Port Map ─── -->
+
+<h2>Port Map</h2>
+
+<table>
+<tr><th>Port</th><th>Service</th><th>Bind</th><th>Machine</th></tr>
+<tr><td><span class="port">11434</span></td><td>Ollama API</td><td>192.168.137.1</td><td>Windows</td></tr>
+<tr><td><span class="port">18787</span></td><td>PRO Dashboard</td><td>0.0.0.0</td><td>Ubuntu proxy</td></tr>
+<tr><td><span class="port">18788</span></td><td>PRO Proxy (OpenAI-compat)</td><td>0.0.0.0</td><td>Ubuntu proxy</td></tr>
+<tr><td><span class="port">18988</span></td><td>Free dashboard</td><td>127.0.0.1</td><td>Ubuntu proxy</td></tr>
+<tr><td><span class="port">6333</span></td><td>Qdrant</td><td>192.168.0.0/16</td><td>Ubuntu proxy</td></tr>
+<tr><td><span class="port">22</span></td><td>SSH</td><td>Anywhere</td><td>Ubuntu proxy</td></tr>
+</table>
+
+<div class="note">
+<strong>Note:</strong> Bind <code>0.0.0.0</code> is required for the proxy to be reachable from Windows across the LAN. Earlier versions used <code>127.0.0.1</code> (localhost-only), which prevented remote access.
+</div>
+
+<!-- ─── Directory Layout ─── -->
+
+<h2>Directory Layout</h2>
+
+<table>
+<tr><th>Path</th><th>Purpose</th></tr>
+<tr><td><code>E:\dev\opencode\ContextCut-PRO\</code></td><td>Sandbox — agent edits files here</td></tr>
+<tr><td><code>E:\Dev\contextcut-pro\</code></td><td>User's git repo — commit &amp; push from here</td></tr>
+<tr><td><code>E:\Dev\ContextCut-PRO\</code></td><td>User's working copy — SCP &amp; run tests from here</td></tr>
+<tr><td><code>~/contextcut/</code></td><td>Proxy deploy dir — all Python files live here</td></tr>
+<tr><td><code>~/contextcut/.env</code></td><td>Environment config (upstream, embed mode, etc.)</td></tr>
+<tr><td><code>~/contextcut/starterKnowledgeFiles/</code></td><td>60+ domain knowledge templates</td></tr>
+</table>
+
+<div class="warn">
+<strong>Gotcha:</strong> There are <em>three</em> local directories. After editing in the sandbox, copy to the user's repo with <code>cp</code>, then SCP from the working copy. See Deploy Workflow below.
+</div>
+
+<!-- ─── Setup Steps ─── -->
+
+<h2>Initial Setup</h2>
+
+<div class="step">
+<div class="step-num">1</div>
+<div class="step-body">
+<h4>Install Ollama on Windows</h4>
+<p>Ollama runs on the Windows host. It listens on <code>192.168.137.1:11434</code> (the ICSA-assigned IP). Pull the models you need:</p>
+<pre>ollama pull qwen3:14b-q8_0
+ollama pull initium/law_model:Q8_0
+ollama pull nomic-embed-text
+ollama pull qwen2.5:7b</pre>
+</div>
+</div>
+
+<div class="step">
+<div class="step-num">2</div>
+<div class="step-body">
+<h4>Deploy proxy files to Ubuntu</h4>
+<p>From Windows cmd:</p>
+<pre>scp qdrant_proxy_final.py ingest.py cc-free.py steve@192.168.137.252:~/contextcut/</pre>
+</div>
+</div>
+
+<div class="step">
+<div class="step-num">3</div>
+<div class="step-body">
+<h4>Configure environment on proxy</h4>
+<pre>cat ~/contextcut/.env
+CONTEXTCUT_UPSTREAM=http://192.168.137.1:11434
+CONTEXTCUT_EMBED_MODE=ollama
+CONTEXTCUT_EMBED_MODEL=nomic-embed-text</pre>
+<p><code>CONTEXTCUT_UPSTREAM</code> must point to the Windows Ollama instance, not localhost on the proxy.</p>
+</div>
+</div>
+
+<div class="step">
+<div class="step-num">4</div>
+<div class="step-body">
+<h4>Open firewall ports</h4>
+<pre>sudo ufw allow 18787/tcp
+sudo ufw allow 18788/tcp</pre>
+<p>By default, <code>ufw</code> blocks all incoming ports except SSH. Without this, the dashboard and proxy are unreachable from Windows.</p>
+</div>
+</div>
+
+<div class="step">
+<div class="step-num">5</div>
+<div class="step-body">
+<h4>Start the proxy</h4>
+<pre>cd ~/contextcut && ./start.sh</pre>
+<p>This launches <code>qdrant_proxy_final.py</code> (proxy + dashboard) and <code>ingest.py --watch</code> (file watcher + auto-ingest) in parallel.</p>
+</div>
+</div>
+
+<div class="step">
+<div class="step-num">6</div>
+<div class="step-body">
+<h4>Verify it's running</h4>
+<p>On the proxy:</p>
+<pre>ss -tlnp | grep python
+# → 0.0.0.0:18787  (dashboard)
+# → 0.0.0.0:18788  (proxy)</pre>
+<p>From Windows browser:</p>
+<pre>http://192.168.137.252:18787</pre>
+</div>
+</div>
+
+<div class="step">
+<div class="step-num">7</div>
+<div class="step-body">
+<h4>Ingest knowledge files</h4>
+<pre>cp ~/contextcut/starterKnowledgeFiles/*.md ~/contextcut/knowledge/
+# Watcher auto-ingests. Verify:
+~/contextcut/venv/bin/python ~/contextcut/ingest.py --query "test"</pre>
+</div>
+</div>
+
+<!-- ─── Deploy Workflow ─── -->
+
+<h2>Deploy Workflow (after editing files)</h2>
+
+<div class="step">
+<div class="step-num">1</div>
+<div class="step-body">
+<h4>Copy sandbox → user's repo (WSL)</h4>
+<pre>cp /mnt/e/dev/opencode/ContextCut-PRO/{filename} /mnt/e/Dev/contextcut-pro/{filename}</pre>
+</div>
+</div>
+
+<div class="step">
+<div class="step-num">2</div>
+<div class="step-body">
+<h4>SCP to proxy (Windows cmd)</h4>
+<pre>cd E:\Dev\ContextCut-PRO
+scp {filename} steve@192.168.137.252:~/contextcut/</pre>
+</div>
+</div>
+
+<div class="step">
+<div class="step-num">3</div>
+<div class="step-body">
+<h4>Restart proxy</h4>
+<pre>ssh steve@192.168.137.252 "cd ~/contextcut && ./stop.sh && sleep 1 && ./start.sh"</pre>
+</div>
+</div>
+
+<div class="step">
+<div class="step-num">4</div>
+<div class="step-body">
+<h4>Git commit (Windows cmd)</h4>
+<pre>cd E:\Dev\contextcut-pro
+git add {files}
+git commit -m "message"
+git push</pre>
+</div>
+</div>
+
+<!-- ─── Running Tests ─── -->
+
+<h2>Running Tests</h2>
+
+<p>Run from Windows <code>E:\Dev\ContextCut-PRO</code> (or WSL):</p>
+
+<pre># Quick connectivity check
+python run_tests.py --ping
+
+# Run all 18 tests
+python run_tests.py --proxy http://192.168.137.252:18788 --model "initium/law_model:Q8_0"
+
+# Verbose output
+python run_tests.py --proxy http://192.168.137.252:18788 --model "initium/law_model:Q8_0" --verbose
+
+# Show test details
+python run_tests.py --show-tests
+
+# Validate test facts against source knowledge files
+python validate_tests.py</pre>
+
+<div class="note">
+<strong>Note:</strong> The test runner used to connect to <code>127.0.0.1:18788</code>, which failed on a two-machine setup. The <code>/stats</code> health check was on the dashboard port (<code>18787</code>), not the proxy port — now fixed to fall back to <code>/v1/chat/completions</code> POST.
+</div>
+
+<!-- ─── .env Reference ─── -->
+
+<h2>.env Reference</h2>
+
+<table>
+<tr><th>Variable</th><th>Default</th><th>Description</th></tr>
+<tr><td><code>CONTEXTCUT_UPSTREAM</code></td><td><code>http://localhost:11434</code></td><td>Ollama or OpenAI-compatible endpoint</td></tr>
+<tr><td><code>CONTEXTCUT_EMBED_MODE</code></td><td><code>voyage</code></td><td><code>ollama</code> or <code>voyage</code></td></tr>
+<tr><td><code>CONTEXTCUT_EMBED_MODEL</code></td><td><code>nomic-embed-text</code></td><td>Ollama embed model (when mode=ollama)</td></tr>
+<tr><td><code>VOYAGE_API_KEY</code></td><td><em>none</em></td><td>Required for Voyage embedding</td></tr>
+<tr><td><code>CONTEXTCUT_QDRANT_HOST</code></td><td><code>localhost</code></td><td>Qdrant server host</td></tr>
+<tr><td><code>CONTEXTCUT_PROXY_PORT</code></td><td><code>18788</code></td><td>Proxy listen port</td></tr>
+<tr><td><code>CONTEXTCUT_DASHBOARD_PORT</code></td><td><code>18787</code></td><td>Dashboard port</td></tr>
+<tr><td><code>CONTEXTCUT_CTX_LIMIT</code></td><td><code>32768</code></td><td>Model context window</td></tr>
+<tr><td><code>CONTEXTCUT_TOP_K</code></td><td><code>5</code></td><td>Max chunks to retrieve</td></tr>
+<tr><td><code>CONTEXTCUT_MIN_SCORE</code></td><td><code>0.50</code></td><td>Minimum relevance threshold</td></tr>
+<tr><td><code>CONTEXTCUT_MODEL</code></td><td><code>qwen3:14b-q8_0</code></td><td>Default model in dashboard</td></tr>
+</table>
+
+<!-- ─── Troubleshooting ─── -->
+
+<h2>Troubleshooting</h2>
+
+<h3>Proxy unreachable from Windows</h3>
+<pre># Check listening
+ss -tlnp | grep python
+
+# Check firewall
+sudo ufw status
+
+# Check upstream reachability (from proxy)
+curl -s http://192.168.137.1:11434/api/tags | head -5</pre>
+
+<h3>"/stats (dashboard + proxy) UNREACHABLE"</h3>
+<p>The test runner tries <code>http://host:18787/stats</code> first, then falls back to <code>http://host:18788/v1/chat/completions</code>. If both fail, either the firewall is blocking the ports or the proxy isn't running.</p>
+
+<h3>"502 Connection refused" on chat completions</h3>
+<p>The proxy is running but can't reach Ollama. Verify:</p>
+<pre># On the proxy:
+curl -s http://192.168.137.1:11434/api/tags   # ← not localhost!
+
+# Check .env has the right IP:
+grep CONTEXTCUT_UPSTREAM ~/contextcut/.env</pre>
+
+<div class="note">
+<strong>Key insight:</strong> In this setup, Ollama runs on <strong>Windows</strong> at <code>192.168.137.1:11434</code>, not on the proxy. <code>CONTEXTCUT_UPSTREAM</code> must match. The proxy's <code>start.sh</code> does not set this automatically — it must be in <code>~/.contextcut/.env</code> or set as a process env var.
+</div>
+
+<h3>WSL can't reach the proxy</h3>
+<p>WSL uses a separate virtual network adapter and often can't route to <code>192.168.x.x</code> subnets. Either:</p>
+<ul style="color:#94a3b8;font-size:14px;margin:8px 0 0 20px;line-height:1.8">
+<li>Run tests from <strong>Windows cmd</strong> (not WSL)</li>
+<li>SSH tunnel: <code>ssh -L 18788:127.0.0.1:18788 steve@192.168.137.252</code></li>
+</ul>
+
+<h3>File watcher missed files on bulk copy</h3>
+<p>The watcher now handles <code>on_moved</code> and <code>on_any_event</code> events (was missing — root cause of missed bulk copies). Debounce is 5s. If files are still missed:</p>
+<pre>pkill -f "ingest.py --watch"
+~/contextcut/venv/bin/python ~/contextcut/ingest.py --clear
+~/contextcut/venv/bin/python ~/contextcut/ingest.py --watch &</pre>
+
+<h3>cc-free.py won't start (port in use)</h3>
+<pre>lsof -ti:18988 | xargs kill -9
+# Or use PID file:
+kill $(cat /tmp/cc-free.pid)</pre>
+<p><code>pkill -f "python.*cc-free"</code> is dangerous — it matches its own <code>pkill</code> command.</p>
+
+<!-- ─── Free Version Landing Page ─── -->
+
+<h2>Free Version Landing Page</h2>
+
+<table>
+<tr><th>URL</th><th>Description</th></tr>
+<tr><td><code>https://contextcut-free.ppsel03.workers.dev</code></td><td>Cloudflare Worker landing page with config form</td></tr>
+<tr><td><code>https://github.com/StevoKeano/ContextCut-PRO</code></td><td>GitHub repo (source of truth)</td></tr>
+<tr><td><code>https://api.contextcut-pro.com/promo</code></td><td>PRO version purchase / promo page</td></tr>
+</table>
+
+<p>Deploy landing page:</p>
+<pre># WSL
+cd /mnt/e/Dev/contextcut-pro
+npx wrangler deploy cloudflare_worker_free.js --name contextcut-free --compatibility-date 2026-06-03</pre>
+
+<p>One-liner install for free version (after git push):</p>
+<pre>curl -sSf https://raw.githubusercontent.com/StevoKeano/ContextCut-PRO/main/install-free.sh \
+  | bash -s -- --host localhost --port 11434 \
+    --chat-model qwen2.5:7b \
+    --embed-model nomic-embed-text \
+    --ctx-limit 32768 \
+    --cc-port 18788</pre>
+
+<!-- ─── Constraints ─── -->
+
+<h2>Constraints</h2>
+
+<ul style="color:#94a3b8;font-size:14px;margin:8px 0 0 20px;line-height:1.8">
+<li>Never git commit/push from the sandbox (<code>opencode/ContextCut-PRO</code>) — only from <code>E:\Dev\contextcut-pro</code></li>
+<li>Never touch files outside <code>E:\dev\opencode\ContextCut-PRO</code> without asking</li>
+<li>The proxy <code>pkill</code> pattern kills itself — use PID file or <code>lsof -ti | xargs kill</code></li>
+<li><code>~/contextcut/venv/bin/python</code> is the correct Python for the proxy, not the system <code>python3</code></li>
+</ul>
+
+<div style="margin-top:48px;padding-top:24px;border-top:1px solid #1e293b;text-align:center;color:#475569;font-size:13px">
+ContextCut-PRO Deployment Guide &mdash; 2026
+</div>
+
+</div>
+</body>
+</html>
