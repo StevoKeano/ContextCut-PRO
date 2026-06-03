@@ -167,33 +167,6 @@ Start at `0.30` and adjust for your domain.
 
 ---
 
----
-
-## ContextCut-Free
-
-**One file, no Docker, no license, no API keys.** A lightweight version of ContextCut for local-only use.
-
-| | Free | PRO |
-|---|---|---|
-| **Vector DB** | FAISS (local, no server) | Qdrant (server-grade) |
-| **File limit** | 50 files | Unlimited |
-| **Embedding** | Ollama only | Voyage AI + Ollama |
-| **Web search** | DuckDuckGo | DuckDuckGo + API keys |
-| **Dashboard** | Minimal | Real-time token analytics, per-request breakdown |
-| **File watcher** | — | Auto-ingest on create / move / delete |
-| **Cloud providers** | Ollama only | OpenAI, OpenRouter, Anthropic, xAI, Custom |
-| **Starter templates** | — | 60+ domain-specific knowledge files |
-| **License** | None required | $99.88 one-time |
-
-[Install Free →](https://contextcut-free.ppsel03.workers.dev) | [Compare Free vs PRO](https://contextcut-free.ppsel03.workers.dev)
-
-The Free version is ideal for:
-- **Evaluating** ContextCut before buying PRO
-- **Personal use** on a single machine with local models
-- **Air-gapped environments** where no cloud access is available
-
----
-
 ## License
 
 **Pro License – $99.88 one-time per seat**
