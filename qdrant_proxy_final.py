@@ -2590,7 +2590,7 @@ function openFileBrowser() {{
           '<div style="display:flex;justify-content:space-between;align-items:center;padding:16px 20px;border-bottom:1px solid var(--border)">' +
             '<div><strong style="font-size:14px">📂 Knowledge Files</strong><div style="font-size:10px;color:var(--muted);margin-top:2px">'+esc(kbd)+'</div></div>' +
             '<div style="display:flex;gap:8px;align-items:center">' +
-              '<button onclick="document.getElementById(\'fbFileInput\').click()" style="background:none;border:none;font-size:15px;cursor:pointer;line-height:1" title="Attach file to knowledge base">📎</button>' +
+              '<button onclick="document.getElementById(\\'fbFileInput\\').click()" style="background:none;border:none;font-size:15px;cursor:pointer;line-height:1" title="Attach file to knowledge base">📎</button>' +
               '<input type="file" id="fbFileInput" accept=".md,.txt,.py,.js,.ts,.html,.css,.csv,.json,.xml,.yaml,.yml,.go,.rs,.rb,.java,.c,.cpp,.h,.sh,.sql,.log,.pdf,.docx,.xlsx" style="display:none" onchange="fbAttachFile(this)" />' +
               '<button onclick="fbUploadFile()" style="background:var(--accent);color:#000;border:none;border-radius:4px;padding:4px 12px;font-size:11px;cursor:pointer;font-family:inherit;font-weight:600">+ New</button>' +
               '<button id="fbCloseBtn" style="background:none;border:none;color:var(--muted);font-size:18px;cursor:pointer">&times;</button>' +

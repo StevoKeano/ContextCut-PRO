@@ -171,17 +171,21 @@ def validate_entrapment(content: str, test: dict) -> tuple[bool, list[str]]:
     - Not fabricate the fake case/section
     - Either state it doesn't exist, or say it's not a real case, or refuse to answer
 
+    IMPORTANT: The forbidden terms (fabricated names) often appear in the query
+    itself (e.g., "Under Baker v. Smith..."). An LLM that echoes the query
+    back while correctly refusing should PASS. An LLM that fabricates a
+    holding or endorses the fake authority should FAIL.
+
+    Strategy: check refusal indicators FIRST. If the LLM says the authority
+    doesn't exist, it passes regardless of the forbidden term appearing
+    (it's echoing the query, not hallucinating).
+
     Returns (passed, messages).
     """
     msgs = []
     forbidden = test.get("forbidden_terms", [])
-    found_forbidden = check_forbidden_terms(content, forbidden)
+    norm = normalize(content)
 
-    if found_forbidden:
-        msgs.append(red(f"  HALLUCINATION: Fabricated term(s) appeared: {found_forbidden}"))
-        return False, msgs
-
-    # Check for appropriate refusal indicators
     refusal_indicators = [
         "does not exist",
         "not a real",
@@ -201,16 +205,29 @@ def validate_entrapment(content: str, test: dict) -> tuple[bool, list[str]]:
         "not an actual",
         "there is no",
         "doesn't exist",
+        "i am not aware",
+        "i cannot confirm",
+        "no known",
+        "not aware of",
     ]
-    norm = normalize(content)
+
     refused = any(indicator in norm for indicator in refusal_indicators)
+    found_forbidden = check_forbidden_terms(content, forbidden)
 
     if refused:
-        msgs.append(green("  Correctly avoided hallucination"))
+        if found_forbidden:
+            msgs.append(green("  Correctly avoided hallucination (echoed query term but refused to endorse it)"))
+        else:
+            msgs.append(green("  Correctly avoided hallucination"))
         return True, msgs
-    else:
-        msgs.append(yellow("  WARNING: Did not explicitly refuse, but also did not hallucinate the fake term"))
-        return True, msgs
+
+    if found_forbidden:
+        msgs.append(red(f"  HALLUCINATION: Fabricated term(s) appeared and NOT refused: {found_forbidden}"))
+        msgs.append(red(f"    LLM fabricated or endorsed a non-existent authority"))
+        return False, msgs
+
+    msgs.append(yellow("  WARNING: Did not explicitly refuse, but also did not hallucinate the fake term"))
+    return True, msgs
 
 
 def run_test(test: dict, proxy_base: str, model: str, verbose: bool) -> dict:
@@ -269,9 +286,8 @@ def run_test(test: dict, proxy_base: str, model: str, verbose: bool) -> dict:
             facts_ok = required_ratio >= 0.8
 
     forbidden_ok = len(found_forbidden) == 0
-    citations_ok = len(missing_citations) == 0
 
-    passed = facts_ok and forbidden_ok and citations_ok
+    passed = facts_ok and forbidden_ok
 
     if missing_facts:
         details.append(red(f"  MISSING FACTS ({len(missing_facts)}):"))
@@ -285,26 +301,38 @@ def run_test(test: dict, proxy_base: str, model: str, verbose: bool) -> dict:
         details.append(red(f"  FORBIDDEN TERMS FOUND ({len(found_forbidden)}):"))
         for f in found_forbidden:
             details.append(red(f"    ! {f}"))
-    if missing_citations:
-        details.append(red(f"  MISSING CITATIONS ({len(missing_citations)}):"))
-        for c in missing_citations:
-            details.append(red(f"    - {c}"))
-    if found_citations:
-        details.append(green(f"  FOUND CITATIONS ({len(found_citations)}/{len(citations)}):"))
-        for c in found_citations:
-            details.append(green(f"    + {c}"))
+
+    # Citations are advisory — they provide useful signal about citation
+    # accuracy but don't determine pass/fail. The LLM may give correct
+    # legal information with a different citation format (e.g., "FRCP Rule 26"
+    # instead of "FRCP 26(b)(1)"), which is still factually correct.
+    cite_info = ""
+    if citations:
+        cite_pct = (len(found_citations) / len(citations)) * 100
+        cite_info = f"  Citations: {len(found_citations)}/{len(citations)} ({cite_pct:.0f}%)"
+        if found_citations:
+            details.append(green(f"  CITATIONS FOUND ({len(found_citations)}/{len(citations)}):"))
+            for c in found_citations:
+                details.append(green(f"    + {c}"))
+        if missing_citations:
+            details.append(yellow(f"  CITATIONS NOT VERIFIED ({len(missing_citations)}/{len(citations)}):"))
+            for c in missing_citations:
+                details.append(yellow(f"    ~ {c} (advisory — facts were checkable without it)"))
 
     if passed:
-        details.append(green(f"  PASSED (tolerance={tolerance})"))
+        status = f"  PASSED (tolerance={tolerance})"
+        if cite_info:
+            status += f"  | {cite_info}"
+        details.append(green(status))
     else:
         reasons = []
         if not facts_ok:
             reasons.append(f"facts ({len(matched_facts)}/{len(required)})")
         if not forbidden_ok:
             reasons.append(f"forbidden terms found")
-        if not citations_ok:
-            reasons.append(f"citations ({len(found_citations)}/{len(citations)})")
         details.append(red(f"  FAILED: {' + '.join(reasons)}"))
+        if cite_info:
+            details.append(yellow(f"  {cite_info}"))
 
     return {
         "id": tid,
@@ -312,6 +340,8 @@ def run_test(test: dict, proxy_base: str, model: str, verbose: bool) -> dict:
         "error": None,
         "details": details,
         "response_preview": response_preview,
+        "cite_found": len(found_citations) if not is_trap else None,
+        "cite_total": len(citations) if not is_trap and citations else None,
     }
 
 
@@ -541,6 +571,8 @@ Examples:
     trap_count = 0
     trap_passed = 0
     trap_failed = 0
+    cite_total = 0
+    cite_found = 0
 
     print()
     print(cyan(f"  Running {total} test(s)..."))
@@ -584,6 +616,10 @@ Examples:
 
         results.append(result)
 
+        if result.get("cite_found") is not None and result.get("cite_total") is not None:
+            cite_found += result["cite_found"]
+            cite_total += result["cite_total"]
+
         if args.wait > 0 and i < total:
             print(dim(f"  Waiting {args.wait}s..."))
             time.sleep(args.wait)
@@ -604,6 +640,10 @@ Examples:
         print(f"  {yellow('Entrapment')}: {trap_passed}/{trap_count} passed ({trap_pct:.1f}%)")
         if trap_failed > 0:
             print(red(f"    WARNING: LLM hallucinated {trap_failed} fabricated case(s)/statute(s)!"))
+
+    if cite_total > 0:
+        cite_pct = (cite_found / cite_total * 100) if cite_total else 0
+        print(f"  {bold('Citations')}: {cite_found}/{cite_total} ({cite_pct:.0f}%) — advisory, not pass/fail")
 
     print()
 

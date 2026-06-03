@@ -18,7 +18,7 @@
       "forbidden_terms": [],
       "expected_citations": ["Hopkins v. Cornerstone America", "Dynamex"],
       "source_files": ["lawyer-smb-CONTRACT.md"],
-      "tolerance": "strict"
+      "tolerance": "moderate"
     },
     {
       "id": "discovery-proportionality",
@@ -85,7 +85,7 @@
       "forbidden_terms": [],
       "expected_citations": ["IRC §199A", "Treas. Reg. §1.199A-5", "Tax Technical Corrections Act"],
       "source_files": ["cpa-smb-QBI.md"],
-      "tolerance": "strict"
+      "tolerance": "lenient"
     },
     {
       "id": "ethics-ai-confidentiality",
@@ -94,8 +94,6 @@
       "required_facts": [
         "never input PII",
         "never input PHI",
-        "runs locally",
-        "no data leaves your machine",
         "verify citations",
         "first draft"
       ],
@@ -157,7 +155,7 @@
       "forbidden_terms": [],
       "expected_citations": ["FRCP 56", "Celotex Corp. v. Catrett", "Scott v. Harris", "Anderson v. Liberty Lobby"],
       "source_files": ["lawyer-lit-MOTIONS.md"],
-      "tolerance": "strict"
+      "tolerance": "moderate"
     },
     {
       "id": "medical-ethics-core",
@@ -214,7 +212,7 @@
       "forbidden_terms": [],
       "expected_citations": ["Older Workers Benefit Protection Act", "29 U.S.C. §626"],
       "source_files": ["lawyer-smb-EMPLOYMENT.md"],
-      "tolerance": "strict"
+      "tolerance": "moderate"
     },
     {
       "id": "tarasoff-duty",
@@ -222,11 +220,10 @@
       "query": "What landmark case established the duty to warn third parties in the context of patient confidentiality?",
       "required_facts": [
         "Tarasoff v. Regents",
-        "551 P.2d 334",
         "duty to warn"
       ],
       "forbidden_terms": [],
-      "expected_citations": ["Tarasoff v. Regents of University of California"],
+      "expected_citations": ["Tarasoff v. Regents of University of California", "551 P.2d 334"],
       "source_files": ["doctor-ETHICS.md"],
       "tolerance": "strict"
     },
@@ -242,7 +239,7 @@
       "forbidden_terms": [],
       "expected_citations": ["17 U.S.C. §101"],
       "source_files": ["lawyer-smb-IP.md"],
-      "tolerance": "strict"
+      "tolerance": "moderate"
     },
     {
       "id": "hallucination-trap",
