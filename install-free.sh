@@ -19,6 +19,7 @@ RED='\033[0;31m'; GREEN='\033[0;32m'; CYAN='\033[0;36m'; NC='\033[0m'
 info() { echo -e "${CYAN}==>${NC} $1"; }
 ok()   { echo -e "${GREEN}  OK${NC} $1"; }
 err()  { echo -e "${RED}  FAIL${NC} $1"; }
+warn() { echo -e "  WARN $1"; }
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
