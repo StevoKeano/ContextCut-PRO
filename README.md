@@ -136,9 +136,9 @@ open http://localhost:18787
 | `CONTEXTCUT_KB_DIR` | `~/contextcut/knowledge` | Knowledge base directory |
 | `CONTEXTCUT_PROXY_PORT` | `18788` | Proxy listen port |
 | `CONTEXTCUT_DASHBOARD_PORT` | `18787` | Dashboard port |
-| `CONTEXTCUT_CTX_LIMIT` | `8192` | Model context window |
+| `CONTEXTCUT_CTX_LIMIT` | `32768` | Model context window |
 | `CONTEXTCUT_TOP_K` | `5` | Max chunks to retrieve |
-| `CONTEXTCUT_MIN_SCORE` | `0.30` | Minimum relevance threshold |
+| `CONTEXTCUT_MIN_SCORE` | `0.50` | Minimum relevance threshold |
 | `CONTEXTCUT_MODEL` | `qwen3:14b-q8_0` | Default model in dashboard |
 
 ---
@@ -164,6 +164,52 @@ python ingest.py --query "your typical query"
 - Below `0.20` — noise, skip
 
 Start at `0.30` and adjust for your domain.
+
+---
+
+---
+
+## ContextCut-Free
+
+**One file, no Docker, no license, no API keys.** A lightweight version of ContextCut for local-only use.
+
+| | Free | PRO |
+|---|---|---|
+| **Vector DB** | FAISS (local, no server) | Qdrant (server-grade) |
+| **File limit** | 50 files | Unlimited |
+| **Embedding** | Ollama only | Voyage AI + Ollama |
+| **Web search** | DuckDuckGo (free) | DuckDuckGo + API key providers |
+| **Dashboard** | Minimal | Real-time token analytics, per-request breakdown |
+| **File watcher** | — | Auto-ingest on create / move / delete |
+| **Cloud providers** | Ollama only | OpenAI, OpenRouter, Anthropic, xAI, Custom |
+| **Starter templates** | — | 60+ domain-specific knowledge files |
+| **License** | None required | $99.88 one-time |
+
+### Install Free
+
+One command — requires Python 3, Ollama, and `nomic-embed-text` / `qwen2.5:7b` pulled:
+
+```bash
+curl -sSf https://raw.githubusercontent.com/StevoKeano/ContextCut-PRO/main/install-free.sh | bash -s -- --host localhost --port 11434
+```
+
+Or visit the [landing page](https://contextcut-free.ppsel03.workers.dev) to customize settings and copy the command.
+
+### Quick start
+
+```bash
+# 1. Open the dashboard
+open http://localhost:18788
+
+# 2. Upload .md files via the 📎 button (50 file limit)
+# 3. Toggle 🌐 Search for live web results
+# 4. Start chatting — context is injected automatically
+```
+
+Ideal for:
+- **Evaluating** ContextCut before buying PRO
+- **Personal use** on a single machine with local models
+- **Air-gapped environments** with no cloud access
 
 ---
 
