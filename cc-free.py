@@ -6,6 +6,13 @@ from pathlib import Path
 from datetime import datetime
 
 # ── Config ────────────────────────────────────────────────────
+_ENV_FILE = Path(os.getenv("CC_ENV_FILE", str(Path.home() / ".contextcut-free" / "env"))).expanduser()
+if _ENV_FILE.exists():
+    for _line in _ENV_FILE.read_text().splitlines():
+        _line = _line.strip()
+        if _line and "=" in _line and not _line.startswith("#"):
+            _k, _v = _line.split("=", 1)
+            os.environ.setdefault(_k.strip(), _v.strip())
 OLLAMA_HOST = os.getenv("OLLAMA_HOST", "localhost")
 OLLAMA_PORT = os.getenv("OLLAMA_PORT", "11434")
 OLLAMA_URL  = f"http://{OLLAMA_HOST}:{OLLAMA_PORT}"
@@ -106,6 +113,21 @@ def _chat(messages, model=None, stream=False):
     body = {"model": model or CHAT_MODEL, "messages": messages, "stream": stream,
             "options": {"num_ctx": CTX_LIMIT}}
     return _ollama("POST", "/api/chat", body)
+
+def _chat_stream_yield(messages, model=None):
+    """Yields parsed JSON chunks from Ollama's streaming /api/chat."""
+    model = model or CHAT_MODEL
+    body = {"model": model, "messages": messages, "stream": True,
+            "options": {"num_ctx": CTX_LIMIT}}
+    url = f"{OLLAMA_URL}/api/chat"
+    data = json.dumps(body).encode()
+    req = urllib.request.Request(url, method="POST", data=data,
+        headers={"Content-Type": "application/json"})
+    with urllib.request.urlopen(req, timeout=120) as r:
+        for line in r:
+            line = line.decode().strip()
+            if line:
+                yield json.loads(line)
 
 def _embed(texts, model=None):
     body = {"model": model or EMBED_MODEL, "input": texts if isinstance(texts, list) else [texts]}
@@ -462,20 +484,34 @@ async function send(){
     if(kd.results&&kd.results.length){
       ctx+='\\n\\nKnowledge base results:\\n'+kd.results.map(r=>'['+esc(r.filename)+'] '+esc(r.text)).join('\\n');
     }
-    const body=JSON.stringify({sid:_sid,message:txt,context:ctx||undefined});
+    const _model=_('modelSel').value||_models[0]||'';
+    const body=JSON.stringify({sid:_sid,message:txt,context:ctx||undefined,model:_model,stream:true});
     const r=await fetch('/api/chat',{method:'POST',headers:{'Content-Type':'application/json'},body});
-    const d=await r.json();
-    if(d.ok){
-      _sid=d.sid;
-      addMsg('ass',d.reply);
-      if(d.sources&&d.sources.length){
-        addMsg('ass','**Sources:** '+d.sources.map(s=>'`'+esc(s.filename)+'`').join(', '),'');
+    if(!r.ok){const d=await r.json();addMsg('ass','Error: '+esc(d.error||'Unknown'));_sending=false;_('sndBtn').disabled=false;_('sndBtn').textContent='Send';return;}
+    const reader=r.body.getReader(); const decoder=new TextDecoder();
+    let buf='', msgEl=null, full='', _sources=null;
+    while(true){
+      const{value,done}=await reader.read();
+      if(done)break;
+      buf+=decoder.decode(value,{stream:true});
+      const lines=buf.split('\n'); buf=lines.pop()||'';
+      for(const line of lines){
+        if(!line.startsWith('data: '))continue;
+        const d=JSON.parse(line.slice(6));
+        if(d.done){_sid=d.sid;if(d.sources&&d.sources.length)_sources=d.sources;}
+        else if(d.error){addMsg('ass','Error: '+esc(d.error));}
+        else if(d.token){
+          if(!msgEl){const el=document.createElement('div');el.className='msg ass';_('cht').appendChild(el);msgEl=el;}
+          full+=d.token; msgEl.innerHTML=md(full); _('cht').scrollTop=_('cht').scrollHeight;
+        }
       }
-      loadSessions();
-      loadStats();
-    }else{
-      addMsg('ass','Error: '+esc(d.error||'Unknown'));
     }
+    // Flush remaining buffer
+    if(buf.startsWith('data: ')){
+      try{const d=JSON.parse(buf.slice(6));if(d.done){_sid=d.sid;if(d.sources&&d.sources.length)_sources=d.sources;}}catch(e){}
+    }
+    if(_sources&&_sources.length)addMsg('ass','**Sources:** '+_sources.map(s=>'`'+esc(s.filename)+'`').join(', '),'');
+    loadSessions(); loadStats();
   }catch(e){
     addMsg('ass','Error: '+esc(e.message));
   }
@@ -649,6 +685,10 @@ class Handler(http.server.BaseHTTPRequestHandler):
             if path == "/api/stats":
                 count = _count_files()
                 return self._send(*_json({"files": count}))
+            if path == "/favicon.ico":
+                svg = '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32"><rect width="32" height="32" rx="6" fill="#10b981"/><text x="16" y="22" text-anchor="middle" font-family="Arial,sans-serif" font-size="18" font-weight="800" fill="#000">CC</text></svg>'
+                b = svg.encode()
+                return self._send(200, {"Content-Type": "image/svg+xml", "Content-Length": str(len(b)), "Cache-Control": "public, max-age=86400"}, b)
             return self._send(*_json({"error": "Not found"}, 404))
         except Exception as e:
             return self._send(*_json({"error": str(e)}, 500))
@@ -668,27 +708,21 @@ class Handler(http.server.BaseHTTPRequestHandler):
                 return self._send(*_json({"sid": sid}))
             if path == "/api/chat":
                 body = json.loads(self._read_body())
+                stream = body.get("stream", False)
                 sid = body.get("sid")
                 msg = body.get("message", "")
                 ctx = body.get("context", "")
                 model = body.get("model") or CHAT_MODEL
+                now = time.time()
 
                 messages = []
                 if ctx:
                     messages.append({"role": "system", "content": f"You are a helpful assistant. Use the following context if relevant:\n\n{ctx}"})
                 messages.append({"role": "user", "content": msg})
 
-                try:
-                    resp = _chat(messages, model=model)
-                    reply = resp.get("message", {}).get("content", "")
-                    if not reply:
-                        reply = resp.get("response", "")
-                except Exception as e:
-                    return self._send(*_json({"error": str(e)}, 500))
-
+                # Session + user message (shared by both paths)
                 if not sid:
                     sid = hashlib.md5(os.urandom(16)).hexdigest()[:16]
-                    now = time.time()
                     with _db_lock:
                         db = _get_db()
                         db.execute("INSERT INTO sessions (sid, name, created, updated, context) VALUES (?,?,?,?,?)",
@@ -698,25 +732,80 @@ class Handler(http.server.BaseHTTPRequestHandler):
                 else:
                     with _db_lock:
                         db = _get_db()
-                        db.execute("UPDATE sessions SET updated=? WHERE sid=?", (time.time(), sid))
+                        db.execute("UPDATE sessions SET updated=? WHERE sid=?", (now, sid))
                         db.commit()
                         db.close()
 
                 with _db_lock:
                     db = _get_db()
-                    now = time.time()
                     db.execute("INSERT INTO messages (sid, role, content, model, created) VALUES (?,?,?,?,?)",
                                (sid, "user", msg, model, now))
+                    db.commit()
+                    db.close()
+
+                if stream:
+                    self.send_response(200)
+                    self.send_header("Content-Type", "text/event-stream")
+                    self.send_header("Cache-Control", "no-cache")
+                    self.send_header("Connection", "keep-alive")
+                    self.end_headers()
+                    full_reply = ""
+                    try:
+                        for chunk in _chat_stream_yield(messages, model=model):
+                            delta = chunk.get("message", {}).get("content", "")
+                            if delta:
+                                full_reply += delta
+                                event = json.dumps({"token": delta, "done": False})
+                                self.wfile.write(f"data: {event}\n\n".encode())
+                                self.wfile.flush()
+                    except Exception as e:
+                        self.wfile.write(f"data: {json.dumps({'error': str(e)})}\n\n".encode())
+                        self.wfile.flush()
+                    # Save assistant message
+                    with _db_lock:
+                        db = _get_db()
+                        db.execute("INSERT INTO messages (sid, role, content, model, created) VALUES (?,?,?,?,?)",
+                                   (sid, "assistant", full_reply, model, now))
+                        db.commit()
+                        db.close()
+                    # Knowledge sources
+                    kresults = _query_kb(msg, 3)
+                    sources = [{"filename": r["filename"], "score": r["score"]} for r in kresults] if kresults else []
+                    final = json.dumps({"done": True, "sid": sid, "sources": sources})
+                    self.wfile.write(f"data: {final}\n\n".encode())
+                    self.wfile.flush()
+                    return
+
+                # Non-streaming path
+                try:
+                    resp = _chat(messages, model=model)
+                    reply = resp.get("message", {}).get("content", "")
+                    if not reply:
+                        reply = resp.get("response", "")
+                except Exception as e:
+                    return self._send(*_json({"error": str(e)}, 500))
+
+                with _db_lock:
+                    db = _get_db()
                     db.execute("INSERT INTO messages (sid, role, content, model, created) VALUES (?,?,?,?,?)",
                                (sid, "assistant", reply, model, now))
                     db.commit()
                     db.close()
 
-                # Get sources from KB
                 kresults = _query_kb(msg, 3)
                 sources = [{"filename": r["filename"], "score": r["score"]} for r in kresults] if kresults else []
 
                 return self._send(*_json({"ok": True, "sid": sid, "reply": reply, "sources": sources}))
+
+            if path.startswith("/api/session/delete/"):
+                sid = path.split("/api/session/delete/")[-1]
+                with _db_lock:
+                    db = _get_db()
+                    db.execute("DELETE FROM messages WHERE sid=?", (sid,))
+                    db.execute("DELETE FROM sessions WHERE sid=?", (sid,))
+                    db.commit()
+                    db.close()
+                return self._send(*_json({"ok": True}))
 
             if path.startswith("/api/context/clear/"):
                 sid = path.split("/api/context/clear/")[-1]
