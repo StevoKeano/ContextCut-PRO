@@ -30,37 +30,43 @@ CTX_LIMIT   = int(os.getenv("CC_CTX_LIMIT", "32768"))
 DATA_DIR.mkdir(parents=True, exist_ok=True)
 KB_DIR.mkdir(parents=True, exist_ok=True)
 
-# ── FAISS / numpy vector store ─────────────────────────────────
+# ── Vector store (pure Python, no faiss/numpy required) ────────
 try:
     import numpy as np
     import faiss
     HAVE_FAISS = True
 except ImportError:
-    import numpy as np
-    HAVE_FAISS = False
+    try:
+        import numpy as np
+        HAVE_FAISS = False
+        _np_ok = True
+    except ImportError:
+        HAVE_FAISS = False
+        _np_ok = False
 
-VEC_PATH   = DATA_DIR / "vectors.npy"
+VEC_PATH   = DATA_DIR / "vectors.json"
 META_PATH  = DATA_DIR / "metadata.json"
 
-_vectors: list[np.ndarray] = []
+_vectors: list[list[float]] = []
 _metadata: list[dict] = []
 _index_lock = threading.Lock()
 
-def _vec_search(query_vec: np.ndarray, top_k: int):
+def _dot(a, b):
+    return sum(x * y for x, y in zip(a, b))
+
+def _vec_search(query_vec, top_k):
     if not _vectors:
         return [], []
-    mat = np.array(_vectors, dtype=np.float32)
-    q = query_vec.reshape(1, -1).astype(np.float32)
-    sim = mat @ q.T
-    idxs = np.argsort(sim, axis=0)[::-1][:top_k, 0]
-    scores = sim[idxs, 0]
-    return scores.tolist(), idxs.tolist()
+    sims = [(_dot(v, query_vec), i) for i, v in enumerate(_vectors)]
+    sims.sort(reverse=True)
+    top = sims[:top_k]
+    return [s for s, _ in top], [i for _, i in top]
 
 def _init_index():
     global _vectors, _metadata
     with _index_lock:
         if VEC_PATH.exists() and META_PATH.exists():
-            _vectors = list(np.load(VEC_PATH))
+            _vectors = json.loads(VEC_PATH.read_text())
             _metadata = json.loads(META_PATH.read_text())
         else:
             _vectors = []
@@ -69,7 +75,7 @@ def _init_index():
 def _save_index():
     with _index_lock:
         if _vectors:
-            np.save(VEC_PATH, np.array(_vectors, dtype=np.float32))
+            VEC_PATH.write_text(json.dumps(_vectors))
             META_PATH.write_text(json.dumps(_metadata))
         else:
             VEC_PATH.unlink(missing_ok=True)
@@ -231,7 +237,7 @@ def _ingest_file(name):
             _vectors = kept
         _metadata = new_metadata
         for i, (chunk, vec) in enumerate(zip(chunks, vecs)):
-            _vectors.append(np.array(vec, dtype=np.float32))
+            _vectors.append(list(vec))
             _metadata.append({"filename": name, "chunk_index": i, "text": chunk[:4000]})
     _save_index()
     print(f"[cc-free] Ingested: {name} ({len(chunks)} chunks)")
@@ -247,14 +253,11 @@ def _query_kb(query, top_k=5):
     with _index_lock:
         if not _vectors:
             return []
-        qv = np.array(qvec, dtype=np.float32)
-        mat = np.array(_vectors, dtype=np.float32)
-        sim = mat @ qv
-        k = min(top_k, len(sim))
-        idxs = np.argsort(sim)[-k:][::-1]
-        scores = sim[idxs]
+        sims = [(sum(x * y for x, y in zip(v, qvec)), i) for i, v in enumerate(_vectors)]
+        sims.sort(key=lambda p: p[0], reverse=True)
+        top = sims[:top_k]
     results = []
-    for score, idx in zip(scores, idxs):
+    for score, idx in top:
         m = _metadata[idx]
         results.append({"filename": m["filename"], "text": m["text"], "score": round(float(score), 4)})
     return results
