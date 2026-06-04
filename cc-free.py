@@ -30,45 +30,52 @@ CTX_LIMIT   = int(os.getenv("CC_CTX_LIMIT", "32768"))
 DATA_DIR.mkdir(parents=True, exist_ok=True)
 KB_DIR.mkdir(parents=True, exist_ok=True)
 
-# ── FAISS setup ───────────────────────────────────────────────
+# ── FAISS / numpy vector store ─────────────────────────────────
 try:
     import numpy as np
     import faiss
     HAVE_FAISS = True
 except ImportError:
+    import numpy as np
     HAVE_FAISS = False
 
-FAISS_PATH = DATA_DIR / "vectors.idx"
+VEC_PATH   = DATA_DIR / "vectors.npy"
 META_PATH  = DATA_DIR / "metadata.json"
 
-_index = None
+_vectors: list[np.ndarray] = []
 _metadata: list[dict] = []
 _index_lock = threading.Lock()
 
+def _vec_search(query_vec: np.ndarray, top_k: int):
+    if not _vectors:
+        return [], []
+    mat = np.array(_vectors, dtype=np.float32)
+    q = query_vec.reshape(1, -1).astype(np.float32)
+    sim = mat @ q.T
+    idxs = np.argsort(sim, axis=0)[::-1][:top_k, 0]
+    scores = sim[idxs, 0]
+    return scores.tolist(), idxs.tolist()
+
 def _init_index():
-    global _index, _metadata
+    global _vectors, _metadata
     with _index_lock:
-        if FAISS_PATH.exists():
-            _index = faiss.read_index(str(FAISS_PATH))
-            if META_PATH.exists():
-                _metadata = json.loads(META_PATH.read_text())
-            else:
-                _metadata = []
+        if VEC_PATH.exists() and META_PATH.exists():
+            _vectors = list(np.load(VEC_PATH))
+            _metadata = json.loads(META_PATH.read_text())
         else:
-            _index = None
+            _vectors = []
             _metadata = []
 
 def _save_index():
     with _index_lock:
-        if _index is not None and _index.ntotal > 0:
-            faiss.write_index(_index, str(FAISS_PATH))
+        if _vectors:
+            np.save(VEC_PATH, np.array(_vectors, dtype=np.float32))
             META_PATH.write_text(json.dumps(_metadata))
-        elif FAISS_PATH.exists():
-            FAISS_PATH.unlink()
+        else:
+            VEC_PATH.unlink(missing_ok=True)
             META_PATH.unlink(missing_ok=True)
 
-if HAVE_FAISS:
-    _init_index()
+_init_index()
 
 # ── SQLite sessions ───────────────────────────────────────────
 DB_PATH = DATA_DIR / "sessions.db"
@@ -213,36 +220,43 @@ def _ingest_file(name):
     if len(vecs) != len(chunks):
         return {"error": f"Expected {len(chunks)} embeddings, got {len(vecs)}"}
 
-    dim = len(vecs[0])
     with _index_lock:
-        global _index, _metadata
+        global _vectors, _metadata
         # Remove old vectors for this file
-        _metadata = [m for m in _metadata if m.get("filename") != name]
-        if _index is None:
-            _index = faiss.IndexFlatIP(dim)
-        _index.add(np.array(vecs, dtype=np.float32))
+        keep = [m.get("filename") != name for m in _metadata]
+        new_metadata = [m for m in _metadata if m.get("filename") != name]
+        old_count = len(_metadata) - len(new_metadata)
+        if old_count:
+            kept = [v for v, k in zip(_vectors, keep) if k]
+            _vectors = kept
+        _metadata = new_metadata
         for i, (chunk, vec) in enumerate(zip(chunks, vecs)):
+            _vectors.append(np.array(vec, dtype=np.float32))
             _metadata.append({"filename": name, "chunk_index": i, "text": chunk[:4000]})
     _save_index()
     print(f"[cc-free] Ingested: {name} ({len(chunks)} chunks)")
     return {"ok": True, "chunks": len(chunks)}
 
 def _query_kb(query, top_k=5):
-    if _index is None or _index.ntotal == 0:
+    if not _vectors:
         return []
     try:
         qvec = _embed([query])[0]
     except:
         return []
     with _index_lock:
-        if _index.ntotal == 0:
+        if not _vectors:
             return []
-        scores, indices = _index.search(np.array([qvec], dtype=np.float32), min(top_k, _index.ntotal))
+        qv = np.array(qvec, dtype=np.float32)
+        mat = np.array(_vectors, dtype=np.float32)
+        sim = mat @ qv
+        k = min(top_k, len(sim))
+        idxs = np.argsort(sim)[-k:][::-1]
+        scores = sim[idxs]
     results = []
-    for score, idx in zip(scores[0], indices[0]):
-        if idx >= 0 and idx < len(_metadata):
-            m = _metadata[idx]
-            results.append({"filename": m["filename"], "text": m["text"], "score": round(float(score), 4)})
+    for score, idx in zip(scores, idxs):
+        m = _metadata[idx]
+        results.append({"filename": m["filename"], "text": m["text"], "score": round(float(score), 4)})
     return results
 
 def _chunk_text(text, max_chars=1500, overlap=150):
@@ -624,11 +638,14 @@ class Handler(http.server.BaseHTTPRequestHandler):
     def log_message(self, fmt, *args): pass
 
     def _send(self, status, headers, body):
-        self.send_response(status)
-        for k, v in headers.items():
-            self.send_header(k, v)
-        self.end_headers()
-        self.wfile.write(body)
+        try:
+            self.send_response(status)
+            for k, v in headers.items():
+                self.send_header(k, v)
+            self.end_headers()
+            self.wfile.write(body)
+        except (BrokenPipeError, ConnectionResetError, OSError):
+            pass
 
     def _read_body(self):
         length = int(self.headers.get("Content-Length", 0))
@@ -841,10 +858,7 @@ class Handler(http.server.BaseHTTPRequestHandler):
                     return self._send(*_json({"error": f"File limit ({MAX_FILES}) reached. Upgrade to PRO for unlimited."}, 400))
 
                 _write_file(name, raw)
-                if HAVE_FAISS:
-                    ing = _ingest_file(name)
-                else:
-                    ing = {"ok": True, "chunks": 0}
+                ing = _ingest_file(name)
                 return self._send(*_json({"ok": True, "ingest": ing}))
         except Exception as e:
             return self._send(*_json({"error": str(e)}, 500))
@@ -859,7 +873,7 @@ def main():
     print(f"[cc-free] KB dir:    {KB_DIR}")
     print(f"[cc-free] Data dir:  {DATA_DIR}")
     print(f"[cc-free] Files:     {_count_files()}/{MAX_FILES}")
-    srv = http.server.HTTPServer(("127.0.0.1", PROXY_PORT), Handler)
+    srv = http.server.ThreadingHTTPServer(("127.0.0.1", PROXY_PORT), Handler)
     try:
         srv.serve_forever()
     except KeyboardInterrupt:
