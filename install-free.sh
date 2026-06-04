@@ -15,19 +15,25 @@ CC_PORT="${CC_PORT:-18788}"
 
 PYTHON=$(command -v python3 || command -v python || true)
 
+# Check common paths + existing PRO venv
 if [ -z "$PYTHON" ]; then
-  for p in /usr/bin/python3 /usr/local/bin/python3 /opt/homebrew/bin/python3; do
+  for p in /usr/bin/python3 /usr/local/bin/python3 /opt/homebrew/bin/python3 \
+           "$HOME/contextcut/venv/bin/python" "$HOME/.contextcut-free/venv/bin/python"; do
     [ -x "$p" ] && { PYTHON="$p"; break; }
   done
 fi
 
+# Auto-install on Debian/Ubuntu if still not found (non-interactive sudo)
 if [ -z "$PYTHON" ] && [ -f /etc/os-release ]; then
   . /etc/os-release
   if [[ "$ID" =~ ^(ubuntu|debian)$ ]]; then
     echo ""
     echo -e "${CYAN}==>${NC} Python 3 not found — installing via apt..."
-    sudo apt update -qq && sudo apt install -y -qq python3 python3-pip python3-venv
-    PYTHON=$(command -v python3 || true)
+    if sudo -n apt update -qq 2>/dev/null && sudo -n apt install -y -qq python3 python3-pip python3-venv; then
+      PYTHON=$(command -v python3 || true)
+    else
+      echo -e "${RED}  FAIL${NC} apt install failed (need passwordless sudo or install manually)"
+    fi
   fi
 fi
 
