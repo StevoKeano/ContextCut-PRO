@@ -511,15 +511,16 @@ async function send(){
     if(!r.ok){const d=await r.json();addMsg('ass','Error: '+esc(d.error||'Unknown'));_sending=false;_('sndBtn').disabled=false;_('sndBtn').textContent='Send';return;}
     const reader=r.body.getReader(); const decoder=new TextDecoder();
     let buf='', msgEl=null, full='', _sources=null;
+    let _done=false;
     while(true){
       const{value,done}=await reader.read();
-      if(done)break;
+      if(done||_done)break;
       buf+=decoder.decode(value,{stream:true});
       const lines=buf.split('\n'); buf=lines.pop()||'';
       for(const line of lines){
         if(!line.startsWith('data: '))continue;
         const d=JSON.parse(line.slice(6));
-        if(d.done){_sid=d.sid;if(d.sources&&d.sources.length)_sources=d.sources;}
+        if(d.done){_sid=d.sid;_done=true;if(d.sources&&d.sources.length)_sources=d.sources;}
         else if(d.error){addMsg('ass','Error: '+esc(d.error));}
         else if(d.token){
           if(!msgEl){const el=document.createElement('div');el.className='msg ass';_('cht').appendChild(el);msgEl=el;}
@@ -528,8 +529,8 @@ async function send(){
       }
     }
     // Flush remaining buffer
-    if(buf.startsWith('data: ')){
-      try{const d=JSON.parse(buf.slice(6));if(d.done){_sid=d.sid;if(d.sources&&d.sources.length)_sources=d.sources;}}catch(e){}
+    if(!_done&&buf.startsWith('data: ')){
+      try{const d=JSON.parse(buf.slice(6));if(d.done){_sid=d.sid;_done=true;if(d.sources&&d.sources.length)_sources=d.sources;}}catch(e){}
     }
     if(_sources&&_sources.length)addMsg('ass','**Sources:** '+_sources.map(s=>'`'+esc(s.filename)+'`').join(', '),'');
     loadSessions(); loadStats();
