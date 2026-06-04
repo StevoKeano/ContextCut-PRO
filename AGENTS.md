@@ -1,24 +1,26 @@
 # ContextCut-PRO — Agent instructions
 
 ## Working dir
-`E:\dev\opencode\ContextCut-PRO` (WSL: `/mnt/e/dev/opencode/ContextCut-PRO`)
+- Sandbox (edits): `/mnt/e/Dev/opencode/ContextCut-PRO` (WSL) = `E:\Dev\opencode\ContextCut-PRO` (Windows)
+- User's repo:  `/mnt/e/Dev/ContextCut-PRO` (WSL) = `E:\Dev\ContextCut-PRO` (Windows)
+- **On Windows** `E:\Dev\ContextCut-PRO` = `E:\Dev\contextcut-pro` (case-insensitive), but on WSL they are **different** dirs — always use `ContextCut-PRO` (uppercase) in WSL paths.
 
 ## Deploy workflow
 After editing files:
 
 1. **Copy to user's repo:**
    ```bash
-   cp /mnt/e/dev/opencode/ContextCut-PRO/{filename} /mnt/e/Dev/contextcut-pro/{filename}
+   cp /mnt/e/Dev/opencode/ContextCut-PRO/{filename} /mnt/e/Dev/ContextCut-PRO/{filename}
    ```
 
-2. **Provide git commands** (user runs from `E:\Dev\contextcut-pro`):
+2. **Provide git commands** (user runs from `E:\Dev\ContextCut-PRO`):
    ```
    git add {files}
    git commit -m "message"
    git push
    ```
 
-3. **Provide SCP command** (user runs from Windows cmd):
+3. **SCP to proxy** (user runs from Windows cmd at `E:\Dev\ContextCut-PRO`):
    ```
    scp {filename} steve@192.168.137.252:~/contextcut/{filename}
    ```
@@ -48,10 +50,9 @@ Debounce: **5s** (was 30s — reduced for rapid bulk ops). Observer runs with `r
 
 1. **Copy to user's repo:**
    ```bash
-   cp /mnt/e/dev/opencode/ContextCut-PRO/ingest.py /mnt/e/Dev/contextcut-pro/ingest.py
-   ```
+    cp /mnt/e/dev/opencode/ContextCut-PRO/ingest.py /mnt/e/Dev/ContextCut-PRO/ingest.py
 
-2. **SCP to proxy** (from Windows cmd at `E:\Dev\contextcut-pro`):
+2. **SCP to proxy** (from Windows cmd at `E:\Dev\ContextCut-PRO`):
    ```
    scp ingest.py steve@192.168.137.252:~/contextcut/ingest.py
    ```
@@ -127,25 +128,35 @@ The test runner connects to the proxy's `/v1/chat/completions` endpoint, posts e
 
 1. **Copy to user's repo:**
    ```bash
-   cp /mnt/e/dev/opencode/ContextCut-PRO/{filename} /mnt/e/Dev/contextcut-pro/{filename}
-   ```
+    cp /mnt/e/dev/opencode/ContextCut-PRO/{filename} /mnt/e/Dev/ContextCut-PRO/{filename}
 
-2. **SCP cc-free.py to proxy** (from Windows cmd at `E:\Dev\contextcut-pro`):
+2. **SCP to proxy** (from Windows cmd at `E:\Dev\ContextCut-PRO`):
    ```
-   scp cc-free.py steve@192.168.137.252:~/contextcut/cc-free.py
+   scp {filename} steve@192.168.137.252:~/contextcut/
    ```
 
 3. **Deploy Cloudflare Worker** (from WSL):
    ```bash
-   cd /mnt/e/Dev/contextcut-pro && npx wrangler deploy cloudflare_worker_free.js
+    cd /mnt/e/Dev/ContextCut-PRO && npx wrangler deploy cloudflare_worker_free.js
    ```
 
-4. **Install on Ubuntu** (SSH into proxy):
+4. **Push to GitHub** (from Windows cmd at `E:\Dev\ContextCut-PRO`):
+   ```cmd
+   git add {files}
+   git commit -m "message"
+   git push
+   ```
+
+5. **Install on macOS** (user runs on Mac Mini):
    ```bash
-   curl -sSf https://raw.githubusercontent.com/anomalco/contextcut-pro/main/install-free.sh | bash -s -- --host 192.168.137.1 --port 11434 --chat-model qwen2.5:7b
+   curl -sSf https://raw.githubusercontent.com/StevoKeano/ContextCut-PRO/main/install-free.sh | bash -s -- --host 192.168.137.1 --port 11434 --chat-model qwen2.5:7b --embed-model nomic-embed-text --ctx-limit 32768 --cc-port 18788
    ```
 
 ## Constraints
 - NEVER git commit/push from own directory.
 - NEVER touch files outside `/mnt/e/dev/opencode/ContextCut-PRO` without asking.
 - Only provide commands for user to run.
+- **NEVER recommend `pkill -f python.*cc-free` or `pkill -f "python.*cc-free"`** — the pattern matches the `pkill` process itself, causing it to self-kill. Use `lsof -ti:<port> | xargs kill -9` or `kill $(cat /tmp/cc-free.pid)` instead.
+- **NEVER use `pkill -f` for ANY python process** on the proxy (same self-kill issue). Use `fuser -k <port>/tcp`, `lsof -ti:<port> | xargs kill`, or the dedicated `./stop.sh` script.
+- **NEVER suggest `anomalco` as GitHub org** — the repo is `StevoKeano/ContextCut-PRO`. The raw CDN URL is case-sensitive; always use `StevoKeano/ContextCut-PRO` (not lowercase `contextcut-pro`).
+- **On Windows** `E:\Dev\ContextCut-PRO` = `E:\Dev\contextcut-pro` (case-insensitive FS). In WSL they are different dirs — always use `/mnt/e/Dev/ContextCut-PRO` (uppercase) for the user's repo.
