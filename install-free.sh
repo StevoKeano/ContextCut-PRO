@@ -98,7 +98,10 @@ if [ "${UNINSTALL:-false}" = true ]; then
 fi
 
 if [ -z "$PYTHON" ]; then err "Python 3 not found (install python3)"; exit 1; fi
-PYVER=$($PYTHON --version 2>&1 | grep -oE '\d+\.\d+' || echo "0")
+# Robust version detection — try multiple approaches
+PYVER=$($PYTHON -c "import sys; print(f'{sys.version_info.major}.{sys.version_info.minor}')" 2>/dev/null \
+      || $PYTHON --version 2>&1 | grep -oE '[0-9]+\.[0-9]+' \
+      || echo "0")
 if [ "${PYVER%%.*}" -lt 3 ]; then err "Python 3+ required, found $PYVER"; exit 1; fi
 if ! command -v curl &>/dev/null; then err "curl not found"; exit 1; fi
 
