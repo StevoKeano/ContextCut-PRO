@@ -152,7 +152,8 @@ def _embed(texts, model=None):
 
 def _list_models():
     r = _ollama("GET", "/api/tags")
-    return [m["name"] for m in r.get("models", [])]
+    models = [m["name"] for m in r.get("models", [])]
+    return [m for m in models if not m.lower().endswith("-cloud")]
 
 # ── DuckDuckGo search ─────────────────────────────────────────
 def _web_search(q, max_results=5):
