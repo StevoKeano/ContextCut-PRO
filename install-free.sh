@@ -15,6 +15,22 @@ CC_PORT="${CC_PORT:-18788}"
 
 PYTHON=$(command -v python3 || command -v python || true)
 
+if [ -z "$PYTHON" ]; then
+  for p in /usr/bin/python3 /usr/local/bin/python3 /opt/homebrew/bin/python3; do
+    [ -x "$p" ] && { PYTHON="$p"; break; }
+  done
+fi
+
+if [ -z "$PYTHON" ] && [ -f /etc/os-release ]; then
+  . /etc/os-release
+  if [[ "$ID" =~ ^(ubuntu|debian)$ ]]; then
+    echo ""
+    echo -e "${CYAN}==>${NC} Python 3 not found — installing via apt..."
+    sudo apt update -qq && sudo apt install -y -qq python3 python3-pip python3-venv
+    PYTHON=$(command -v python3 || true)
+  fi
+fi
+
 RED='\033[0;31m'; GREEN='\033[0;32m'; CYAN='\033[0;36m'; NC='\033[0m'
 info() { echo -e "${CYAN}==>${NC} $1"; }
 ok()   { echo -e "${GREEN}  OK${NC} $1"; }
