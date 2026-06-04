@@ -695,7 +695,10 @@ class Handler(http.server.BaseHTTPRequestHandler):
                 qs = self._parse_qs()
                 q = qs.get("q", [""])[0]
                 top_k = int(qs.get("top_k", ["5"])[0])
-                results = _query_kb(q, top_k) if q else []
+                try:
+                    results = _query_kb(q, top_k) if q else []
+                except Exception:
+                    results = []
                 return self._send(*_json({"results": results}))
             if path == "/api/search/web":
                 qs = self._parse_qs()
@@ -770,6 +773,7 @@ class Handler(http.server.BaseHTTPRequestHandler):
                     self.send_header("Connection", "keep-alive")
                     self.end_headers()
                     full_reply = ""
+                    _stream_err = None
                     try:
                         for chunk in _chat_stream_yield(messages, model=model):
                             delta = chunk.get("message", {}).get("content", "")
@@ -779,21 +783,30 @@ class Handler(http.server.BaseHTTPRequestHandler):
                                 self.wfile.write(f"data: {event}\n\n".encode())
                                 self.wfile.flush()
                     except Exception as e:
-                        self.wfile.write(f"data: {json.dumps({'error': str(e)})}\n\n".encode())
-                        self.wfile.flush()
-                    # Save assistant message
-                    with _db_lock:
-                        db = _get_db()
-                        db.execute("INSERT INTO messages (sid, role, content, model, created) VALUES (?,?,?,?,?)",
-                                   (sid, "assistant", full_reply, model, now))
-                        db.commit()
-                        db.close()
-                    # Knowledge sources
-                    kresults = _query_kb(msg, 3)
+                        _stream_err = str(e)
+                    # Save assistant message (best effort)
+                    try:
+                        with _db_lock:
+                            db = _get_db()
+                            db.execute("INSERT INTO messages (sid, role, content, model, created) VALUES (?,?,?,?,?)",
+                                       (sid, "assistant", full_reply, model, now))
+                            db.commit()
+                            db.close()
+                    except Exception:
+                        pass
+                    # Knowledge sources (best effort)
+                    try:
+                        kresults = _query_kb(msg, 3)
+                    except Exception:
+                        kresults = []
                     sources = [{"filename": r["filename"], "score": r["score"]} for r in kresults] if kresults else []
-                    final = json.dumps({"done": True, "sid": sid, "sources": sources})
-                    self.wfile.write(f"data: {final}\n\n".encode())
-                    self.wfile.flush()
+                    # Always send final event
+                    try:
+                        final = json.dumps({"done": True, "sid": sid, "sources": sources, "error": _stream_err})
+                        self.wfile.write(f"data: {final}\n\n".encode())
+                        self.wfile.flush()
+                    except Exception:
+                        pass
                     return
 
                 # Non-streaming path
@@ -805,16 +818,20 @@ class Handler(http.server.BaseHTTPRequestHandler):
                 except Exception as e:
                     return self._send(*_json({"error": str(e)}, 500))
 
-                with _db_lock:
-                    db = _get_db()
-                    db.execute("INSERT INTO messages (sid, role, content, model, created) VALUES (?,?,?,?,?)",
-                               (sid, "assistant", reply, model, now))
-                    db.commit()
-                    db.close()
-
-                kresults = _query_kb(msg, 3)
+                try:
+                    with _db_lock:
+                        db = _get_db()
+                        db.execute("INSERT INTO messages (sid, role, content, model, created) VALUES (?,?,?,?,?)",
+                                   (sid, "assistant", reply, model, now))
+                        db.commit()
+                        db.close()
+                except Exception:
+                    pass
+                try:
+                    kresults = _query_kb(msg, 3)
+                except Exception:
+                    kresults = []
                 sources = [{"filename": r["filename"], "score": r["score"]} for r in kresults] if kresults else []
-
                 return self._send(*_json({"ok": True, "sid": sid, "reply": reply, "sources": sources}))
 
             if path.startswith("/api/session/delete/"):
