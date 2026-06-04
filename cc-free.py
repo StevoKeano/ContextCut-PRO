@@ -128,7 +128,8 @@ def _chat(messages, model=None, stream=False):
     return _ollama("POST", "/api/chat", body)
 
 def _chat_stream_yield(messages, model=None):
-    """Yields parsed JSON chunks from Ollama's streaming /api/chat."""
+    """Yields parsed JSON chunks from Ollama's streaming /api/chat.
+    Stops when Ollama sends done=true to avoid hanging on keep-alive."""
     model = model or CHAT_MODEL
     body = {"model": model, "messages": messages, "stream": True,
             "options": {"num_ctx": CTX_LIMIT}}
@@ -140,7 +141,10 @@ def _chat_stream_yield(messages, model=None):
         for line in r:
             line = line.decode().strip()
             if line:
-                yield json.loads(line)
+                chunk = json.loads(line)
+                yield chunk
+                if chunk.get("done"):
+                    break
 
 def _embed(texts, model=None):
     body = {"model": model or EMBED_MODEL, "input": texts if isinstance(texts, list) else [texts]}
