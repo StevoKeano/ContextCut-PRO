@@ -128,8 +128,7 @@ def _chat(messages, model=None, stream=False):
     return _ollama("POST", "/api/chat", body)
 
 def _chat_stream_yield(messages, model=None):
-    """Yields parsed JSON chunks from Ollama's streaming /api/chat.
-    Stops when Ollama sends done=true to avoid hanging on keep-alive."""
+    """Yields parsed JSON chunks from Ollama's streaming /api/chat."""
     model = model or CHAT_MODEL
     body = {"model": model, "messages": messages, "stream": True,
             "options": {"num_ctx": CTX_LIMIT}}
@@ -203,9 +202,10 @@ def _delete_file(name):
     fpath = KB_DIR / name
     if fpath.exists():
         fpath.unlink()
-    # Remove vectors
     with _index_lock:
-        global _metadata
+        global _vectors, _metadata
+        keep = [m.get("filename") != name for m in _metadata]
+        _vectors = [v for v, k in zip(_vectors, keep) if k]
         _metadata = [m for m in _metadata if m.get("filename") != name]
     _save_index()
     print(f"[cc-free] File deleted: {name}")
@@ -232,14 +232,9 @@ def _ingest_file(name):
 
     with _index_lock:
         global _vectors, _metadata
-        # Remove old vectors for this file
         keep = [m.get("filename") != name for m in _metadata]
-        new_metadata = [m for m in _metadata if m.get("filename") != name]
-        old_count = len(_metadata) - len(new_metadata)
-        if old_count:
-            kept = [v for v, k in zip(_vectors, keep) if k]
-            _vectors = kept
-        _metadata = new_metadata
+        _vectors = [v for v, k in zip(_vectors, keep) if k]
+        _metadata = [m for m in _metadata if m.get("filename") != name]
         for i, (chunk, vec) in enumerate(zip(chunks, vecs)):
             _vectors.append(list(vec))
             _metadata.append({"filename": name, "chunk_index": i, "text": chunk[:4000]})
@@ -510,8 +505,7 @@ async function send(){
     const r=await fetch('/api/chat',{method:'POST',headers:{'Content-Type':'application/json'},body});
     if(!r.ok){const d=await r.json();addMsg('ass','Error: '+esc(d.error||'Unknown'));_sending=false;_('sndBtn').disabled=false;_('sndBtn').textContent='Send';return;}
     const reader=r.body.getReader(); const decoder=new TextDecoder();
-    let buf='', msgEl=null, full='', _sources=null;
-    let _done=false;
+    let buf='', msgEl=null, full='', _sources=null, _done=false;
     while(true){
       const{value,done}=await reader.read();
       if(done||_done)break;
@@ -790,7 +784,6 @@ class Handler(http.server.BaseHTTPRequestHandler):
                                 self.wfile.flush()
                     except Exception as e:
                         _stream_err = str(e)
-                    # Save assistant message (best effort)
                     try:
                         with _db_lock:
                             db = _get_db()
@@ -800,13 +793,11 @@ class Handler(http.server.BaseHTTPRequestHandler):
                             db.close()
                     except Exception:
                         pass
-                    # Knowledge sources (best effort)
                     try:
                         kresults = _query_kb(msg, 3)
                     except Exception:
                         kresults = []
                     sources = [{"filename": r["filename"], "score": r["score"]} for r in kresults] if kresults else []
-                    # Always send final event
                     try:
                         final = json.dumps({"done": True, "sid": sid, "sources": sources, "error": _stream_err})
                         self.wfile.write(f"data: {final}\n\n".encode())
