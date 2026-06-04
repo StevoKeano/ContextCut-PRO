@@ -112,7 +112,26 @@ ok "Config written to $INSTALL_DIR/env"
 
 info "Installing Python dependencies..."
 $PYTHON -m pip install --quiet --upgrade pip 2>/dev/null || true
-$PYTHON -m pip install --quiet faiss-cpu numpy 2>/dev/null && ok "faiss-cpu + numpy" || warn "faiss install failed"
+FAISS_OK=false
+if $PYTHON -c "import faiss" 2>/dev/null; then
+  FAISS_OK=true
+  ok "faiss already installed"
+else
+  if $PYTHON -m pip install --quiet faiss-cpu numpy 2>/dev/null; then
+    FAISS_OK=true
+    ok "faiss-cpu + numpy"
+  elif [ "$(uname)" = "Darwin" ] && command -v brew &>/dev/null; then
+    warn "faiss-cpu needs libomp — installing via Homebrew..."
+    brew install libomp 2>/dev/null && \
+    $PYTHON -m pip install --quiet faiss-cpu numpy 2>/dev/null && \
+    FAISS_OK=true && ok "faiss-cpu + numpy (with libomp)"
+  fi
+fi
+if [ "$FAISS_OK" = false ]; then
+  $PYTHON -m pip install --quiet numpy 2>/dev/null || true
+  warn "faiss-cpu install failed — falling back to numpy-only (slower)"
+  warn "  To fix: brew install libomp && pip install faiss-cpu"
+fi
 $PYTHON -m pip install --quiet duckduckgo_search 2>/dev/null && ok "duckduckgo_search" || true
 
 if command -v systemctl &>/dev/null && [ "${NO_SYSTEMD:-false}" = false ]; then
