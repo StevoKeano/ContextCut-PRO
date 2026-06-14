@@ -840,9 +840,6 @@ def _handle_signal(signum, frame):
     os._exit(0)
 
 
-signal.signal(signal.SIGINT, _handle_signal)
-signal.signal(signal.SIGTERM, _handle_signal)
-
 # ── Lazy clients ──────────────────────────────────────────────────────────────
 _vc = None
 _qclient = None
@@ -4453,7 +4450,12 @@ class DashboardHandler(_SuppressBrokenPipe, BaseHTTPRequestHandler):
                     return
                 from agent_handler import _confidence_scan
 
-                result = _confidence_scan(text, model_name)
+                result = _confidence_scan(
+                    text,
+                    model_name,
+                    upstream=get_current_upstream(),
+                    api_key=get_current_api_key(),
+                )
                 body_resp = json.dumps({"passages": result}).encode()
                 self.send_response(200)
                 self.send_header("Content-Type", "application/json")
@@ -4492,13 +4494,16 @@ class DashboardHandler(_SuppressBrokenPipe, BaseHTTPRequestHandler):
                     build_agent,
                     build_messages_from_history,
                     _check_tool_usage,
-                    _confidence_scan,
                 )
 
                 add_to_history(sid, "user", message)
                 session = _sessions[sid]
                 chat_history = build_messages_from_history(session["history"][:-1])
-                agent = build_agent(model_name)
+                agent = build_agent(
+                    model_name,
+                    upstream=get_current_upstream(),
+                    api_key=get_current_api_key(),
+                )
                 input_messages = chat_history + [HumanMessage(content=message)]
                 shell_mode = session.get("shell_confirm_mode", "ask")
 
@@ -4694,6 +4699,8 @@ class DashboardHandler(_SuppressBrokenPipe, BaseHTTPRequestHandler):
 
 # ── Main ──────────────────────────────────────────────────────────────────────
 if __name__ == "__main__":
+    signal.signal(signal.SIGINT, _handle_signal)
+    signal.signal(signal.SIGTERM, _handle_signal)
     load_saved_credentials()
 
     # Sync .env first so ingest.py reads correct settings

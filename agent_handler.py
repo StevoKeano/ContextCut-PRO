@@ -20,6 +20,7 @@ from langchain.tools import tool
 from langchain_openai import ChatOpenAI
 from langchain.agents import create_agent
 from langchain_core.messages import HumanMessage, AIMessage, SystemMessage
+from qdrant_proxy_final import qdrant_context
 
 # ── Blocked shell patterns ────────────────────────────────────────────────────
 BLOCKED_PREFIXES = [
@@ -173,11 +174,9 @@ def _check_tool_usage(user_message: str, called_tools: set) -> tuple[bool, str]:
 # ── Layer 2: Confidence scan ──────────────────────────────────────────────────
 
 
-def _confidence_scan(text: str, model_name: str = None) -> list[dict]:
-    from qdrant_proxy_final import get_current_upstream, get_current_api_key
-
-    upstream = get_current_upstream()
-    api_key = get_current_api_key()
+def _confidence_scan(
+    text: str, model_name: str = None, upstream: str = None, api_key: str = None
+) -> list[dict]:
     llm = ChatOpenAI(
         model=model_name or "gpt-4o-mini",
         openai_api_base=upstream + "/v1",
@@ -413,8 +412,6 @@ def vector_search(query: str, top_k: int = 5) -> str:
     Uses the proxy's own embedding pipeline.
     """
     try:
-        from qdrant_proxy_final import qdrant_context
-
         context_str, meta = qdrant_context(query)
         if not context_str:
             return "No relevant context found in vector store."
@@ -549,11 +546,7 @@ Rules:
 6. Always explain what you plan to do before doing it."""
 
 
-def build_agent(model_name: str = None):
-    from qdrant_proxy_final import get_current_upstream, get_current_api_key
-
-    upstream = get_current_upstream()
-    api_key = get_current_api_key()
+def build_agent(model_name: str = None, upstream: str = None, api_key: str = None):
 
     llm = ChatOpenAI(
         model=model_name or "gpt-4o",
