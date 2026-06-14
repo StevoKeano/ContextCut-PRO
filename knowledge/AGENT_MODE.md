@@ -2,14 +2,6 @@
 
 What can I expect to do with Agent ON? When you see `🤖 Agent ON` in the chat bar, the AI can now take actions on your machine instead of just returning text. Agent mode can read, write, and run files, search the web, query the knowledge base, and check system resources. This document explains what you can do with Agent ON and how to use it effectively.
 
-## Hallucination Detection
-
-Two layers protect against fabricated information:
-
-**Layer 1 — Tool-usage enforcer (always on):** After the AI responds, your question is checked against keywords. If you asked for real-time data (e.g. "check my resources", "read a file", "search the web") and no tool was called, the response is blocked and the AI is re-prompted to use a tool before answering. This runs at zero extra LLM cost.
-
-**Layer 2 — Confidence scan (opt-in):** Click the `🧪 Scan OFF` button in the chat bar to enable. After each agent response, a second lightweight LLM call scans the text and rates passages as HIGH / MEDIUM / LOW confidence. Suspect passages (MEDIUM or LOW) are highlighted with a yellow border and a ⚠/⚡ icon in the chat bubble. Hover over a highlighted passage to see why it was flagged.
-
 ## Ask me what I can do
 
 I can read any file on your system. I can write new files and edit existing ones. I can run bash commands. I can search the web. I can query your knowledge base. I can check your CPU, RAM, disk, and GPU.
