@@ -4495,6 +4495,7 @@ class DashboardHandler(_SuppressBrokenPipe, BaseHTTPRequestHandler):
                     build_messages_from_history,
                     _check_tool_usage,
                 )
+                from langchain_core.messages import HumanMessage
 
                 add_to_history(sid, "user", message)
                 session = _sessions[sid]
