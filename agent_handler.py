@@ -66,6 +66,148 @@ def _run_subprocess(args, timeout=None, **kwargs):
             timer.cancel()
 
 
+# ── Layer 1: Tool-usage enforcer ──────────────────────────────────────────────
+
+_TOOL_KEYWORDS = {
+    "shell_exec": [
+        "run",
+        "execute",
+        "command",
+        "terminal",
+        "bash",
+        "shell",
+        "script",
+        "install",
+        "compile",
+        "build",
+        "make",
+        "git ",
+        "npm ",
+        "pip ",
+    ],
+    "read_file": [
+        "read file",
+        "show file",
+        "open file",
+        "cat ",
+        "view file",
+        "file content",
+        "contents of",
+        "what's in",
+    ],
+    "write_file": ["write file", "save file", "create file", "write to"],
+    "web_search": [
+        "search",
+        "look up",
+        "google",
+        "duckduckgo",
+        "what is",
+        "who is",
+        "find online",
+        "latest news",
+        "tell me about",
+        "find information",
+        "research",
+    ],
+    "fetch_url": [
+        "fetch",
+        "url",
+        "http",
+        "https://",
+        "website",
+        "web page",
+        "download",
+    ],
+    "vector_search": [
+        "search knowledge",
+        "rag",
+        "contextcut",
+        "vector",
+        "knowledge base",
+        "query kb",
+        "what do you know about",
+    ],
+    "system_info": [
+        "system",
+        "resource",
+        "cpu",
+        "gpu",
+        "ram",
+        "memory",
+        "disk",
+        "nvidia",
+        "hardware",
+        "specs",
+        "specification",
+    ],
+    "list_dir": [
+        "list dir",
+        "list files",
+        "directory",
+        "ls ",
+        "what files",
+        "show folder",
+        "browse",
+    ],
+    "diff_files": ["diff", "compare file", "difference between"],
+}
+
+
+def _check_tool_usage(user_message: str, called_tools: set) -> tuple[bool, str]:
+    lower_msg = user_message.lower()
+    needed_tools = set()
+    for tool_name, keywords in _TOOL_KEYWORDS.items():
+        for kw in keywords:
+            if kw in lower_msg:
+                needed_tools.add(tool_name)
+                break
+    if needed_tools and not (needed_tools & called_tools):
+        names = ", ".join(sorted(needed_tools))
+        return (
+            True,
+            f"You must call a tool before answering. Your question requires real-time data that one of these tools provides: {names}. Try again with an explicit tool call.",
+        )
+    return False, ""
+
+
+# ── Layer 2: Confidence scan ──────────────────────────────────────────────────
+
+
+def _confidence_scan(text: str, model_name: str = None) -> list[dict]:
+    from qdrant_proxy_final import get_current_upstream, get_current_api_key
+
+    upstream = get_current_upstream()
+    api_key = get_current_api_key()
+    llm = ChatOpenAI(
+        model=model_name or "gpt-4o-mini",
+        openai_api_base=upstream + "/v1",
+        openai_api_key=api_key or "not-needed",
+        temperature=0.1,
+    )
+    prompt = f"""Analyze the following text and identify any passages that might be factual inaccuracies or hallucinations. For each passage, rate confidence as HIGH (well-supported), MEDIUM (plausible but unverifiable), or LOW (likely fabricated).
+
+Return a JSON array of objects with keys: "text" (the passage), "confidence" (HIGH/MEDIUM/LOW), "reason" (brief explanation).
+
+Text:
+{text}
+
+Respond ONLY with the JSON array, no other text."""
+    try:
+        resp = llm.invoke([HumanMessage(content=prompt)])
+        content = resp.content.strip()
+        if content.startswith("```json"):
+            content = content[7:]
+        if content.startswith("```"):
+            content = content[3:]
+        if content.endswith("```"):
+            content = content[:-3]
+        content = content.strip()
+        results = json.loads(content)
+        return results if isinstance(results, list) else []
+    except Exception as e:
+        return [{"text": text, "confidence": "HIGH", "reason": f"Scan error: {e}"}]
+
+
 # ── Tool definitions ──────────────────────────────────────────────────────────
 
 

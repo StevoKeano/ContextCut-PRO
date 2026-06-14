@@ -1849,6 +1849,9 @@ tr:hover td{{background:var(--surf2)}}
 .send-btn:hover{{opacity:.85}}.send-btn:disabled{{opacity:.4;cursor:not-allowed}}
 .att-btn{{background:transparent;border:1px solid var(--border);color:var(--muted);border-radius:var(--r);padding:8px 10px;font-size:14px;cursor:pointer;line-height:1;flex-shrink:0}}
 .agent-toggle.agent-on{{background:var(--accent);color:#000;border-color:var(--accent);font-weight:600}}
+.scan-toggle{{background:transparent;border:1px solid var(--border);color:var(--muted);border-radius:3px;padding:8px 10px;font-size:11px;cursor:pointer;line-height:1;flex-shrink:0;font-family:'JetBrains Mono',monospace}}
+.scan-toggle.scan-on{{background:#f59e0b;color:#000;border-color:#f59e0b;font-weight:600}}
+.suspect{{background:rgba(245,158,11,0.2);border-left:3px solid #f59e0b;padding:2px 6px;border-radius:2px}}
 .tool-call{{background:var(--surf2);border:1px solid var(--border);border-radius:var(--r);padding:8px 12px;margin:6px 0;font-size:12px}}
 .tool-call summary{{cursor:pointer;color:var(--accent);font-weight:600}}
 .tool-call .tool-name{{color:var(--yellow)}}
@@ -2003,6 +2006,7 @@ tr.cloud-off td{{background:#0a1a2e!important;color:#22c55e!important;border-top
         <textarea class="chat-input" id="chatInput" rows="2" role="textbox" aria-label="Message input"
           placeholder="Type a message… (Enter to send, Shift+Enter for newline). Try: /clear, /help"
           onkeydown="handleKey(event)"></textarea>
+        <button class="scan-toggle" id="scanToggle" onclick="toggleScanMode()" title="Scan responses for potential hallucinations">🧪 Scan OFF</button>
         <button class="agent-toggle" id="agentToggle" onclick="toggleAgentMode()" title="Toggle Agent mode (tool-use)" style="background:transparent;border:1px solid var(--border);color:var(--muted);border-radius:3px;padding:8px 10px;font-size:11px;cursor:pointer;line-height:1;flex-shrink:0;font-family:'JetBrains Mono',monospace">🤖 Agent OFF</button>
         <button class="send-btn" id="sendBtn" onclick="sendMessage()" aria-label="Send message">Send ↑</button>
       </div>
@@ -2017,6 +2021,8 @@ let conversationHistory = [];
 let inputHistory = [];
 let inputHistoryIdx = -1;
 let agentMode = false;
+let scanMode = false;
+let scanPending = false;
 
 function toggleAgentMode() {{
   agentMode = !agentMode;
@@ -2033,8 +2039,17 @@ function toggleAgentMode() {{
   }}
 }}
 
+function toggleScanMode() {{
+  scanMode = !scanMode;
+  const btn = document.getElementById('scanToggle');
+  if (btn) {{
+    btn.textContent = scanMode ? '🧪 Scan ON' : '🧪 Scan OFF';
+    btn.classList.toggle('scan-on', scanMode);
+  }}
+}}
+
 function esc(s) {{
-  return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/\\n/g,'<br>');
+  return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/\n/g,'<br>');
 }}
 
 async function shellConfirm(btn, allow) {{
@@ -2618,7 +2633,38 @@ async function sendMessage() {{
       removeTyping();
       appendMsg('assistant', '\u274c Agent network error: ' + e.message, '');
     }}
-    if (fullText) conversationHistory.push({{role:'assistant', content:fullText}});
+    if (fullText) {{
+      conversationHistory.push({{role:'assistant', content:fullText}});
+      if (scanMode && assistantDiv) {{
+        try {{
+          const sr = await fetch('/api/agent/confidence-scan', {{
+            method: 'POST',
+            headers: {{'Content-Type':'application/json'}},
+            body: JSON.stringify({{text: fullText, model: model}})
+          }});
+          if (sr.ok) {{
+            const sd = await sr.json();
+            if (sd.passages && sd.passages.length > 0) {{
+              let highlighted = fullText;
+              for (const p of sd.passages) {{
+                if ((p.confidence === 'LOW' || p.confidence === 'MEDIUM') && p.text && p.text.length > 5) {{
+                  const escaped = p.text.replace(/[.*+?^${{}}()|[\\]\\\\]/g, '\\\\$&');
+                  const icon = p.confidence === 'LOW' ? '\\u26a0\\ufe0f ' : '\\u26a1 ';
+                  const title = esc(p.confidence + ': ' + (p.reason || ''));
+                  try {{
+                    const re = new RegExp(escaped.replace(/\\n/g, '\\\\n'), 'gi');
+                    highlighted = highlighted.replace(re, (match) =>
+                      '<span class=\\"suspect\\" title=\\"' + title + '\\">' + icon + esc(match) + '</span>'
+                    );
+                  }} catch(e) {{}}
+                }}
+              }}
+              if (bubble) bubble.innerHTML = highlighted;
+            }}
+          }}
+        }} catch(e) {{ console.warn('Confidence scan failed:', e); }}
+      }}
+    }}
     sendBtn.disabled = false;
     input.focus();
     return;
@@ -4392,6 +4438,37 @@ class DashboardHandler(_SuppressBrokenPipe, BaseHTTPRequestHandler):
                 self.wfile.write(err)
             return
 
+        if self.path == "/api/agent/confidence-scan":
+            try:
+                body = json.loads(raw_body)
+                text = body.get("text", "")
+                model_name = body.get("model", None)
+                if not text.strip():
+                    resp = json.dumps({"error": "text is required"}).encode()
+                    self.send_response(400)
+                    self.send_header("Content-Type", "application/json")
+                    self.send_header("Content-Length", str(len(resp)))
+                    self.end_headers()
+                    self.wfile.write(resp)
+                    return
+                from agent_handler import _confidence_scan
+
+                result = _confidence_scan(text, model_name)
+                body_resp = json.dumps({"passages": result}).encode()
+                self.send_response(200)
+                self.send_header("Content-Type", "application/json")
+                self.send_header("Content-Length", str(len(body_resp)))
+                self.end_headers()
+                self.wfile.write(body_resp)
+            except Exception as e:
+                err = json.dumps({"error": str(e)}).encode()
+                self.send_response(500)
+                self.send_header("Content-Type", "application/json")
+                self.send_header("Content-Length", str(len(err)))
+                self.end_headers()
+                self.wfile.write(err)
+            return
+
         if self.path == "/api/agent":
             try:
                 body = json.loads(raw_body)
@@ -4411,7 +4488,12 @@ class DashboardHandler(_SuppressBrokenPipe, BaseHTTPRequestHandler):
                     self.wfile.write(resp)
                     return
 
-                from agent_handler import build_agent, build_messages_from_history
+                from agent_handler import (
+                    build_agent,
+                    build_messages_from_history,
+                    _check_tool_usage,
+                    _confidence_scan,
+                )
 
                 add_to_history(sid, "user", message)
                 session = _sessions[sid]
@@ -4429,63 +4511,95 @@ class DashboardHandler(_SuppressBrokenPipe, BaseHTTPRequestHandler):
 
                 async def _run_agent_stream():
                     sse_events = []
-                    last_msg_count = len(input_messages)
-                    tool_info = {}
-                    try:
-                        async for event in agent.astream_events(
-                            {"messages": input_messages},
-                            version="v1",
-                        ):
-                            kind = event.get("event", "")
-                            if kind == "on_chat_model_stream":
-                                chunk = event.get("data", {}).get("chunk", None)
-                                if (
-                                    chunk
-                                    and hasattr(chunk, "content")
-                                    and chunk.content
-                                ):
-                                    text = chunk.content
-                                    if isinstance(text, str) and text:
-                                        sse_events.append(
-                                            f"event: token\ndata: {json.dumps({'token': text})}\n\n"
+                    called_tools = set()
+                    full_output = ""
+
+                    async def _invoke_and_stream(msgs, is_retry=False):
+                        nonlocal full_output
+                        local_tools = set()
+                        try:
+                            async for event in agent.astream_events(
+                                {"messages": msgs},
+                                version="v1",
+                            ):
+                                kind = event.get("event", "")
+                                if kind == "on_chat_model_stream":
+                                    chunk = event.get("data", {}).get("chunk", None)
+                                    if (
+                                        chunk
+                                        and hasattr(chunk, "content")
+                                        and chunk.content
+                                    ):
+                                        text = chunk.content
+                                        if isinstance(text, str) and text:
+                                            sse_events.append(
+                                                f"event: token\ndata: {json.dumps({'token': text})}\n\n"
+                                            )
+                                elif kind == "on_tool_start":
+                                    tool_name = event.get("name", "unknown")
+                                    local_tools.add(tool_name)
+                                    tool_input = event.get("data", {}).get("input", {})
+                                    if isinstance(tool_input, dict):
+                                        cmd = tool_input.get(
+                                            "command",
+                                            tool_input.get(
+                                                "path", json.dumps(tool_input)
+                                            ),
                                         )
-                            elif kind == "on_tool_start":
-                                tool_name = event.get("name", "unknown")
-                                tool_input = event.get("data", {}).get("input", {})
-                                if isinstance(tool_input, dict):
-                                    cmd = tool_input.get(
-                                        "command",
-                                        tool_input.get("path", json.dumps(tool_input)),
-                                    )
-                                else:
-                                    cmd = str(tool_input)[:200]
-                                sse_events.append(
-                                    f"event: tool_call\ndata: {json.dumps({'name': tool_name, 'input': cmd, 'shell_mode': shell_mode})}\n\n"
-                                )
-                                if tool_name == "shell_exec" and shell_mode == "reject":
+                                    else:
+                                        cmd = str(tool_input)[:200]
                                     sse_events.append(
-                                        f"event: tool_result\ndata: {json.dumps({'name': tool_name, 'result': 'Rejected by policy.'})}\n\n"
+                                        f"event: tool_call\ndata: {json.dumps({'name': tool_name, 'input': cmd, 'shell_mode': shell_mode})}\n\n"
                                     )
-                            elif kind == "on_tool_end":
-                                tool_name = event.get("name", "unknown")
-                                output_data = event.get("data", {}).get("output", "")
-                                output_str = (
-                                    str(output_data)[:2000] if output_data else ""
-                                )
-                                sse_events.append(
-                                    f"event: tool_result\ndata: {json.dumps({'name': tool_name, 'result': output_str})}\n\n"
-                                )
-                        result = await agent.ainvoke({"messages": input_messages})
-                        final_msgs = result.get("messages", [])
-                        full_output = final_msgs[-1].content if final_msgs else ""
+                                    if (
+                                        tool_name == "shell_exec"
+                                        and shell_mode == "reject"
+                                    ):
+                                        sse_events.append(
+                                            f"event: tool_result\ndata: {json.dumps({'name': tool_name, 'result': 'Rejected by policy.'})}\n\n"
+                                        )
+                                elif kind == "on_tool_end":
+                                    tool_name = event.get("name", "unknown")
+                                    output_data = event.get("data", {}).get(
+                                        "output", ""
+                                    )
+                                    output_str = (
+                                        str(output_data)[:2000] if output_data else ""
+                                    )
+                                    sse_events.append(
+                                        f"event: tool_result\ndata: {json.dumps({'name': tool_name, 'result': output_str})}\n\n"
+                                    )
+                            result = await agent.ainvoke({"messages": msgs})
+                            final_msgs = result.get("messages", [])
+                            full_output = final_msgs[-1].content if final_msgs else ""
+                        except Exception as e:
+                            sse_events.append(
+                                f"event: error\ndata: {json.dumps({'error': str(e)})}\n\n"
+                            )
+                        return local_tools
+
+                    # First pass: stream + track tools
+                    called_tools = await _invoke_and_stream(input_messages)
+
+                    # Layer 1: Check tool usage and re-run if needed
+                    blocked, reason = _check_tool_usage(message, called_tools)
+                    max_retries = 2
+                    retry_count = 0
+                    while blocked and retry_count < max_retries:
                         sse_events.append(
-                            f"event: done\ndata: {json.dumps({'response': full_output})}\n\n"
+                            f"event: enforcer\ndata: {json.dumps({'blocked': True, 'reason': reason})}\n\n"
                         )
-                    except Exception as e:
-                        sse_events.append(
-                            f"event: error\ndata: {json.dumps({'error': str(e)})}\n\n"
-                        )
-                    return sse_events, full_output if "full_output" in dir() else ""
+                        retry_msgs = input_messages + [
+                            HumanMessage(content=f"IMPORTANT: {reason}")
+                        ]
+                        retry_tools = await _invoke_and_stream(retry_msgs)
+                        blocked, reason = _check_tool_usage(message, retry_tools)
+                        retry_count += 1
+
+                    sse_events.append(
+                        f"event: done\ndata: {json.dumps({'response': full_output})}\n\n"
+                    )
+                    return sse_events, full_output
 
                 if not is_stream:
                     output = asyncio.run(_run_agent())
