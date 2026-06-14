@@ -178,7 +178,7 @@ def _confidence_scan(
     text: str, model_name: str = None, upstream: str = None, api_key: str = None
 ) -> list[dict]:
     llm = ChatOpenAI(
-        model=model_name or "gpt-4o-mini",
+        model=model_name or "qwen3:14b-q8_0",
         openai_api_base=upstream + "/v1",
         openai_api_key=api_key or "not-needed",
         temperature=0.1,

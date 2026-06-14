@@ -840,6 +840,16 @@ def _handle_signal(signum, frame):
     os._exit(0)
 
 
+# ── Load .env into os.environ early so module-level defaults reflect .env ──
+_env_path = Path(__file__).parent / ".env"
+if _env_path.exists():
+    for _line in _env_path.read_text().splitlines():
+        if "=" in _line and not _line.startswith("#"):
+            _k, _v = _line.split("=", 1)
+            _k, _v = _k.strip(), _v.strip().strip('"').strip("'")
+            if _k and _k not in os.environ:
+                os.environ[_k] = _v
+
 # ── Lazy clients ──────────────────────────────────────────────────────────────
 _vc = None
 _qclient = None
@@ -2553,7 +2563,20 @@ async function sendMessage() {{
       }});
       if (!resp.ok) {{
         removeTyping();
-        appendMsg('assistant', '\u274c Agent Error ' + resp.status + ': ' + await resp.text(), '');
+        let errText = await resp.text();
+        try {{
+          const errJson = JSON.parse(errText);
+          if (errJson.error && typeof errJson.error === 'object' && errJson.error.message) {{
+            errText = errJson.error.message;
+          }} else if (typeof errJson.error === 'string') {{
+            errText = errJson.error;
+          }}
+        }} catch(e) {{}}
+        let msg = '\u274c Agent Error: ' + errText;
+        if (errText.includes('does not support tools')) {{
+          msg = '\u274c Model <strong>' + model + '</strong> does not support tool calling. Agent mode requires a model with tool-use capability (e.g. qwen3, llama3, deepseek-v3). Switch to a compatible model or disable Agent ON.';
+        }}
+        appendMsg('assistant', msg, '');
         sendBtn.disabled = false;
         return;
       }}
@@ -2637,7 +2660,7 @@ async function sendMessage() {{
           const sr = await fetch('/api/agent/confidence-scan', {{
             method: 'POST',
             headers: {{'Content-Type':'application/json'}},
-            body: JSON.stringify({{text: fullText, model: model}})
+            body: JSON.stringify({{text: fullText}})
           }});
           if (sr.ok) {{
             const sd = await sr.json();
@@ -4439,7 +4462,7 @@ class DashboardHandler(_SuppressBrokenPipe, BaseHTTPRequestHandler):
             try:
                 body = json.loads(raw_body)
                 text = body.get("text", "")
-                model_name = body.get("model", None)
+                model_name = body.get("model", DEFAULT_MODEL or "qwen3:14b-q8_0")
                 if not text.strip():
                     resp = json.dumps({"error": "text is required"}).encode()
                     self.send_response(400)
@@ -4500,11 +4523,30 @@ class DashboardHandler(_SuppressBrokenPipe, BaseHTTPRequestHandler):
                 add_to_history(sid, "user", message)
                 session = _sessions[sid]
                 chat_history = build_messages_from_history(session["history"][:-1])
-                agent = build_agent(
-                    model_name,
-                    upstream=get_current_upstream(),
-                    api_key=get_current_api_key(),
-                )
+                try:
+                    agent = build_agent(
+                        model_name,
+                        upstream=get_current_upstream(),
+                        api_key=get_current_api_key(),
+                    )
+                except Exception as e:
+                    err_str = str(e)
+                    if "does not support tools" in err_str:
+                        msg = (
+                            f"Model '{model_name}' does not support tool calling. "
+                            "Agent mode requires a model with tool-use capability "
+                            "(e.g. qwen3, llama3, deepseek-v3). "
+                            "Switch to a compatible model or disable Agent ON."
+                        )
+                    else:
+                        msg = f"Failed to initialize agent: {err_str}"
+                    resp = json.dumps({"error": msg}).encode()
+                    self.send_response(400)
+                    self.send_header("Content-Type", "application/json")
+                    self.send_header("Content-Length", str(len(resp)))
+                    self.end_headers()
+                    self.wfile.write(resp)
+                    return
                 input_messages = chat_history + [HumanMessage(content=message)]
                 shell_mode = session.get("shell_confirm_mode", "ask")
 
