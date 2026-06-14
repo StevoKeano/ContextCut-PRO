@@ -1070,13 +1070,34 @@ SYSTEM_BASE = (
     "not certain exists, state that you cannot confirm it rather than fabricating details."
 )
 
+GROUNDING_WITH_HITS = (
+    "The following context passages were retrieved from the knowledge base.\n"
+    "You MUST base your answer on these passages. "
+    "After each claim, cite the source filename in brackets, e.g. [myfile.md].\n"
+    "If a passage is only partially relevant, use what applies and note the limitation.\n"
+    "Do NOT invent facts beyond what the passages contain."
+)
+
+GROUNDING_NO_HITS = (
+    "⚠️ No relevant context was found in the knowledge base for this question.\n"
+    "The following answer is based on general training knowledge only and may not reflect "
+    "your specific documents or configuration. Verify independently."
+)
+
 
 def inject_context(body: dict, context: str) -> dict:
     messages = body.get("messages", [])
     has_system = bool(messages and messages[0].get("role") == "system")
     ctx_block = ""
     if context:
-        ctx_block = "## Relevant context (semantic search):\n\n" + context + "\n\n---"
+        ctx_block = (
+            GROUNDING_WITH_HITS
+            + "\n\n## Relevant context (semantic search):\n\n"
+            + context
+            + "\n\n---"
+        )
+    else:
+        ctx_block = GROUNDING_NO_HITS
     if has_system:
         existing = messages[0]["content"]
         parts = [existing, SYSTEM_BASE]
@@ -1290,6 +1311,27 @@ class ProxyHandler(_SuppressBrokenPipe, BaseHTTPRequestHandler):
             if query:
                 ctx, hits_meta = qdrant_context(query)
                 body = inject_context(body, ctx)
+                # Append citation reminder directly to last user message when hits exist
+                if ctx and hits_meta:
+                    for msg in reversed(body["messages"]):
+                        if msg.get("role") == "user":
+                            msg["content"] = (
+                                msg["content"]
+                                + "\n\n[INSTRUCTION: Base your answer on the context passages above. "
+                                "Cite each source filename in brackets after the claim it supports, "
+                                "e.g. [doctor-REGULATORY.md]. Do not invent facts not present in the passages.]"
+                            )
+                            break
+                elif not ctx:
+                    for msg in reversed(body["messages"]):
+                        if msg.get("role") == "user":
+                            msg["content"] = (
+                                msg["content"]
+                                + "\n\n[INSTRUCTION: No knowledge base context was found for this query. "
+                                "Begin your response with: '⚠️ No relevant context found in knowledge base.' "
+                                "then answer from general knowledge.]"
+                            )
+                            break
                 tok_after = count_body_tokens(body)
                 if tok_after > CTX_LIMIT:
                     pruned = 0
