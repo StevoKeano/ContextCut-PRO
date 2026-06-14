@@ -1883,7 +1883,8 @@ tr:hover td{{background:var(--surf2)}}
 .settings-panel{{display:none;background:var(--surf);border-top:1px solid var(--border);padding:8px 10px}}
 .settings-panel.open{{display:block}}
 .right.fullscreen{{position:fixed;top:48px;left:0;right:0;bottom:0;z-index:100;background:var(--bg);border-top:1px solid var(--border)}}
-.right.fullscreen .chat-input-bar{{position:fixed;bottom:0;left:0;right:0}}
+.right.fullscreen .chat-messages{{flex:1;overflow-y:auto;padding:14px;display:flex;flex-direction:column;gap:10px}}
+.right.fullscreen .chat-input-bar{{flex-shrink:0}}
 #tourOv{{position:fixed;top:0;left:0;right:0;bottom:0;z-index:9998;display:none}}
 #tourOv.on{{display:block}}
 #tourSpot{{position:fixed;z-index:9999;pointer-events:none;border-radius:8px;box-shadow:0 0 0 9999px rgba(0,0,0,.55);transition:all .35s ease}}
@@ -1932,6 +1933,7 @@ tr.cloud-off td{{background:#0a1a2e!important;color:#22c55e!important;border-top
         <div class="card"><div class="card-label">Tokens Saved</div><div class="card-val green" id="cardSave">{s.get("total_saved", 0):,}</div></div>
         <div class="card"><div class="card-label">Peak Tokens</div><div class="card-val {"red" if s["max_tokens_seen"] > CTX_LIMIT * 0.8 else ""}" id="cardPeak">{s["max_tokens_seen"]:,}</div></div>
         <div class="card"><div class="card-label">CTX Limit</div><div class="card-val">{CTX_LIMIT:,}</div></div>
+        <div class="card"><div class="card-label">GPU</div><div class="card-val" id="cardGpu" style="font-size:12px">—</div></div>
         <div class="card"><div class="card-label">Cache Hits</div><div class="card-val" style="font-size:13px" id="cardCache">{s.get("cache_hits", 0)}</div></div>
         </div>
       <div class="ctx-wrap">
@@ -2002,6 +2004,11 @@ tr.cloud-off td{{background:#0a1a2e!important;color:#22c55e!important;border-top
             <input type="range" class="param-slider" id="minscoreSlider" min="0.0" max="1.0" step="0.05" value="{MIN_SCORE}" oninput="updateMinScore()">
             <span class="param-val" id="minscoreVal">{MIN_SCORE}</span>
           </div>
+          <div class="param-group">
+            <span class="param-label">Top-K:</span>
+            <input type="range" class="param-slider" id="topkSlider" min="1" max="15" step="1" value="{TOP_K}" oninput="updateTopK()" style="width:50px">
+            <span class="param-val" id="topkVal">{TOP_K}</span>
+          </div>
           <div style="font-size:9px;color:var(--muted);margin-top:6px;border-top:1px solid var(--border);padding-top:6px">
             ⚡ 128K context = 5GB VRAM for KV cache. If responses take &gt;5s, your GPU is swapping models — set <code>OLLAMA_CONTEXT_LENGTH=32768</code> on the Ollama host to fit both embed &amp; chat models in VRAM.
           </div>
@@ -2030,6 +2037,8 @@ let inputHistoryIdx = -1;
 let agentMode = false;
 let scanMode = false;
 let scanPending = false;
+let abortController = null;
+let lastEsc = 0;
 
 function toggleAgentMode() {{
   agentMode = !agentMode;
@@ -2091,6 +2100,17 @@ async function shellReject() {{
 }}
 
 function handleKey(e) {{
+  if (e.key === 'Escape') {{
+    const now = Date.now();
+    if (now - lastEsc < 500) {{
+      lastEsc = 0;
+      if (abortController) abortGeneration();
+      return;
+    }}
+    lastEsc = now;
+    return;
+  }}
+  lastEsc = 0;
   const input = document.getElementById('chatInput');
   if (e.key === 'ArrowUp' && input.selectionStart === 0 && input.value === '') {{
     e.preventDefault();
@@ -2268,6 +2288,19 @@ function updateMinScore() {{
   }}
 }}
 
+function updateTopK() {{
+  const slider = document.getElementById('topkSlider');
+  const val = document.getElementById('topkVal');
+  if (slider && val) {{
+    val.textContent = parseInt(slider.value);
+    fetch('/api/settings', {{
+      method: 'POST',
+      headers: {{'Content-Type': 'application/json'}},
+      body: JSON.stringify({{top_k: parseInt(slider.value)}})
+    }}).catch(e => console.warn('top_k sync failed', e));
+  }}
+}}
+
 function getGenerationParams() {{
   const temp = parseFloat(document.getElementById('tempSlider').value);
   const topP = parseFloat(document.getElementById('toppSlider').value);
@@ -2352,6 +2385,11 @@ function handleCommand(text) {{
     clearConversation();
     return true;
   }}
+  const lower = text.toLowerCase().trim();
+  if ((lower === 'stop' || lower === "that's enough" || lower === 'stop.') && abortController) {{
+    abortGeneration();
+    return true;
+  }}
   if (text === '/help') {{
     appendMsg('assistant',
       'Commands:\\n' +
@@ -2365,6 +2403,31 @@ function handleCommand(text) {{
     return true;
   }}
   return false;
+}}
+
+function abortGeneration() {{
+  if (abortController) {{
+    abortController.abort();
+    abortController = null;
+  }}
+  const sendBtn = document.getElementById('sendBtn');
+  if (sendBtn) {{
+    sendBtn.textContent = 'Send \\u2191';
+    sendBtn.onclick = function() {{ sendMessage(); }};
+    sendBtn.disabled = false;
+  }}
+  removeTyping();
+  const input = document.getElementById('chatInput');
+  if (input) input.focus();
+}}
+
+function setSendStop() {{
+  const sendBtn = document.getElementById('sendBtn');
+  if (sendBtn) {{
+    sendBtn.textContent = '\\u25a0 Stop';
+    sendBtn.onclick = function() {{ abortGeneration(); }};
+    sendBtn.disabled = false;
+  }}
 }}
 
 function appendMsg(role, text, statHtml) {{
@@ -2512,10 +2575,50 @@ async function pollLicense() {{
   }} catch(e) {{}}
 }}
 
+async function pollGpu() {{
+  try {{
+    const r = await fetch('/api/ollama-ps');
+    const d = await r.json();
+    const el = document.getElementById('cardGpu');
+    if (d.error || !d.models || d.models.length === 0) {{
+      el.textContent = '—'; el.style.color = '';
+      return;
+    }}
+    let lines = [];
+    let totalVram = 0;
+    let totalShared = 0;
+    for (const m of d.models) {{
+      const v = m.size_vram || 0;
+      totalVram += v;
+      const s = Math.max(0, (m.size || 0) - v);
+      totalShared += s;
+      const gb = (v / 1073741824).toFixed(1);
+      lines.push(m.name + ' ' + gb + 'GB' + (s > 0 ? ' (' + (s / 1073741824).toFixed(1) + 'GB shared)' : ''));
+    }}
+    const vramGb = (totalVram / 1073741824).toFixed(1);
+    const sharedGb = (totalShared / 1073741824).toFixed(1);
+    const isOverflow = totalShared / 1073741824 > 0.7;
+    if (totalShared > 0) {{
+      el.textContent = vramGb + ' GB + ' + sharedGb + ' GB shared';
+      if (isOverflow) {{
+        el.title = '⚠ GPU VRAM exceeded — ' + sharedGb + ' GB spilling into shared/system memory.\\nModel(s) too large for available GPU memory — expect significantly slower inference.';
+      }} else {{
+        el.title = lines.join('\\n') + '\\n' + sharedGb + ' GB in shared memory.';
+      }}
+    }} else {{
+      el.textContent = vramGb + ' GB';
+      el.title = lines.join('\\n');
+    }}
+    el.style.color = isOverflow ? '#f87171' : '#22c55e';
+  }} catch(_) {{}}
+}}
+
 setInterval(pollStats, 3000);
 setInterval(pollLicense, 5000);
+setInterval(pollGpu, 5000);
 pollStats();
 pollLicense();
+pollGpu();
 fetchModels();
 initSession();
 
@@ -2532,6 +2635,8 @@ async function sendMessage() {{
   inputHistoryIdx = -1;
   input.value = '';
   sendBtn.disabled = true;
+  abortController = new AbortController();
+  setSendStop();
   appendMsg('user', text, '');
   conversationHistory.push({{role:'user', content:text}});
   showTyping();
@@ -2559,6 +2664,7 @@ async function sendMessage() {{
       const resp = await fetch('/api/agent', {{
         method: 'POST',
         headers: {{'Content-Type':'application/json'}},
+        signal: abortController.signal,
         body: JSON.stringify({{message: text, session_id: sessionId, model, stream: true}})
       }});
       if (!resp.ok) {{
@@ -2621,12 +2727,20 @@ async function sendMessage() {{
                 div.innerHTML = '<span style="color:var(--yellow)">\u2699 ' + esc(data.name) + '</span>' +
                   '<div class="tool-input">' + esc(typeof data.input === 'string' ? data.input : JSON.stringify(data.input, null, 2)) + '</div>';
                 if (data.name === 'shell_exec' && data.shell_mode === 'ask') {{
+                  const rightEl = document.querySelector('.right.fullscreen');
+                  if (rightEl) {{
+                    rightEl.classList.remove('fullscreen');
+                  }}
                   div.innerHTML += '<div class="shell-btns" data-cmd="' + esc(data.input) + '">' +
                     '<button class="allow" onclick="shellConfirm(this, true)">Allow</button>' +
                     '<button class="deny" onclick="shellConfirm(this, false)">Deny</button>' +
                     '<button class="allow" onclick="shellAlways()">Always Allow</button>' +
                     '<button class="deny" onclick="shellReject()">Always Reject</button>' +
                     '</div>';
+                  setTimeout(() => {{
+                    const mb = document.getElementById('messages');
+                    if (mb) mb.scrollTop = mb.scrollHeight;
+                  }}, 50);
                 }}
                 td.appendChild(div);
               }} else if (data.name && data.result) {{
@@ -2650,6 +2764,7 @@ async function sendMessage() {{
         }}
       }}
     }} catch(e) {{
+      if (e.name === 'AbortError') return;
       removeTyping();
       appendMsg('assistant', '\u274c Agent network error: ' + e.message, '');
     }}
@@ -2686,6 +2801,9 @@ async function sendMessage() {{
       }}
     }}
     sendBtn.disabled = false;
+    abortController = null;
+    sendBtn.textContent = 'Send \\u2191';
+    sendBtn.onclick = function() {{ sendMessage(); }};
     input.focus();
     return;
   }}
@@ -2695,7 +2813,8 @@ async function sendMessage() {{
     const resp = await fetch('/v1/chat/completions', {{
       method: 'POST',
       headers: {{'Content-Type':'application/json'}},
-      body: JSON.stringify({{model, messages: conversationHistory, stream:true, session_id: sessionId, ...genParams}})
+      signal: abortController.signal,
+      body: JSON.stringify({{model, messages: conversationHistory, stream:true, stream_options: {{include_usage: true}}, session_id: sessionId, ...genParams}})
     }});
 
     if (!resp.ok) {{
@@ -2763,10 +2882,14 @@ async function sendMessage() {{
     }} catch(e) {{}}
 
   }} catch(e) {{
+    if (e.name === 'AbortError') return;
     removeTyping();
     appendMsg('assistant', '\u274c Network error: ' + e.message, '');
   }} finally {{
     sendBtn.disabled = false;
+    abortController = null;
+    sendBtn.textContent = 'Send \\u2191';
+    sendBtn.onclick = function() {{ sendMessage(); }};
     input.focus();
   }}
 }}
@@ -3853,6 +3976,21 @@ class DashboardHandler(_SuppressBrokenPipe, BaseHTTPRequestHandler):
             self.end_headers()
             self.wfile.write(body)
             return
+        if self.path == "/api/ollama-ps":
+            upstream = get_current_upstream()
+            req = urllib.request.Request(f"{upstream}/api/ps", method="GET")
+            try:
+                with urllib.request.urlopen(req, timeout=5) as r:
+                    raw = json.loads(r.read().decode("utf-8"))
+                body = json.dumps(raw, indent=2).encode("utf-8")
+            except Exception as e:
+                body = json.dumps({"error": str(e)[:200]}).encode("utf-8")
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+            return
         if self.path == "/settings":
             page = make_settings_page().encode("utf-8")
             self.send_response(200)
@@ -3942,7 +4080,7 @@ class DashboardHandler(_SuppressBrokenPipe, BaseHTTPRequestHandler):
                 self.send_header("Content-Length", str(len(err)))
                 self.end_headers()
                 self.wfile.write(err)
-                return
+            return
 
         if self.path == "/api/settings/models":
             try:
@@ -4071,7 +4209,7 @@ class DashboardHandler(_SuppressBrokenPipe, BaseHTTPRequestHandler):
                 self.wfile.write(resp)
                 return
 
-        # ── Settings endpoint: update global MIN_SCORE live ──
+        # ── Settings endpoint: update global MIN_SCORE / TOP_K live ──
         if self.path == "/api/settings":
             try:
                 body = json.loads(raw_body)
@@ -4081,6 +4219,18 @@ class DashboardHandler(_SuppressBrokenPipe, BaseHTTPRequestHandler):
                         MIN_SCORE = float(body["min_score"])
                     print(f"[contextcut] Min score updated live: {MIN_SCORE}")
                     resp = json.dumps({"ok": True, "min_score": MIN_SCORE}).encode()
+                    self.send_response(200)
+                    self.send_header("Content-Type", "application/json")
+                    self.send_header("Content-Length", str(len(resp)))
+                    self.end_headers()
+                    self.wfile.write(resp)
+                    return
+                if "top_k" in body:
+                    global TOP_K
+                    with _lock:
+                        TOP_K = int(body["top_k"])
+                    print(f"[contextcut] Top-K updated live: {TOP_K}")
+                    resp = json.dumps({"ok": True, "top_k": TOP_K}).encode()
                     self.send_response(200)
                     self.send_header("Content-Type", "application/json")
                     self.send_header("Content-Length", str(len(resp)))
@@ -4568,7 +4718,7 @@ class DashboardHandler(_SuppressBrokenPipe, BaseHTTPRequestHandler):
                         try:
                             async for event in agent.astream_events(
                                 {"messages": msgs},
-                                version="v1",
+                                version="v2",
                             ):
                                 kind = event.get("event", "")
                                 if kind == "on_chat_model_stream":

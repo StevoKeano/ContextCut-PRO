@@ -368,7 +368,10 @@ def web_search(query: str, max_results: int = 5) -> str:
     Search the web using DuckDuckGo and return titles + snippets + URLs.
     """
     try:
-        from duckduckgo_search import DDGS
+        try:
+            from ddgs import DDGS
+        except ImportError:
+            from duckduckgo_search import DDGS
 
         results = []
         with DDGS() as ddgs:
