@@ -1,0 +1,441 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1.0">
+<title>ContextCut — Application Findings Report</title>
+<style>
+*{box-sizing:border-box;margin:0;padding:0}
+body{background:#0b1120;color:#e2e8f0;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Arial,sans-serif;font-size:14px;line-height:1.6;padding:40px 20px}
+.wrap{max-width:960px;margin:0 auto}
+h1{font-size:32px;font-weight:800;letter-spacing:-.5px;margin-bottom:4px}
+h1 span{display:inline-block;font-size:11px;background:#10b981;color:#000;padding:2px 10px;border-radius:4px;font-weight:700;vertical-align:middle;margin-left:8px}
+.sub{color:#64748b;font-size:14px;margin-bottom:32px}
+h2{font-size:20px;font-weight:700;color:#f1f5f9;margin-top:40px;margin-bottom:16px;padding-bottom:8px;border-bottom:2px solid #10b981}
+h3{font-size:15px;font-weight:600;color:#22d3ee;margin-top:24px;margin-bottom:10px}
+.card{background:#1e293b;border:1px solid #334155;border-radius:10px;padding:24px 28px;margin-bottom:16px}
+.card.hi{border-left:3px solid #10b981}
+.card.warn{border-left:3px solid #f59e0b}
+.grid2{display:grid;grid-template-columns:1fr 1fr;gap:12px}
+.grid3{display:grid;grid-template-columns:1fr 1fr 1fr;gap:12px}
+table{width:100%;border-collapse:collapse;font-size:13px;margin:8px 0}
+th{background:#0f172a;color:#64748b;font-weight:600;font-size:11px;text-transform:uppercase;letter-spacing:.3px;padding:10px 12px;border-bottom:1px solid #334155;text-align:left}
+td{padding:8px 12px;border-top:1px solid #334155;color:#cbd5e1}
+tr:hover td{background:#1a273a}
+code{background:#0f172a;padding:2px 6px;border-radius:3px;font-size:12px;color:#f59e0b}
+pre{background:#0f172a;border:1px solid #334155;border-radius:6px;padding:14px 16px;overflow-x:auto;font-size:12px;font-family:'SF Mono','Consolas',monospace;color:#94a3b8;line-height:1.5;margin:8px 0}
+.tag{display:inline-block;font-size:10px;padding:2px 8px;border-radius:3px;font-weight:600;letter-spacing:.3px;margin:2px}
+.tag.g{background:#065f46;color:#6ee7b7}
+.tag.b{background:#1e3a5f;color:#93c5fd}
+.tag.y{background:#713f12;color:#fde68a}
+.tag.r{background:#7f1d1d;color:#fca5a5}
+.tag.p{background:#4c1d95;color:#c4b5fd}
+.finfo{display:flex;justify-content:space-between;align-items:center;margin-bottom:6px}
+.finfo .path{color:#64748b;font-size:11px;font-family:monospace}
+.finfo .lines{background:#10b981;color:#000;padding:1px 8px;border-radius:3px;font-weight:700;font-size:11px}
+ul,ol{margin:6px 0;padding-left:20px}
+li{margin:3px 0}
+.ftr{margin-top:48px;padding-top:24px;border-top:1px solid #334155;text-align:center;color:#475569;font-size:12px}
+</style>
+</head>
+<body>
+<div class="wrap">
+
+<h1>ContextCut <span>FINDINGS REPORT</span></h1>
+<p class="sub">Complete application analysis for <code>/home/steve/contextcut</code> — Generated Sat Jun 13 2026</p>
+
+<!-- ── Overview ── -->
+<h2>1. Application Overview</h2>
+<div class="card hi">
+<p><strong>ContextCut</strong> is a local <strong>RAG (Retrieval-Augmented Generation)</strong> chat system available in two editions: <strong>Free</strong> and <strong>PRO</strong>. It lets users chat with local LLMs while automatically enriching prompts with context from a local knowledge base of markdown/text files. The PRO edition is a commercial product ($99.88 one-time) with a machine-locked license server at <code>api.contextcut-pro.com</code>.</p>
+</div>
+
+<div class="grid2">
+  <div class="card">
+    <div class="finfo"><span class="path">Free Edition</span><span class="lines">cc-free.py</span></div>
+    <p style="font-size:13px;color:#94a3b8;margin-bottom:8px">Single-file, zero-dependency RAG chat. In-memory FAISS vectors, SQLite sessions, pure-Ollama embeddings. No Qdrant, no Docker, no license.</p>
+    <div><span class="tag g">902 lines</span><span class="tag b">Python</span><span class="tag y">Ollama-only</span></div>
+  </div>
+  <div class="card">
+    <div class="finfo"><span class="path">PRO Edition</span><span class="lines">qdrant_proxy_final.py</span></div>
+    <p style="font-size:13px;color:#94a3b8;margin-bottom:8px">Reverse proxy + dashboard + agent. Qdrant vector DB, multi-provider LLM, LangChain agent, hallucination scanning, credential encryption, license enforcement.</p>
+    <div><span class="tag g">4854 lines</span><span class="tag b">Python</span><span class="tag p">Qdrant+Voyage</span></div>
+  </div>
+</div>
+
+<!-- ── Project Structure ── -->
+<h2>2. Project Structure</h2>
+<div class="card">
+<table>
+  <tr><th>File</th><th>Lines</th><th>Role</th></tr>
+  <tr><td><code>qdrant_proxy_final.py</code></td><td>4854</td><td>PRO reverse proxy + dashboard + agent + license manager</td></tr>
+  <tr><td><code>cc-free.py</code></td><td>902</td><td>Free single-file RAG chat app</td></tr>
+  <tr><td><code>agent_handler.py</code></td><td>581</td><td>LangChain agent with 10 tools + tool-use enforcement</td></tr>
+  <tr><td><code>run_tests.py</code></td><td>675</td><td>Factuality test runner (entrapment hallucination tests)</td></tr>
+  <tr><td><code>ingest.py</code></td><td>493</td><td>Qdrant file ingester + file watcher</td></tr>
+  <tr><td><code>cloudflare_worker_free.js</code></td><td>245</td><td>CF Worker landing page for Free edition</td></tr>
+  <tr><td><code>index_free.js</code></td><td>159</td><td>Older CF Worker landing page</td></tr>
+  <tr><td><code>install-free.sh</code></td><td>154</td><td>Free edition installer (curl | bash)</td></tr>
+  <tr><td><code>start.sh</code></td><td>45</td><td>PRO startup: proxy → watcher</td></tr>
+  <tr><td><code>stop.sh</code></td><td>44</td><td>PRO shutdown: watcher → license release → proxy</td></tr>
+  <tr><td><code>datasette.yml</code></td><td>42</td><td>Datasette config for session DB exploration</td></tr>
+  <tr><td><code>run_tests.py</code></td><td>675</td><td>Factuality test harness</td></tr>
+  <tr><td><code>requirements.txt</code></td><td>21</td><td>Python deps (langchain, qdrant, voyageai, etc.)</td></tr>
+  <tr><td><code>.env</code></td><td>3</td><td>Runtime config (embed mode, upstream, embed model)</td></tr>
+  <tr><td><code>knowledge/</code></td><td>24 files</td><td>Domain knowledge base markdown files</td></tr>
+  <tr><td><code>starterKnowledgeFiles/</code></td><td>60+ files</td><td>PRO starter templates (legal, accounting, medical, etc.)</td></tr>
+</table>
+</div>
+
+<!-- ── Free Edition ── -->
+<h2>3. Free Edition (cc-free.py)</h2>
+<div class="card">
+<div class="finfo"><span class="path">cc-free.py</span><span class="lines">902 lines</span></div>
+
+<h3>Architecture</h3>
+<ul>
+  <li><strong>HTTP Server</strong>: <code>http.server.ThreadingHTTPServer</code> on <code>localhost:18988</code></li>
+  <li><strong>Vector Store</strong>: Pure-Python in-memory list + brute-force cosine similarity (FAISS optional)</li>
+  <li><strong>Persistence</strong>: JSON files (<code>vectors.json</code>, <code>metadata.json</code>)</li>
+  <li><strong>Sessions</strong>: SQLite with WAL journal mode</li>
+  <li><strong>Embedding</strong>: Ollama <code>/api/embed</code> (default model: <code>nomic-embed-text</code>)</li>
+  <li><strong>Chat</strong>: Ollama <code>/api/chat</code> with streaming SSE</li>
+  <li><strong>Web Search</strong>: DuckDuckGo (HTML scrape fallback when <code>duckduckgo_search</code> not installed)</li>
+  <li><strong>Frontend</strong>: Embedded single-page HTML dashboard (dark/light theme)</li>
+</ul>
+
+<h3>Limits</h3>
+<ul>
+  <li>50 files maximum in knowledge base</li>
+  <li>10MB max file size</li>
+  <li>32768 context window (configurable)</li>
+  <li>Allowed extensions: <code>.md .txt .py .js .ts .html .css .csv .json .xml .yaml .yml .go .rs .rb .java .c .cpp .h .sh .sql .log</code></li>
+</ul>
+
+<h3>API Endpoints</h3>
+<table>
+  <tr><th>Endpoint</th><th>Method</th><th>Description</th></tr>
+  <tr><td><code>/</code></td><td>GET</td><td>Dashboard HTML</td></tr>
+  <tr><td><code>/api/models</code></td><td>GET</td><td>List Ollama models (filters out -cloud)</td></tr>
+  <tr><td><code>/api/sessions</code></td><td>GET</td><td>List all sessions</td></tr>
+  <tr><td><code>/api/session/new</code></td><td>POST</td><td>Create new session</td></tr>
+  <tr><td><code>/api/session/load/{sid}</code></td><td>GET</td><td>Load session messages</td></tr>
+  <tr><td><code>/api/session/delete/{sid}</code></td><td>POST</td><td>Delete session</td></tr>
+  <tr><td><code>/api/chat</code></td><td>POST</td><td>Send message (streaming or non-streaming), queries KB + web search</td></tr>
+  <tr><td><code>/api/knowledge/upload</code></td><td>POST</td><td>Upload file (multipart or JSON), auto-ingests</td></tr>
+  <tr><td><code>/api/knowledge/delete/{name}</code></td><td>GET</td><td>Delete file from KB + remove from index</td></tr>
+  <tr><td><code>/api/knowledge/query</code></td><td>GET</td><td>Search KB via embedding similarity</td></tr>
+  <tr><td><code>/api/knowledge/files</code></td><td>GET</td><td>List KB files</td></tr>
+  <tr><td><code>/api/search/web</code></td><td>GET</td><td>DuckDuckGo web search</td></tr>
+  <tr><td><code>/api/stats</code></td><td>GET</td><td>File count</td></tr>
+  <tr><td><code>/api/context/clear/{sid}</code></td><td>POST</td><td>Clear session messages</td></tr>
+</table>
+
+<h3>Key Implementation Details</h3>
+<ul>
+  <li><strong>Chunking</strong>: Text split at 1500 chars with 150-char overlap, prefers newline boundaries</li>
+  <li><strong>Context injection</strong>: Web results + KB results prepended as system context before user message</li>
+  <li><strong>Source tracking</strong>: After each response, sources (filenames) with scores are appended</li>
+  <li><strong>No external dependencies</strong>: Uses stdlib <code>http.server</code>, <code>sqlite3</code>, <code>json</code>, <code>urllib</code> — FAISS and numpy are optional</li>
+</ul>
+</div>
+
+<!-- ── PRO Edition ── -->
+<h2>4. PRO Edition (qdrant_proxy_final.py)</h2>
+<div class="card">
+<div class="finfo"><span class="path">qdrant_proxy_final.py</span><span class="lines">4854 lines</span></div>
+
+<h3>Two-Server Architecture</h3>
+<div class="card" style="background:#0f172a">
+<pre>Client ──► Dashboard (port 18787) ──► Proxy (port 18788) ──► Upstream LLM
+                                          │
+                                          ├── Qdrant (context injection)
+                                          ├── SQLite (sessions)
+                                          └── .env sync / credential manager</pre>
+</div>
+
+<h3>Reverse Proxy Flow</h3>
+<ol>
+  <li>Client sends <code>/v1/chat/completions</code> to dashboard port 18787</li>
+  <li>Dashboard handler extracts last user message → queries Qdrant via <code>qdrant_context()</code></li>
+  <li>Injects context as system message (prepended before user message)</li>
+  <li>Counts tokens before/after, logs to audit log, forwards to upstream LLM</li>
+  <li>Stores user + assistant messages in SQLite session</li>
+  <li>Supports streaming (chunked transfer) and non-streaming modes</li>
+</ol>
+
+<h3>Provider System</h3>
+<table>
+  <tr><th>Provider</th><th>Base URL</th><th>API Key Required</th></tr>
+  <tr><td>Ollama</td><td><code>http://localhost:11434</code></td><td>No</td></tr>
+  <tr><td>OpenAI</td><td><code>https://api.openai.com</code></td><td>Yes</td></tr>
+  <tr><td>OpenRouter</td><td><code>https://openrouter.ai/api</code></td><td>Yes</td></tr>
+  <tr><td>Anthropic</td><td><code>https://api.anthropic.com</code></td><td>Yes</td></tr>
+  <tr><td>xAI</td><td><code>https://api.x.ai</code></td><td>Yes</td></tr>
+  <tr><td>Custom</td><td>User-defined</td><td>Yes</td></tr>
+</table>
+
+<h3>Context Optimization</h3>
+<ul>
+  <li>Tokens counted before/after injection using tiktoken (exact) or word-count estimate</li>
+  <li>Pruning: if injected context exceeds CTX_LIMIT, chunks are removed from the system message from second-to-last working backward</li>
+  <li>Cache: LRU response cache (100 entries, 5-min TTL)</li>
+  <li>Per-request audit log stored in deque (max 100 entries)</li>
+</ul>
+
+<h3>Embedding System</h3>
+<ul>
+  <li><strong>Primary</strong>: Voyage AI (voyage-3) with rate-limit backoff (22s delay between requests, exponential on 429)</li>
+  <li><strong>Fallback</strong>: Ollama local embedding (<code>nomic-embed-text</code>, <code>mxbai-embed-large</code>, <code>bge-m3</code>, <code>qwen3-embedding:8b</code>)</li>
+  <li><strong>Dimension mapping</strong>: 768 (nomic), 1024 (mxbai, bge-m3, voyage), 4096 (qwen3)</li>
+  <li><strong>Collection recreation</strong>: Changing embed model auto-deletes Qdrant collection, recreates with correct dim, triggers re-ingest</li>
+  <li><strong>Auto-install</strong>: voyageai pip package auto-installed if missing when switching to Voyage mode</li>
+</ul>
+
+<h3>License System</h3>
+<ul>
+  <li>License validation via <code>POST /v1/license/validate</code> to license server</li>
+  <li>Machine fingerprinting: hostname + platform + MAC address</li>
+  <li>Instance secret saved to <code>~/.contextcut/instance_secret</code> (chmod 600)</li>
+  <li>Heartbeat every 900s (15 min), grace period 3600s (1 hour)</li>
+  <li>Seat release on shutdown via <code>atexit</code> hook and SIGINT/SIGTERM handler</li>
+  <li>Stale seat auto-release with user confirmation on startup</li>
+</ul>
+
+<h3>Endpoint Summary (~40 API endpoints)</h3>
+<table>
+  <tr><th>Category</th><th>Endpoints</th></tr>
+  <tr><td>Dashboard</td><td><code>/</code>, <code>/settings</code>, <code>/stats</code>, <code>/log</code></td></tr>
+  <tr><td>Sessions</td><td><code>/api/session/new</code>, <code>/api/session/recall/{sid}</code>, <code>/api/session/history</code>, <code>/api/sessions/archive</code></td></tr>
+  <tr><td>LLM Proxy</td><td><code>/v1/chat/completions</code>, <code>/api/chat</code>, <code>/api/generate</code>, <code>/v1/completions</code></td></tr>
+  <tr><td>Models</td><td><code>/api/tags</code>, <code>/api/settings/models</code></td></tr>
+  <tr><td>Provider</td><td><code>/api/settings/provider</code>, <code>/api/settings</code></td></tr>
+  <tr><td>Embedding</td><td><code>/api/embed/config</code>, <code>/api/embed/reingest</code></td></tr>
+  <tr><td>Knowledge</td><td><code>/api/knowledge/files</code>, <code>/api/knowledge/read</code>, <code>/api/knowledge/save</code>, <code>/api/knowledge/upload</code>, <code>/api/knowledge/delete</code></td></tr>
+  <tr><td>Agent</td><td><code>/api/agent</code>, <code>/api/agent/confidence-scan</code>, <code>/api/agent/shell-mode</code>, <code>/api/agent/tools</code></td></tr>
+  <tr><td>System</td><td><code>/api/context/clear</code>, <code>/api/demo/seed</code>, <code>/api/license</code>, <code>/api/logs/export</code>, <code>/api/embed/config</code></td></tr>
+</table>
+</div>
+
+<!-- ── Agent System ── -->
+<h2>5. Agent System (agent_handler.py)</h2>
+<div class="card">
+<div class="finfo"><span class="path">agent_handler.py</span><span class="lines">581 lines</span></div>
+
+<h3>10 Tools</h3>
+<table>
+  <tr><th>Tool</th><th>Description</th><th>Safety</th></tr>
+  <tr><td><code>shell_exec</code></td><td>Execute bash commands</td><td>Blocked: <code>rm -rf /</code>, <code>mkfs</code>, <code>shutdown</code>, etc.; <code>AGENT_SHELL_TIMEOUT</code> (30s default)</td></tr>
+  <tr><td><code>read_file</code></td><td>Read local files</td><td>Truncated at <code>AGENT_MAX_READ_BYTES</code> (64KB); binary files → hex summary</td></tr>
+  <tr><td><code>write_file</code></td><td>Write/overwrite files</td><td>Timestamped .bak copy created before overwriting</td></tr>
+  <tr><td><code>append_file</code></td><td>Append to files</td><td>Creates parent dirs automatically</td></tr>
+  <tr><td><code>diff_files</code></td><td>Unified diff between two files</td><td>Uses system <code>diff -u</code></td></tr>
+  <tr><td><code>list_dir</code></td><td>Directory tree listing</td><td>Max depth 3, hides dotfiles, human-readable sizes</td></tr>
+  <tr><td><code>web_search</code></td><td>DuckDuckGo search</td><td>Uses <code>DDGS</code> library</td></tr>
+  <tr><td><code>fetch_url</code></td><td>Fetch URL as plain text</td><td>8KB max, HTML tags stripped</td></tr>
+  <tr><td><code>vector_search</code></td><td>Query Qdrant vector store</td><td>Reuses <code>qdrant_context()</code> from proxy</td></tr>
+  <tr><td><code>system_info</code></td><td>CPU/RAM/GPU/Disk snapshot</td><td>Uses <code>psutil</code> + <code>nvidia-smi</code></td></tr>
+</table>
+
+<h3>Two-Layer Architecture</h3>
+<div class="card" style="background:#0f172a">
+<p style="margin-bottom:8px"><strong>Layer 1 — Tool-Usage Enforcer</strong></p>
+<pre>User query → keyword matching against tool keywords → if match &amp; no tool called → retry with instruction</pre>
+<p style="margin:12px 0 8px"><strong>Layer 2 — Confidence Scan</strong></p>
+<pre>Response → secondary LLM call → per-passage: HIGH/MEDIUM/LOW confidence → highlighted in UI</pre>
+</div>
+
+<h3>Session Commands</h3>
+<ul>
+  <li><code>stop</code>, <code>halt</code>, <code>cease</code> — Stops current response</li>
+  <li><code>continue</code>, <code>go on</code>, <code>more</code> — Continues previous response</li>
+  <li><code>revise</code>, <code>rewrite</code>, <code>rephrase</code> — Triggers revision prompt</li>
+</ul>
+
+<h3>History Management</h3>
+<ul>
+  <li>MAX_HISTORY_MESSAGES = 50</li>
+  <li>MAX_HISTORY_TOKENS = 4096</li>
+  <li>Oldest messages trimmed first when limits exceeded</li>
+</ul>
+</div>
+
+<!-- ── Ingest System ── -->
+<h2>6. Ingest System (ingest.py)</h2>
+<div class="card">
+<div class="finfo"><span class="path">ingest.py</span><span class="lines">493 lines</span></div>
+
+<h3>Modes</h3>
+<table>
+  <tr><th>Flag</th><th>Behavior</th></tr>
+  <tr><td><code>(none)</code></td><td>One-shot: embed all changed files into Qdrant</td></tr>
+  <tr><td><code>--watch</code></td><td>Ingest all, then watch for file changes (create/modify/delete/move)</td></tr>
+  <tr><td><code>--query "text"</code></td><td>Test semantic search against Qdrant</td></tr>
+  <tr><td><code>--clear</code></td><td>Wipe Qdrant collection entirely</td></tr>
+</table>
+
+<h3>File Detection</h3>
+<ul>
+  <li>Content-hash based dedup (<code>file_content_hash</code> → scroll Qdrant for matching hash)</li>
+  <li>EXCLUDE_FILES: <code>MEMORY.md</code>, <code>MEMORY.txt</code>, <code>MEMORY.py</code></li>
+  <li>Files with <code>.bak-</code> in name are skipped</li>
+</ul>
+
+<h3>Supported Formats</h3>
+<ul>
+  <li>Plain text: <code>.md .txt .py .js .ts .html .css .csv .json .xml .yaml .yml .go .rs .rb .java .c .cpp .h .sh .sql .log</code></li>
+  <li>Binary: <code>.pdf</code> (PyMuPDF), <code>.docx</code> (python-docx), <code>.xlsx</code> (openpyxl)</li>
+</ul>
+
+<h3>Chunking</h3>
+<ul>
+  <li>Uses tiktoken (<code>cl100k_base</code>) for accurate token counting</li>
+  <li>Voyage mode: 2048 token chunks, 200 token overlap</li>
+  <li>Ollama mode: 512 token chunks, 50 token overlap</li>
+  <li>First 4000 chars stored as payload text</li>
+</ul>
+</div>
+
+<!-- ── Credentials & Security ── -->
+<h2>7. Credential Manager</h2>
+<div class="card">
+<div class="finfo"><span class="path">qdrant_proxy_final.py :: CredentialManager class</span></div>
+
+<h3>Machine-Bound Encryption</h3>
+<ul>
+  <li>Uses <strong>Fernet</strong> (symmetric AES) from <code>cryptography</code> library</li>
+  <li><strong>Key derivation</strong>:
+    <ul>
+      <li>Linux: <code>/etc/machine-id</code> → SHA256</li>
+      <li>macOS: IOPlatformSerialNumber → SHA256</li>
+      <li>Other: <code>platform.node()</code> → SHA256</li>
+    </ul>
+  </li>
+  <li>Stored in <code>.contextcut_creds.enc</code> (chmod 600)</li>
+  <li>If copied to another machine, the file is undecryptable</li>
+</ul>
+
+<h3>Stored Secrets</h3>
+<ul>
+  <li><code>provider</code> — LLM provider name</li>
+  <li><code>api_key</code> — Cloud API key</li>
+  <li><code>custom_url</code> — Custom provider base URL</li>
+  <li><code>ollama_url</code> — Ollama URL override</li>
+  <li><code>embed_mode</code> — voyage / ollama</li>
+  <li><code>voyage_key</code> — Voyage AI API key</li>
+  <li><code>embed_model</code> — Local embedding model name</li>
+</ul>
+</div>
+
+<!-- ── Knowledge Base ── -->
+<h2>8. Knowledge Base</h2>
+<div class="card">
+<div class="finfo"><span class="path">knowledge/</span><span class="lines">24 files</span></div>
+
+<p>Domain-specific markdown files with naming convention <code>domain-SUBJECT.md</code>:</p>
+
+<table>
+  <tr><th>Domain</th><th>Files</th></tr>
+  <tr><td><code>base-*</code></td><td>SKILL, REVIEW, RESEARCH, ETHICS, DRAFTING, DEADLINES, COMPLIANCE, COMMUNICATION (8 files)</td></tr>
+  <tr><td><code>doctor-*</code></td><td>BILLING, CLINICAL, ETHICS, PATIENT, PRACTICE, REGULATORY, RESEARCH (7 files)</td></tr>
+  <tr><td><code>realtor-*</code></td><td>CONTRACT, DISCLOSURE, LISTING (3 files)</td></tr>
+  <tr><td><code>tech-*</code></td><td>CONTRACT, PRIVACY (2 files)</td></tr>
+  <tr><td><code>consultant-*</code></td><td>METHODOLOGY, ENGAGEMENT, DELIVERABLE (3 files)</td></tr>
+  <tr><td>—</td><td>AGENT_MODE.md (1 file)</td></tr>
+</table>
+
+<p style="margin-top:12px">The <code>starterKnowledgeFiles/</code> directory contains <strong>60+ additional templates</strong> organized by profession: lawyers (SMB, real estate, litigation), CPAs (SMB, personal, corporate), architects, financial advisors, doctors, and consultants. These are provided as starter content for PRO users.</p>
+</div>
+
+<!-- ── Testing ── -->
+<h2>9. Test System (run_tests.py)</h2>
+<div class="card">
+<div class="finfo"><span class="path">run_tests.py</span><span class="lines">675 lines</span></div>
+
+<h3>Features</h3>
+<ul>
+  <li>Sends queries with known ground truth → validates response accuracy</li>
+  <li><strong>Entrapment tests</strong>: Fabricated case law/statutes test hallucination resistance (checks refusal indicators like "does not exist", "fabricated", "no such case")</li>
+  <li><strong>Tolerance levels</strong>: <code>strict</code> (100%), <code>moderate</code> (80%), <code>lenient</code> (60%)</li>
+  <li><strong>Citation verification</strong>: Advisory checking of expected citations in responses</li>
+  <li><strong>Refusal indicators</strong>: 20+ phrases checked ("does not exist", "cannot confirm", "no such statute", etc.)</li>
+</ul>
+
+<h3>Modes</h3>
+<ul>
+  <li><code>--validate</code> : Validate test file structure without running queries</li>
+  <li><code>--show-tests</code> : Print all test definitions</li>
+  <li><code>--ping</code> : Quick connectivity check</li>
+  <li><code>--entrapment-only</code> : Run only hallucination trap tests</li>
+  <li><code>--filter</code> : Run tests matching substring in ID</li>
+</ul>
+
+<h3>Exit Codes</h3>
+<ul>
+  <li>0 = all tests passed</li>
+  <li>1 = some tests failed</li>
+  <li>2 = connection error / harness failure</li>
+</ul>
+</div>
+
+<!-- ── Security Observations ── -->
+<h2>10. Security Observations</h2>
+<div class="card warn">
+<h3>Strengths</h3>
+<ul>
+  <li>Credentials encrypted with machine-bound Fernet key</li>
+  <li>Shell commands filtered for destructive patterns</li>
+  <li>KB file access restricted to <code>KB_DIR</code> path prefix (path traversal protection)</li>
+  <li>API keys never logged; masked in UI</li>
+  <li>All binary file encryption (creds) at rest</li>
+  <li>chmod 600 on credential file</li>
+</ul>
+
+<h3>Notable Patterns</h3>
+<ul>
+  <li>Free edition has no authentication — any local network user can access the dashboard</li>
+  <li>PRO proxy blocks dangerous Ollama endpoints (<code>/api/pull</code>, <code>/api/push</code>, <code>/api/delete</code>, <code>/api/copy</code>, <code>/api/create</code>)</li>
+  <li>License server URL is configurable via <code>CONTEXTCUT_LICENSE_SERVER</code></li>
+  <li>Heartbeat failures don't deactivate — network blips are tolerated</li>
+</ul>
+</div>
+
+<!-- ── Configuration ── -->
+<h2>11. Configuration Reference</h2>
+<div class="card">
+<table>
+  <tr><th>Variable</th><th>Default</th><th>Description</th></tr>
+  <tr><td><code>CONTEXTCUT_UPSTREAM</code></td><td><code>http://localhost:11434</code></td><td>Ollama/LLM endpoint</td></tr>
+  <tr><td><code>CONTEXTCUT_QDRANT_HOST</code></td><td><code>localhost</code></td><td>Qdrant host</td></tr>
+  <tr><td><code>CONTEXTCUT_QDRANT_PORT</code></td><td><code>6333</code></td><td>Qdrant port</td></tr>
+  <tr><td><code>CONTEXTCUT_COLLECTION</code></td><td><code>contextcut</code></td><td>Qdrant collection name</td></tr>
+  <tr><td><code>CONTEXTCUT_PROXY_PORT</code></td><td><code>18788</code></td><td>Proxy listen port</td></tr>
+  <tr><td><code>CONTEXTCUT_DASHBOARD_PORT</code></td><td><code>18787</code></td><td>Dashboard listen port</td></tr>
+  <tr><td><code>CONTEXTCUT_CTX_LIMIT</code></td><td><code>32768</code></td><td>Context window size</td></tr>
+  <tr><td><code>CONTEXTCUT_TOP_K</code></td><td><code>5</code></td><td>Max Qdrant chunks</td></tr>
+  <tr><td><code>CONTEXTCUT_MIN_SCORE</code></td><td><code>0.50</code></td><td>Minimum relevance score</td></tr>
+  <tr><td><code>CONTEXTCUT_EMBED_MODE</code></td><td><code>voyage</code></td><td>Embedding backend</td></tr>
+  <tr><td><code>CONTEXTCUT_EMBED_MODEL</code></td><td><em>varies</em></td><td>Local embed model (ollama mode)</td></tr>
+  <tr><td><code>VOYAGE_API_KEY</code></td><td><em>none</em></td><td>Voyage AI API key</td></tr>
+  <tr><td><code>CONTEXTCUT_LICENSE_KEY</code></td><td><em>none</em></td><td>PRO license key</td></tr>
+  <tr><td><code>CONTEXTCUT_LICENSE_SERVER</code></td><td><code>https://api.contextcut-pro.com</code></td><td>License server URL</td></tr>
+  <tr><td><code>CONTEXTCUT_HEARTBEAT_SEC</code></td><td><code>900</code></td><td>Heartbeat interval</td></tr>
+  <tr><td><code>CONTEXTCUT_GRACE_SEC</code></td><td><code>3600</code></td><td>License grace period</td></tr>
+  <tr><td><code>CONTEXTCUT_KB_DIR</code></td><td><code>~/contextcut/knowledge</code></td><td>Knowledge base directory</td></tr>
+  <tr><td><code>CONTEXTCUT_TEMP</code></td><td><code>0.7</code></td><td>Default temperature</td></tr>
+  <tr><td><code>CONTEXTCUT_MAX_TOKENS</code></td><td><code>0</code></td><td>Max tokens (0=unlimited)</td></tr>
+  <tr><td><code>CONTEXTCUT_TOP_P</code></td><td><code>1.0</code></td><td>Default top-p</td></tr>
+  <tr><td><code>CONTEXTCUT_MODEL</code></td><td><code>qwen3:14b-q8_0</code></td><td>Default chat model</td></tr>
+  <tr><td><code>AGENT_MAX_READ_BYTES</code></td><td><code>65536</code></td><td>Max file read by agent</td></tr>
+  <tr><td><code>AGENT_SHELL_TIMEOUT</code></td><td><code>30</code></td><td>Shell command timeout</td></tr>
+</table>
+</div>
+
+<!-- ── Footer ── -->
+<div class="ftr">
+  ContextCut Application Report &middot; 13 files analyzed &middot; ~7600 total lines of code
+</div>
+
+</div>
+</body>
+</html>

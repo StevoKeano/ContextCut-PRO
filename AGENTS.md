@@ -1,162 +1,25 @@
-# ContextCut-PRO — Agent instructions
+# Agent Instructions
 
-## Working dir
-- Sandbox (edits): `/mnt/e/Dev/opencode/ContextCut-PRO` (WSL) = `E:\Dev\opencode\ContextCut-PRO` (Windows)
-- User's repo:  `/mnt/e/Dev/ContextCut-PRO` (WSL) = `E:\Dev\ContextCut-PRO` (Windows)
-- **On Windows** `E:\Dev\ContextCut-PRO` = `E:\Dev\contextcut-pro` (case-insensitive), but on WSL they are **different** dirs — always use `ContextCut-PRO` (uppercase) in WSL paths.
+## Restart Policy
+- After making code changes, ASK the user to restart the proxy.
+- Do NOT kill or restart the proxy automatically.
+- The user runs `./start.sh` and `./stop.sh` manually.
 
-## Deploy workflow
-After editing files:
+## Key Files
+- `qdrant_proxy_final.py` — main PRO server (dashboard + proxy in one file)
+- `agent_handler.py` — LangChain agent tools
+- `cc-free.py` — free edition
+- `ingest.py` — Qdrant file watcher + ingester
 
-1. **Copy to user's repo:**
-   ```bash
-   cp /mnt/e/Dev/opencode/ContextCut-PRO/{filename} /mnt/e/Dev/ContextCut-PRO/{filename}
-   ```
+## Config
+- `.env` overrides defaults in `qdrant_proxy_final.py`
+- `CONTEXTCUT_MODEL` — chat model (default `qwen3:14b-q8_0`)
+- `CONTEXTCUT_CTX_LIMIT` — context window (default 32768, now 16384)
 
-2. **Provide git commands** (user runs from `E:\Dev\ContextCut-PRO`):
-   ```
-   git add {files}
-   git commit -m "message"
-   git push
-   ```
+## Fullscreen Behavior
+- When shell_exec permission is requested (Allow/Deny), the code auto-exits fullscreen mode and scrolls to show the buttons.
+- Fullscreen toggle: `.right` element gets/removes `fullscreen` class.
 
-3. **SCP to proxy** (user runs from Windows cmd at `E:\Dev\ContextCut-PRO`):
-   ```
-   scp {filename} steve@192.168.137.252:~/contextcut/{filename}
-   ```
-
-## Ingestion (ingest.py)
-
-Qdrant knowledge base ingestion tool. Ingest files from `KB_DIR` (default `~/contextcut/knowledge`).
-
-| Mode | Command | Behavior |
-|---|---|---|
-| One-shot | `python3 ingest.py` | Ingest all files from KB_DIR |
-| Watch | `python3 ingest.py --watch` | `ingest_all()` then watch for changes |
-| Clear | `python3 ingest.py --clear` | Delete the Qdrant collection |
-
-### Watcher event handling
-
-The `Handler` class in `watch()` handles these events:
-- `on_created` — new files
-- `on_modified` — edits
-- `on_moved` — bulk moves into KB_DIR (was missing — the root cause of missed files)
-- `on_any_event` — catch-all for `closed` events (some editors use temp-file + rename)
-- `on_deleted` — removes all chunks with matching filename from Qdrant
-
-Debounce: **5s** (was 30s — reduced for rapid bulk ops). Observer runs with `recursive=False`.
-
-### Deploy after editing ingest.py
-
-1. **Copy to user's repo:**
-   ```bash
-    cp /mnt/e/dev/opencode/ContextCut-PRO/ingest.py /mnt/e/Dev/ContextCut-PRO/ingest.py
-
-2. **SCP to proxy** (from Windows cmd at `E:\Dev\ContextCut-PRO`):
-   ```
-   scp ingest.py steve@192.168.137.252:~/contextcut/ingest.py
-   ```
-
-3. **Restart watcher on proxy**:
-   ```bash
-   kill $(pgrep -f "ingest.py --watch")
-   python3 ~/contextcut/ingest.py --clear
-   python3 ~/contextcut/ingest.py --watch &
-   ```
-
-## Factuality Test Suite
-
-Three files implement an automated hallucination/accuracy test system:
-
-| File | Purpose |
-|---|---|
-| `test_queries.json` | 18 test queries (15 factual + 3 entrapment) with known ground truth |
-| `run_tests.py` | Automated runner — sends queries to proxy, validates responses |
-| `validate_tests.py` | Integrity checker — verifies test facts against source knowledge files |
-
-**Usage** (run on the machine with the proxy server):
-```bash
-# Show all test details (for tester to review ground truth)
-python3 run_tests.py --show-tests
-
-# Validate test structure without running
-python3 run_tests.py --validate
-
-# Cross-reference test facts against source files
-python3 validate_tests.py
-
-# Run ALL tests against a local proxy
-python3 run_tests.py
-
-# Run against a remote proxy
-python3 run_tests.py --proxy http://192.168.137.252:18787
-
-# Specify a model, wait between queries
-python3 run_tests.py --model "qwen3:14b-q8_0" --wait 2
-
-# Only run hallucination entrapment tests
-python3 run_tests.py --entrapment-only
-
-# Filter by domain
-python3 run_tests.py --filter discovery
-python3 run_tests.py --filter zoning
-python3 run_tests.py --filter qbi
-
-# Verbose mode (show queries + response previews)
-python3 run_tests.py --verbose
-
-# Quick connectivity check only
-python3 run_tests.py --ping
-
-# Increase timeout for large models (default 300s)
-python3 run_tests.py --timeout 600
-```
-
-The test runner connects to the proxy's `/v1/chat/completions` endpoint, posts each query (non-streaming), and validates the response against **required_facts**, **forbidden_terms**, and **expected_citations**. Three entrapment tests use fabricated cases/statutes to detect hallucination. Each fact re-check uses fuzzy matching (case-insensitive, word-level, and exact phrase matching).
-
-## Free Version (cc-free.py)
-
-| File | Purpose |
-|---|---|
-| `cc-free.py` | Standalone single-file free version — FAISS, SQLite, Ollama, DuckDuckGo, 50-file limit, no license |
-| `install-free.sh` | Install script — downloads cc-free.py, installs deps, sets up systemd service |
-| `cloudflare_worker_free.js` | Cloudflare Worker landing page — serves config form + install command |
-
-**cc-free.py** uses FAISS (no Qdrant server needed), SQLite sessions (same schema as PRO), and DuckDuckGo web search (with HTML fallback, no API key). Hard 50-file limit with "Upgrade to PRO" prompt. Listens on `127.0.0.1:18788` by default (configurable via `CC_PORT`).
-
-### Deploy after editing cc-free files
-
-1. **Copy to user's repo:**
-   ```bash
-    cp /mnt/e/dev/opencode/ContextCut-PRO/{filename} /mnt/e/Dev/ContextCut-PRO/{filename}
-
-2. **SCP to proxy** (from Windows cmd at `E:\Dev\ContextCut-PRO`):
-   ```
-   scp {filename} steve@192.168.137.252:~/contextcut/
-   ```
-
-3. **Deploy Cloudflare Worker** (from WSL):
-   ```bash
-    cd /mnt/e/Dev/ContextCut-PRO && npx wrangler deploy cloudflare_worker_free.js
-   ```
-
-4. **Push to GitHub** (from Windows cmd at `E:\Dev\ContextCut-PRO`):
-   ```cmd
-   git add {files}
-   git commit -m "message"
-   git push
-   ```
-
-5. **Install on macOS** (user runs on Mac Mini):
-   ```bash
-   curl -sSf https://raw.githubusercontent.com/StevoKeano/ContextCut-PRO/main/install-free.sh | bash -s -- --host 192.168.137.1 --port 11434 --chat-model qwen2.5:7b --embed-model nomic-embed-text --ctx-limit 32768 --cc-port 18788
-   ```
-
-## Constraints
-- NEVER git commit/push from own directory.
-- NEVER touch files outside `/mnt/e/dev/opencode/ContextCut-PRO` without asking.
-- Only provide commands for user to run.
-- **NEVER recommend `pkill -f python.*cc-free` or `pkill -f "python.*cc-free"`** — the pattern matches the `pkill` process itself, causing it to self-kill. Use `lsof -ti:<port> | xargs kill -9` or `kill $(cat /tmp/cc-free.pid)` instead.
-- **NEVER use `pkill -f` for ANY python process** on the proxy (same self-kill issue). Use `fuser -k <port>/tcp`, `lsof -ti:<port> | xargs kill`, or the dedicated `./stop.sh` script.
-- **NEVER suggest `anomalco` as GitHub org** — the repo is `StevoKeano/ContextCut-PRO`. The raw CDN URL is case-sensitive; always use `StevoKeano/ContextCut-PRO` (not lowercase `contextcut-pro`).
-- **On Windows** `E:\Dev\ContextCut-PRO` = `E:\Dev\contextcut-pro` (case-insensitive FS). In WSL they are different dirs — always use `/mnt/e/Dev/ContextCut-PRO` (uppercase) for the user's repo.
+## Ollama
+- Runs on Windows at `http://192.168.137.1:11434`
+- Custom model `qwen2.5-coder:14b-16k` with `PARAMETER num_ctx 16384` created via Modelfile
