@@ -1,6 +1,7 @@
 venv/
 __pycache__/
 *.pyc
+<<<<<<< HEAD
 *.pyo
 .env
 *.log
@@ -13,3 +14,12 @@ LICENSING.md
 index.js
 license_health.sh
 __pycache__/
+=======
+.env
+.contextcut_*
+*.enc
+.pid
+.proxy_ready
+.ingest.pid
+*.sessions.json
+>>>>>>> deep-agent-integration
