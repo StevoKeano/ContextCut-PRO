@@ -46,13 +46,21 @@ _VOYAGE_AVAILABLE = False
 _voyage_mod = None
 try:
     import voyageai
+
     _voyage_mod = voyageai
     _VOYAGE_AVAILABLE = True
 except ImportError:
     pass
 
 from qdrant_client import QdrantClient
-from qdrant_client.models import Distance, VectorParams, PointIdsList, Filter, FieldCondition, MatchValue
+from qdrant_client.models import (
+    Distance,
+    VectorParams,
+    PointIdsList,
+    Filter,
+    FieldCondition,
+    MatchValue,
+)
 
 EMBED_DIM_MAP = {
     "nomic-embed-text": 768,
@@ -67,14 +75,17 @@ EMBED_DIM_MAP = {
     "all-minilm": 384,
 }
 
+
 def _get_embed_dim(model: str) -> int:
     if not model:
         return 1024
     base = model.split(":")[0]
     return EMBED_DIM_MAP.get(model, EMBED_DIM_MAP.get(base, 1024))
 
+
 def _file_id(path: Path) -> str:
     return hashlib.md5(str(path).encode()).hexdigest()
+
 
 def _remove_qdrant_point(path: Path):
     try:
@@ -83,33 +94,39 @@ def _remove_qdrant_point(path: Path):
             collection_name=COLLECTION,
             points_selector=Filter(
                 must=[FieldCondition(key="filename", match=MatchValue(value=path.name))]
-            )
+            ),
         )
         return True
     except Exception as e:
         print(f"[contextcut] Qdrant delete error for {path.name}: {e}")
         return False
 
+
 # ── Secure Credential Manager (Machine-bound encryption) ─────────────────────
 class CredentialManager:
     """Stores API keys encrypted with a machine-derived key.
     If copied to another machine, the file is useless."""
 
-    _cred_file = os.path.join(os.path.dirname(os.path.abspath(__file__)), ".contextcut_creds.enc")
+    _cred_file = os.path.join(
+        os.path.dirname(os.path.abspath(__file__)), ".contextcut_creds.enc"
+    )
 
     @staticmethod
     def _machine_key():
         raw = ""
         try:
             if platform.system() == "Linux":
-                with open("/etc/machine-id") as f: raw = f.read().strip()
+                with open("/etc/machine-id") as f:
+                    raw = f.read().strip()
             elif platform.system() == "Darwin":
                 import subprocess
+
                 raw = subprocess.check_output(
                     ["/usr/sbin/ioreg", "-rd1", "-c", "IOPlatformExpertDevice"],
-                    encoding="utf-8"
+                    encoding="utf-8",
                 ).strip()
                 import re
+
                 match = re.search(r'"IOPlatformSerialNumber"\s*=\s*"([^"]+)"', raw)
                 if match:
                     raw = match.group(1)
@@ -122,6 +139,7 @@ class CredentialManager:
     @classmethod
     def _get_fernet(cls):
         from cryptography.fernet import Fernet
+
         key = base64.urlsafe_b64encode(cls._machine_key())
         return Fernet(key)
 
@@ -131,7 +149,8 @@ class CredentialManager:
         creds[key_name] = value
         f = cls._get_fernet()
         encrypted = f.encrypt(json.dumps(creds).encode())
-        with open(cls._cred_file, "wb") as fh: fh.write(encrypted)
+        with open(cls._cred_file, "wb") as fh:
+            fh.write(encrypted)
         os.chmod(cls._cred_file, 0o600)
 
     @classmethod
@@ -140,43 +159,68 @@ class CredentialManager:
 
     @classmethod
     def load_all(cls):
-        if not os.path.exists(cls._cred_file): return {}
+        if not os.path.exists(cls._cred_file):
+            return {}
         try:
             f = cls._get_fernet()
-            with open(cls._cred_file, "rb") as fh: encrypted = fh.read()
+            with open(cls._cred_file, "rb") as fh:
+                encrypted = fh.read()
             return json.loads(f.decrypt(encrypted).decode())
         except Exception:
             return {}
 
+
 # ── Config ────────────────────────────────────────────────────────────────────
-UPSTREAM       = os.getenv("CONTEXTCUT_UPSTREAM",        "http://localhost:11434")
-QDRANT_HOST    = os.getenv("CONTEXTCUT_QDRANT_HOST",     "localhost")
-QDRANT_PORT    = int(os.getenv("CONTEXTCUT_QDRANT_PORT", "6333"))
-COLLECTION     = os.getenv("CONTEXTCUT_COLLECTION",      "contextcut")
-KB_DIR         = Path(os.getenv("CONTEXTCUT_KB_DIR", str(Path.home() / "contextcut" / "knowledge"))).expanduser()
+UPSTREAM = os.getenv("CONTEXTCUT_UPSTREAM", "http://localhost:11434")
+QDRANT_HOST = os.getenv("CONTEXTCUT_QDRANT_HOST", "localhost")
+QDRANT_PORT = int(os.getenv("CONTEXTCUT_QDRANT_PORT", "6333"))
+COLLECTION = os.getenv("CONTEXTCUT_COLLECTION", "contextcut")
+KB_DIR = Path(
+    os.getenv("CONTEXTCUT_KB_DIR", str(Path.home() / "contextcut" / "knowledge"))
+).expanduser()
 
 ALLOWED_EXT = {
-    ".md", ".txt", ".py", ".js", ".ts", ".html", ".css",
-    ".csv", ".json", ".xml", ".yaml", ".yml",
-    ".go", ".rs", ".rb", ".java", ".c", ".cpp", ".h",
-    ".sh", ".sql", ".log",
-    ".pdf", ".docx", ".xlsx",
+    ".md",
+    ".txt",
+    ".py",
+    ".js",
+    ".ts",
+    ".html",
+    ".css",
+    ".csv",
+    ".json",
+    ".xml",
+    ".yaml",
+    ".yml",
+    ".go",
+    ".rs",
+    ".rb",
+    ".java",
+    ".c",
+    ".cpp",
+    ".h",
+    ".sh",
+    ".sql",
+    ".log",
+    ".pdf",
+    ".docx",
+    ".xlsx",
 }
-LISTEN_PORT    = int(os.getenv("CONTEXTCUT_PROXY_PORT",     "18788"))
+LISTEN_PORT = int(os.getenv("CONTEXTCUT_PROXY_PORT", "18788"))
 DASHBOARD_PORT = int(os.getenv("CONTEXTCUT_DASHBOARD_PORT", "18787"))
-CTX_LIMIT      = int(os.getenv("CONTEXTCUT_CTX_LIMIT",   "32768"))
-TOP_K          = int(os.getenv("CONTEXTCUT_TOP_K",       "5"))
-MIN_SCORE      = float(os.getenv("CONTEXTCUT_MIN_SCORE", "0.50"))
-DEFAULT_MODEL  = os.getenv("CONTEXTCUT_MODEL",           "qwen3:14b-q8_0")
+CTX_LIMIT = int(os.getenv("CONTEXTCUT_CTX_LIMIT", "32768"))
+TOP_K = int(os.getenv("CONTEXTCUT_TOP_K", "5"))
+MIN_SCORE = float(os.getenv("CONTEXTCUT_MIN_SCORE", "0.50"))
+DEFAULT_MODEL = os.getenv("CONTEXTCUT_MODEL", "qwen3:14b-q8_0")
 
 # ── Dynamic Provider Settings ────────────────────────────────────────────────
 PROVIDERS = {
-    "Ollama":     {"url": "http://localhost:11434", "key_required": False},
-    "OpenAI":     {"url": "https://api.openai.com", "key_required": True},
+    "Ollama": {"url": "http://localhost:11434", "key_required": False},
+    "OpenAI": {"url": "https://api.openai.com", "key_required": True},
     "OpenRouter": {"url": "https://openrouter.ai/api", "key_required": True},
-    "Anthropic":  {"url": "https://api.anthropic.com", "key_required": True},
-    "xAI":        {"url": "https://api.x.ai", "key_required": True},
-    "Custom":     {"url": "", "key_required": True},
+    "Anthropic": {"url": "https://api.anthropic.com", "key_required": True},
+    "xAI": {"url": "https://api.x.ai", "key_required": True},
+    "Custom": {"url": "", "key_required": True},
 }
 _provider_name = "Ollama"
 _custom_base_url = ""
@@ -185,8 +229,15 @@ _api_key = ""
 _free_only = False
 _local_only = True
 
+
 def load_saved_credentials():
-    global _provider_name, _custom_base_url, _ollama_url, _api_key, _free_only, _local_only
+    global \
+        _provider_name, \
+        _custom_base_url, \
+        _ollama_url, \
+        _api_key, \
+        _free_only, \
+        _local_only
     global _EMBED_MODE, _VK, _LOCAL_EMBED
     creds = CredentialManager.load_all()
     _provider_name = creds.get("provider", "Ollama")
@@ -206,6 +257,7 @@ def load_saved_credentials():
     if saved_model:
         _LOCAL_EMBED = saved_model
 
+
 def get_current_upstream():
     global _provider_name, _custom_base_url, _ollama_url
     if _provider_name == "Custom":
@@ -214,37 +266,45 @@ def get_current_upstream():
         return _ollama_url if _ollama_url else UPSTREAM
     return PROVIDERS.get(_provider_name, {}).get("url", "")
 
+
 def get_current_api_key():
     return _api_key if PROVIDERS.get(_provider_name, {}).get("key_required") else None
 
+
 load_saved_credentials()
-DEFAULT_TEMP   = float(os.getenv("CONTEXTCUT_TEMP",      "0.7"))
-DEFAULT_MAX_TK = int(os.getenv("CONTEXTCUT_MAX_TOKENS",  "0"))
-DEFAULT_TOP_P  = float(os.getenv("CONTEXTCUT_TOP_P",     "1.0"))
+DEFAULT_TEMP = float(os.getenv("CONTEXTCUT_TEMP", "0.7"))
+DEFAULT_MAX_TK = int(os.getenv("CONTEXTCUT_MAX_TOKENS", "0"))
+DEFAULT_TOP_P = float(os.getenv("CONTEXTCUT_TOP_P", "1.0"))
 
 # ── Token estimation ──────────────────────────────────────────────────────────
 try:
     import tiktoken
+
     _enc = tiktoken.get_encoding("cl100k_base")
+
     def count_tokens(text: str) -> int:
         return len(_enc.encode(text))
+
     TOKEN_METHOD = "tiktoken (exact)"
 except ImportError:
+
     def count_tokens(text: str) -> int:
         return int(len(text.split()) * 1.35)
+
     TOKEN_METHOD = "estimate ±5%"
 
 # ── Shared state ──────────────────────────────────────────────────────────────
-_lock  = threading.Lock()
-_log   = deque(maxlen=100)
+_lock = threading.Lock()
+_log = deque(maxlen=100)
 _stats = {
-    "total_requests":  0,
-    "total_saved":     0,
+    "total_requests": 0,
+    "total_saved": 0,
     "max_tokens_seen": 0,
-    "last_seen":       None,
-    "start_time":      datetime.now().isoformat(),
-    "cache_hits":      0,
+    "last_seen": None,
+    "start_time": datetime.now().isoformat(),
+    "cache_hits": 0,
 }
+
 
 def record(entry: dict):
     with _lock:
@@ -257,13 +317,16 @@ def record(entry: dict):
             _stats["max_tokens_seen"] = t
         _stats["last_seen"] = entry["ts"]
 
+
 # ── Cache for frequent queries ───────────────────────────────────────────────
 CACHE_MAX_SIZE = 100
-CACHE_TTL      = 300
+CACHE_TTL = 300
 _response_cache: dict[str, dict] = {}
+
 
 def cache_key(query: str, model: str) -> str:
     return f"{model}:{query.strip().lower()}"
+
 
 def cache_get(query: str, model: str) -> str | None:
     with _lock:
@@ -276,6 +339,7 @@ def cache_get(query: str, model: str) -> str | None:
             del _response_cache[key]
         return None
 
+
 def cache_put(query: str, model: str, response: str):
     with _lock:
         if len(_response_cache) >= CACHE_MAX_SIZE:
@@ -284,9 +348,10 @@ def cache_put(query: str, model: str, response: str):
         key = cache_key(query, model)
         _response_cache[key] = {"response": response, "ts": time.time()}
 
+
 # ── 2b: Session Management ───────────────────────────────────────────────────
 MAX_HISTORY_MESSAGES = 50
-MAX_HISTORY_TOKENS   = 4096
+MAX_HISTORY_TOKENS = 4096
 
 _sessions: dict[str, dict] = {}
 _current_sid: str | None = None
@@ -300,8 +365,10 @@ _JSON_LEGACY = os.path.join(
     os.path.dirname(os.path.abspath(__file__)), ".contextcut_sessions.json"
 )
 
+
 def _get_db() -> sqlite3.Connection:
     return sqlite3.connect(SESSION_FILE, check_same_thread=False)
+
 
 def _init_db():
     db = _get_db()
@@ -328,6 +395,7 @@ def _init_db():
     """)
     db.commit()
     db.close()
+
 
 def _migrate_json_to_sqlite():
     if not os.path.exists(_JSON_LEGACY):
@@ -366,8 +434,15 @@ def _migrate_json_to_sqlite():
             sid = s["id"]
             db.execute(
                 "INSERT OR IGNORE INTO sessions (id, title, created, msg_count, total_tokens, ctx_limit_reached, preview) VALUES (?,?,?,?,?,?,?)",
-                (sid, s.get("title", ""), s.get("created", ""), s.get("msg_count", 0),
-                 s.get("total_tokens", 0), 1 if s.get("ctx_limit_reached") else 0, s.get("preview", "")),
+                (
+                    sid,
+                    s.get("title", ""),
+                    s.get("created", ""),
+                    s.get("msg_count", 0),
+                    s.get("total_tokens", 0),
+                    1 if s.get("ctx_limit_reached") else 0,
+                    s.get("preview", ""),
+                ),
             )
             history = s.get("history", [])
             for i, m in enumerate(history):
@@ -384,6 +459,7 @@ def _migrate_json_to_sqlite():
     finally:
         db.close()
 
+
 def new_session() -> str:
     global _current_sid
     if _current_sid:
@@ -394,6 +470,7 @@ def new_session() -> str:
         "created": datetime.now().isoformat(),
         "msg_count": 0,
         "ctx_limit_reached": False,
+        "shell_confirm_mode": "ask",
     }
     _current_sid = sid
     try:
@@ -408,10 +485,12 @@ def new_session() -> str:
         print(f"[contextcut] DB insert session error: {e}")
     return sid
 
+
 def get_session(sid: str) -> dict | None:
     if sid and sid in _sessions:
         return _sessions[sid]
     return None
+
 
 def add_to_history(sid: str, role: str, content: str):
     session = _sessions.get(sid)
@@ -432,6 +511,7 @@ def add_to_history(sid: str, role: str, content: str):
         db.close()
     except Exception as e:
         print(f"[contextcut] DB insert message error: {e}")
+
 
 def _update_session_on_disk(sid: str):
     session = _sessions.get(sid)
@@ -457,12 +537,14 @@ def _update_session_on_disk(sid: str):
     except Exception as e:
         print(f"[contextcut] DB update session error: {e}")
 
+
 def clear_session(sid: str):
     _update_session_on_disk(sid)
     session = _sessions.get(sid)
     if session:
         session["history"] = []
         session["msg_count"] = 0
+
 
 def _trim_history(session: dict):
     while len(session["history"]) > MAX_HISTORY_MESSAGES:
@@ -472,35 +554,57 @@ def _trim_history(session: dict):
         removed = session["history"].pop(0)
         total -= count_tokens(removed["content"])
 
+
 def build_messages_with_history(sid: str, new_user_msg: str) -> list[dict]:
     session = _sessions.get(sid)
     if not session or not session["history"]:
         return [{"role": "user", "content": new_user_msg}]
     return session["history"] + [{"role": "user", "content": new_user_msg}]
 
+
 def detect_dynamic_action(content: str) -> str | None:
     lower = content.strip().lower()
-    if lower in ("stop", "halt", "cease", "that's enough", "thats enough", "that is enough"):
+    if lower in (
+        "stop",
+        "halt",
+        "cease",
+        "that's enough",
+        "thats enough",
+        "that is enough",
+    ):
         return "stop"
     if lower in ("continue", "go on", "keep going", "more", "elaborate"):
         return "continue"
-    if lower.startswith("revise") or lower.startswith("rewrite") or lower.startswith("rephrase"):
+    if (
+        lower.startswith("revise")
+        or lower.startswith("rewrite")
+        or lower.startswith("rephrase")
+    ):
         return "revise"
     return None
 
-def build_revision_prompt(last_user: str, last_assistant: str, revision_request: str) -> list[dict]:
+
+def build_revision_prompt(
+    last_user: str, last_assistant: str, revision_request: str
+) -> list[dict]:
     return [
         {"role": "user", "content": last_user},
         {"role": "assistant", "content": last_assistant},
-        {"role": "user", "content": f"{revision_request}. Please revise your previous response accordingly."},
+        {
+            "role": "user",
+            "content": f"{revision_request}. Please revise your previous response accordingly.",
+        },
     ]
+
 
 def load_sessions():
     if not os.path.exists(SESSION_FILE):
         return
     try:
         db = _get_db()
-        cur = db.execute("SELECT id, created, msg_count, ctx_limit_reached FROM sessions ORDER BY created")
+        cur = db.execute(
+            "SELECT id, created, msg_count, ctx_limit_reached FROM sessions ORDER BY created"
+        )
         rows = cur.fetchall()
         with _lock:
             for sid, created, msg_count, ctx_hit in rows:
@@ -520,9 +624,11 @@ def load_sessions():
     except Exception as e:
         print(f"[contextcut] Session load error: {e}")
 
+
 def check_license_status() -> dict:
     with _lock:
         return dict(_license_state)
+
 
 def release_license():
     if not LICENSE_KEY or not _license_state.get("valid"):
@@ -530,28 +636,37 @@ def release_license():
     try:
         secret = _license_state.get("instance_secret")
         if not secret:
-            secret_path = os.path.join(os.path.expanduser("~"), ".contextcut", "instance_secret")
+            secret_path = os.path.join(
+                os.path.expanduser("~"), ".contextcut", "instance_secret"
+            )
             if os.path.exists(secret_path):
                 with open(secret_path) as f:
                     secret = f.read().strip()
-        payload = json.dumps({
-            "license_key":     LICENSE_KEY,
-            "instance_id":     _instance_id,
-            "instance_secret": secret or "",
-        }).encode()
+        payload = json.dumps(
+            {
+                "license_key": LICENSE_KEY,
+                "instance_id": _instance_id,
+                "instance_secret": secret or "",
+            }
+        ).encode()
         req = urllib.request.Request(
             f"{LICENSE_SERVER}/v1/license/release",
             data=payload,
-            headers={"Content-Type": "application/json", "User-Agent": "ContextCutPRO/1.0"},
+            headers={
+                "Content-Type": "application/json",
+                "User-Agent": "ContextCutPRO/1.0",
+            },
             method="POST",
         )
         with urllib.request.urlopen(req, timeout=3) as resp:
             data = json.loads(resp.read().decode())
-        print(f"[contextcut] License seat released: {data.get('message','OK')}")
+        print(f"[contextcut] License seat released: {data.get('message', 'OK')}")
     except Exception as e:
         print(f"[contextcut] License release error (non-fatal): {e}")
 
+
 _shutdown_done = False
+
 
 def shutdown_hook():
     global _shutdown_done
@@ -561,77 +676,97 @@ def shutdown_hook():
     release_license()
     if _current_sid:
         _update_session_on_disk(_current_sid)
+
+
 import atexit
+
 atexit.register(shutdown_hook)
 
 # ── License Validation ────────────────────────────────────────────────────────
-LICENSE_SERVER  = os.getenv("CONTEXTCUT_LICENSE_SERVER", "https://api.contextcut-pro.com").rstrip("/")
-LICENSE_KEY     = os.getenv("CONTEXTCUT_LICENSE_KEY", "")
+LICENSE_SERVER = os.getenv(
+    "CONTEXTCUT_LICENSE_SERVER", "https://api.contextcut-pro.com"
+).rstrip("/")
+LICENSE_KEY = os.getenv("CONTEXTCUT_LICENSE_KEY", "")
 HEARTBEAT_INTERVAL = int(os.getenv("CONTEXTCUT_HEARTBEAT_SEC", "900"))
-GRACE_PERIOD    = int(os.getenv("CONTEXTCUT_GRACE_SEC", "3600"))
+GRACE_PERIOD = int(os.getenv("CONTEXTCUT_GRACE_SEC", "3600"))
 
 _instance_id = os.getenv("CONTEXTCUT_INSTANCE_ID") or str(uuid.uuid4())
 
 _license_state = {
-    "valid":           False,
-    "instance_id":     _instance_id,
+    "valid": False,
+    "instance_id": _instance_id,
     "instance_secret": None,
-    "last_heartbeat":  None,
-    "license_type":    None,
-    "message":         "Not yet validated",
-    "seats":           0,
+    "last_heartbeat": None,
+    "license_type": None,
+    "message": "Not yet validated",
+    "seats": 0,
 }
+
 
 def get_fingerprint() -> dict:
     import platform
     import hashlib
+
     mac_addr = ""
     try:
         import uuid
+
         mac_addr = str(uuid.getnode())
     except Exception:
         pass
     return {
-        "hostname":    socket.gethostname(),
-        "platform":    platform.platform(),
-        "node":        mac_addr,
+        "hostname": socket.gethostname(),
+        "platform": platform.platform(),
+        "node": mac_addr,
     }
+
 
 def validate_license() -> bool:
     global _license_state
     if not LICENSE_KEY:
-        _license_state["message"] = "No license key provided. Set CONTEXTCUT_LICENSE_KEY."
+        _license_state["message"] = (
+            "No license key provided. Set CONTEXTCUT_LICENSE_KEY."
+        )
         return False
     try:
         fp = get_fingerprint()
-        payload = json.dumps({
-            "license_key": LICENSE_KEY,
-            "instance_id": _instance_id,
-            "fingerprint": fp,
-            "version":     "PRO-1.0",
-            "action":      "activate",
-        }).encode()
+        payload = json.dumps(
+            {
+                "license_key": LICENSE_KEY,
+                "instance_id": _instance_id,
+                "fingerprint": fp,
+                "version": "PRO-1.0",
+                "action": "activate",
+            }
+        ).encode()
         req = urllib.request.Request(
             f"{LICENSE_SERVER}/v1/license/validate",
             data=payload,
-            headers={"Content-Type": "application/json", "User-Agent": "ContextCutPRO/1.0"},
+            headers={
+                "Content-Type": "application/json",
+                "User-Agent": "ContextCutPRO/1.0",
+            },
             method="POST",
         )
         with urllib.request.urlopen(req, timeout=15) as resp:
             data = json.loads(resp.read().decode())
         if data.get("valid"):
             secret = data.get("instance_secret")
-            _license_state.update({
-                "valid":           True,
-                "activated_at":    data.get("activated_at"),
-                "license_type":    data.get("license_type", "single"),
-                "seats":           data.get("seats", 1),
-                "expires_at":      data.get("expires_at"),
-                "message":         data.get("message", "License validated"),
-                "instance_secret": secret,
-            })
+            _license_state.update(
+                {
+                    "valid": True,
+                    "activated_at": data.get("activated_at"),
+                    "license_type": data.get("license_type", "single"),
+                    "seats": data.get("seats", 1),
+                    "expires_at": data.get("expires_at"),
+                    "message": data.get("message", "License validated"),
+                    "instance_secret": secret,
+                }
+            )
             if secret:
-                secret_path = os.path.join(os.path.expanduser("~"), ".contextcut", "instance_secret")
+                secret_path = os.path.join(
+                    os.path.expanduser("~"), ".contextcut", "instance_secret"
+                )
                 os.makedirs(os.path.dirname(secret_path), exist_ok=True)
                 with open(secret_path, "w") as f:
                     f.write(secret)
@@ -655,20 +790,26 @@ def validate_license() -> bool:
         _license_state["message"] = f"Validation error: {e}"
         return False
 
+
 def send_heartbeat() -> bool:
     if not LICENSE_KEY:
         return False
     try:
-        payload = json.dumps({
-            "license_key":  LICENSE_KEY,
-            "instance_id":  _instance_id,
-            "uptime":       time.time(),
-            "fingerprint":  get_fingerprint(),
-        }).encode()
+        payload = json.dumps(
+            {
+                "license_key": LICENSE_KEY,
+                "instance_id": _instance_id,
+                "uptime": time.time(),
+                "fingerprint": get_fingerprint(),
+            }
+        ).encode()
         req = urllib.request.Request(
             f"{LICENSE_SERVER}/v1/heartbeat",
             data=payload,
-            headers={"Content-Type": "application/json", "User-Agent": "ContextCutPRO/1.0"},
+            headers={
+                "Content-Type": "application/json",
+                "User-Agent": "ContextCutPRO/1.0",
+            },
             method="POST",
         )
         with urllib.request.urlopen(req, timeout=10) as resp:
@@ -682,6 +823,7 @@ def send_heartbeat() -> bool:
     except Exception:
         return True  # network blip — don't deactivate, keep running
 
+
 def heartbeat_loop():
     time.sleep(HEARTBEAT_INTERVAL)
     while True:
@@ -689,23 +831,39 @@ def heartbeat_loop():
         time.sleep(HEARTBEAT_INTERVAL)
 
 
-
 import signal
+
+
 def _handle_signal(signum, frame):
     print("\n[contextcut] Shutting down gracefully...")
     shutdown_hook()
     os._exit(0)
 
-signal.signal(signal.SIGINT, _handle_signal)
-signal.signal(signal.SIGTERM, _handle_signal)
+
+# ── Load .env into os.environ early so module-level defaults reflect .env ──
+_env_path = Path(__file__).parent / ".env"
+if _env_path.exists():
+    for _line in _env_path.read_text().splitlines():
+        if "=" in _line and not _line.startswith("#"):
+            _k, _v = _line.split("=", 1)
+            _k, _v = _k.strip(), _v.strip().strip('"').strip("'")
+            if _k and _k not in os.environ:
+                os.environ[_k] = _v
 
 # ── Lazy clients ──────────────────────────────────────────────────────────────
-_vc            = None
-_qclient       = None
+_vc = None
+_qclient = None
 _last_embed_ts = 0.0
-_VK            = os.environ.get("VOYAGE_API_KEY", "").strip().strip('"').strip("'")  # strip accidental quotes
-_LOCAL_EMBED   = os.environ.get("CONTEXTCUT_EMBED_MODEL", "").strip().strip('"').strip("'")
-_EMBED_MODE    = os.environ.get("CONTEXTCUT_EMBED_MODE", "voyage").strip().strip('"').strip("'")
+_VK = (
+    os.environ.get("VOYAGE_API_KEY", "").strip().strip('"').strip("'")
+)  # strip accidental quotes
+_LOCAL_EMBED = (
+    os.environ.get("CONTEXTCUT_EMBED_MODEL", "").strip().strip('"').strip("'")
+)
+_EMBED_MODE = (
+    os.environ.get("CONTEXTCUT_EMBED_MODE", "voyage").strip().strip('"').strip("'")
+)
+
 
 def get_clients():
     global _vc, _qclient
@@ -716,11 +874,14 @@ def get_clients():
         _qclient = QdrantClient(host=QDRANT_HOST, port=QDRANT_PORT)
     return _vc, _qclient
 
+
 def _ollama_embed(text: str, model: str) -> list[float] | None:
     """Embed using Ollama's /api/embed endpoint."""
     try:
         payload = json.dumps({"model": model, "input": text}).encode()
-        req = urllib.request.Request(f"{UPSTREAM}/api/embed", data=payload, method="POST")
+        req = urllib.request.Request(
+            f"{UPSTREAM}/api/embed", data=payload, method="POST"
+        )
         req.add_header("Content-Type", "application/json")
         with urllib.request.urlopen(req, timeout=30) as resp:
             data = json.loads(resp.read().decode("utf-8"))
@@ -731,6 +892,7 @@ def _ollama_embed(text: str, model: str) -> list[float] | None:
     except Exception as e:
         print(f"[contextcut] Ollama embed error: {e}")
         return None
+
 
 # ── Qdrant lookup ─────────────────────────────────────────────────────────────
 def _safe_embed(query: str, input_type: str) -> list[float] | None:
@@ -752,12 +914,16 @@ def _safe_embed(query: str, input_type: str) -> list[float] | None:
                 err_msg = str(e).lower()
                 if "rate" in err_msg or "429" in err_msg:
                     wait = 60 + random.uniform(5, 15)
-                    print(f"[contextcut] Voyage rate-limited, backing off {wait:.0f}s (attempt {attempt+1}/{max_retries})")
+                    print(
+                        f"[contextcut] Voyage rate-limited, backing off {wait:.0f}s (attempt {attempt + 1}/{max_retries})"
+                    )
                     time.sleep(wait)
                 else:
                     print(f"[contextcut] Voyage embed error: {e}")
                     if _LOCAL_EMBED:
-                        print(f"[contextcut] Falling back to Ollama embed: {_LOCAL_EMBED}")
+                        print(
+                            f"[contextcut] Falling back to Ollama embed: {_LOCAL_EMBED}"
+                        )
                         return _ollama_embed(query, _LOCAL_EMBED)
                     return None
         print(f"[contextcut] Voyage embed failed after {max_retries} retries")
@@ -771,6 +937,7 @@ def _safe_embed(query: str, input_type: str) -> list[float] | None:
 
     print("[contextcut] WARNING: No embedding backend configured")
     return None
+
 
 def _sync_env_on_startup():
     """Sync embed settings between .env and runtime variables.
@@ -816,6 +983,7 @@ def _sync_env_on_startup():
     except Exception as e:
         print(f"[contextcut] .env sync warning: {e}")
 
+
 def ensure_collection_dim():
     """Check Qdrant collection dimension matches current embed model; recreate if needed."""
     try:
@@ -825,12 +993,16 @@ def ensure_collection_dim():
             info = qclient.get_collection(COLLECTION)
             actual_dim = info.config.params.vectors.size
             if actual_dim != expected_dim:
-                print(f"[contextcut] Dimension mismatch: collection={actual_dim}, model={expected_dim}. Recreating...")
+                print(
+                    f"[contextcut] Dimension mismatch: collection={actual_dim}, model={expected_dim}. Recreating..."
+                )
                 qclient.delete_collection(COLLECTION)
                 time.sleep(2)
                 qclient.create_collection(
                     collection_name=COLLECTION,
-                    vectors_config=VectorParams(size=expected_dim, distance=Distance.COSINE),
+                    vectors_config=VectorParams(
+                        size=expected_dim, distance=Distance.COSINE
+                    ),
                 )
                 print(f"[contextcut] Collection recreated with dim={expected_dim}")
             else:
@@ -840,41 +1012,56 @@ def ensure_collection_dim():
             print(f"[contextcut] Creating Qdrant collection with dim={expected_dim}")
             qclient.create_collection(
                 collection_name=COLLECTION,
-                vectors_config=VectorParams(size=expected_dim, distance=Distance.COSINE),
+                vectors_config=VectorParams(
+                    size=expected_dim, distance=Distance.COSINE
+                ),
             )
     except Exception as e:
         print(f"[contextcut] Collection dimension check warning: {e}")
+
 
 def qdrant_context(query: str) -> tuple[str, list[dict]]:
     try:
         emb = _safe_embed(query, input_type="query")
         if emb is None:
-            print(f"[contextcut] qdrant_context: embed returned None for query={query[:60]!r}")
+            print(
+                f"[contextcut] qdrant_context: embed returned None for query={query[:60]!r}"
+            )
             return "", []
         vc, qclient = get_clients()
         response = qclient.query_points(
-            collection_name=COLLECTION, query=emb,
-            limit=TOP_K, with_payload=True, with_vectors=False,
+            collection_name=COLLECTION,
+            query=emb,
+            limit=TOP_K,
+            with_payload=True,
+            with_vectors=False,
         )
         chunks, meta = [], []
         for h in response.points:
             score = round(h.score, 3)
             if score < MIN_SCORE:
-                print(f"[contextcut] skip score={score} < {MIN_SCORE} for {h.payload.get('filename','?')}")
+                print(
+                    f"[contextcut] skip score={score} < {MIN_SCORE} for {h.payload.get('filename', '?')}"
+                )
                 continue
-            src   = h.payload.get("filename", h.payload.get("source", "?"))
-            text  = h.payload.get("text", "")
+            src = h.payload.get("filename", h.payload.get("source", "?"))
+            text = h.payload.get("text", "")
             chunks.append(f"[{src} | relevance={score}]\n{text}")
             meta.append({"source": src, "score": score, "chars": len(text)})
         if meta:
-            print(f"[contextcut] qdrant_context: {len(meta)} hits for query={query[:60]!r}")
+            print(
+                f"[contextcut] qdrant_context: {len(meta)} hits for query={query[:60]!r}"
+            )
         else:
             print(f"[contextcut] qdrant_context: 0 hits for query={query[:60]!r}")
         return "\n\n---\n\n".join(chunks), meta
     except Exception as e:
         print(f"[contextcut] Qdrant error: {e}")
-        import traceback; traceback.print_exc()
+        import traceback
+
+        traceback.print_exc()
         return "", []
+
 
 # ── Context injection ─────────────────────────────────────────────────────────
 SYSTEM_BASE = (
@@ -882,6 +1069,7 @@ SYSTEM_BASE = (
     "If asked about a case, statute, regulation, or other authority you are "
     "not certain exists, state that you cannot confirm it rather than fabricating details."
 )
+
 
 def inject_context(body: dict, context: str) -> dict:
     messages = body.get("messages", [])
@@ -903,6 +1091,7 @@ def inject_context(body: dict, context: str) -> dict:
     body["messages"] = messages
     return body
 
+
 def count_body_tokens(body: dict) -> int:
     total = 0
     for msg in body.get("messages", []):
@@ -910,32 +1099,45 @@ def count_body_tokens(body: dict) -> int:
         total += count_tokens(c if isinstance(c, str) else str(c))
     return total
 
+
 # ── Server base ───────────────────────────────────────────────────────────────
 class ReusableHTTPServer(ThreadingMixIn, HTTPServer):
     allow_reuse_address = True
-    daemon_threads      = True
+    daemon_threads = True
+
 
 # ── Broken-pipe suppression mixin ────────────────────────────────────────────
 class _SuppressBrokenPipe:
     """Silently swallow BrokenPipeError / ConnectionResetError from client disconnects."""
+
     def handle(self):
         try:
             super().handle()
         except (BrokenPipeError, ConnectionResetError):
             pass
 
+
 # ── Proxy ─────────────────────────────────────────────────────────────────────
 class ProxyHandler(_SuppressBrokenPipe, BaseHTTPRequestHandler):
-    def log_message(self, fmt, *args): pass
+    def log_message(self, fmt, *args):
+        pass
 
-    def _forward(self, method: str, raw_body: bytes, streaming: bool = False, session_id: str = None):
+    def _forward(
+        self,
+        method: str,
+        raw_body: bytes,
+        streaming: bool = False,
+        session_id: str = None,
+    ):
         upstream = get_current_upstream()
-        
+
         # Cloud providers use {base}/v1/chat/completions, Ollama uses {base}/v1/chat/completions too
         upstream_url = upstream + self.path
-        
-        req = urllib.request.Request(upstream_url, data=raw_body if method == "POST" else None, method=method)
-        
+
+        req = urllib.request.Request(
+            upstream_url, data=raw_body if method == "POST" else None, method=method
+        )
+
         # Inject API key header for cloud providers
         api_key = get_current_api_key()
         if api_key:
@@ -962,7 +1164,9 @@ class ProxyHandler(_SuppressBrokenPipe, BaseHTTPRequestHandler):
                         if not chunk:
                             self.wfile.write(b"0\r\n\r\n")
                             if session_id and full_response:
-                                add_to_history(session_id, "assistant", "".join(full_response))
+                                add_to_history(
+                                    session_id, "assistant", "".join(full_response)
+                                )
                             break
                         size = f"{len(chunk):X}\r\n".encode()
                         self.wfile.write(size + chunk + b"\r\n")
@@ -974,7 +1178,9 @@ class ProxyHandler(_SuppressBrokenPipe, BaseHTTPRequestHandler):
                                 if line.startswith("data: ") and line != "data: [DONE]":
                                     try:
                                         chunk_data = json.loads(line[6:])
-                                        delta = chunk_data.get("choices", [{}])[0].get("delta", {})
+                                        delta = chunk_data.get("choices", [{}])[0].get(
+                                            "delta", {}
+                                        )
                                         content = delta.get("content", "")
                                         if content:
                                             full_response.append(content)
@@ -990,7 +1196,11 @@ class ProxyHandler(_SuppressBrokenPipe, BaseHTTPRequestHandler):
                     if session_id:
                         try:
                             resp_json = json.loads(resp_body)
-                            assistant_msg = resp_json.get("choices", [{}])[0].get("message", {}).get("content", "")
+                            assistant_msg = (
+                                resp_json.get("choices", [{}])[0]
+                                .get("message", {})
+                                .get("content", "")
+                            )
                             if assistant_msg:
                                 add_to_history(session_id, "assistant", assistant_msg)
                         except Exception:
@@ -1011,7 +1221,7 @@ class ProxyHandler(_SuppressBrokenPipe, BaseHTTPRequestHandler):
         self._forward("GET", b"")
 
     def do_POST(self):
-        length   = int(self.headers.get("Content-Length", 0))
+        length = int(self.headers.get("Content-Length", 0))
         raw_body = self.rfile.read(length)
         try:
             body = json.loads(raw_body)
@@ -1031,7 +1241,9 @@ class ProxyHandler(_SuppressBrokenPipe, BaseHTTPRequestHandler):
                     session_id = new_session()
                 body["session_id"] = session_id
 
-                new_user_content = body["messages"][-1].get("content", "") if body["messages"] else ""
+                new_user_content = (
+                    body["messages"][-1].get("content", "") if body["messages"] else ""
+                )
                 action = detect_dynamic_action(new_user_content)
 
                 if action == "revise":
@@ -1046,17 +1258,26 @@ class ProxyHandler(_SuppressBrokenPipe, BaseHTTPRequestHandler):
                                 last_user = msg["content"]
                                 break
                         if last_assistant:
-                            body["messages"] = build_revision_prompt(last_user, last_assistant, new_user_content)
+                            body["messages"] = build_revision_prompt(
+                                last_user, last_assistant, new_user_content
+                            )
 
                 elif action == "continue":
                     session = _sessions.get(session_id)
                     if session and session["history"]:
                         body["messages"] = list(session["history"])
-                        body["messages"].append({"role": "user", "content": "Please continue your previous response."})
+                        body["messages"].append(
+                            {
+                                "role": "user",
+                                "content": "Please continue your previous response.",
+                            }
+                        )
 
                 elif action != "stop":
                     if len(body["messages"]) == 1:
-                        body["messages"] = build_messages_with_history(session_id, new_user_content)
+                        body["messages"] = build_messages_with_history(
+                            session_id, new_user_content
+                        )
 
                 add_to_history(session_id, "user", new_user_content)
 
@@ -1073,35 +1294,63 @@ class ProxyHandler(_SuppressBrokenPipe, BaseHTTPRequestHandler):
                 if tok_after > CTX_LIMIT:
                     pruned = 0
                     for msg in body.get("messages", []):
-                        if msg.get("role") == "system" and msg["content"].startswith("## Relevant context"):
+                        if msg.get("role") == "system" and msg["content"].startswith(
+                            "## Relevant context"
+                        ):
                             parts = msg["content"].split("\n\n---\n\n")
-                            while len(parts) > 2 and count_body_tokens(body) > CTX_LIMIT:
+                            while (
+                                len(parts) > 2 and count_body_tokens(body) > CTX_LIMIT
+                            ):
                                 removed = parts.pop(-2)
                                 msg["content"] = "\n\n---\n\n".join(parts)
                                 pruned += 1
                                 tok_after = count_body_tokens(body)
                             if pruned:
-                                print(f"[contextcut] context truncated: removed {pruned} chunk(s) to fit {CTX_LIMIT}")
+                                print(
+                                    f"[contextcut] context truncated: removed {pruned} chunk(s) to fit {CTX_LIMIT}"
+                                )
                                 if session_id and session_id in _sessions:
                                     _sessions[session_id]["ctx_limit_reached"] = True
                             break
                 raw_body = json.dumps(body).encode()
             tok_after = count_body_tokens(body)
             pct = round(tok_after / CTX_LIMIT * 100, 1)
-            ts  = datetime.now().strftime("%H:%M:%S")
+            ts = datetime.now().strftime("%H:%M:%S")
             model_name = body.get("model", "?")
-            print(f"[contextcut] {ts} | model={model_name} | {tok_before}→{tok_after}/{CTX_LIMIT} ({pct}%) | hits:{len(hits_meta)} | {query[:60]}")
-            record({"ts": ts, "query": query[:120], "tokens_before": tok_before,
-                    "tokens_after": tok_after, "ctx_limit": CTX_LIMIT, "pct": pct, "hits": hits_meta})
+            print(
+                f"[contextcut] {ts} | model={model_name} | {tok_before}→{tok_after}/{CTX_LIMIT} ({pct}%) | hits:{len(hits_meta)} | {query[:60]}"
+            )
+            record(
+                {
+                    "ts": ts,
+                    "query": query[:120],
+                    "tokens_before": tok_before,
+                    "tokens_after": tok_after,
+                    "ctx_limit": CTX_LIMIT,
+                    "pct": pct,
+                    "hits": hits_meta,
+                }
+            )
 
         is_streaming = isinstance(body, dict) and body.get("stream", False)
-        if self.path in ("/api/pull", "/api/push", "/api/delete", "/api/copy", "/api/create"):
+        if self.path in (
+            "/api/pull",
+            "/api/push",
+            "/api/delete",
+            "/api/copy",
+            "/api/create",
+        ):
             self.send_response(403)
             self.send_header("Content-Type", "application/json")
             self.end_headers()
             self.wfile.write(json.dumps({"error": "Blocked by proxy"}).encode())
             return
-        self._forward("POST", raw_body, streaming=is_streaming, session_id=body.get("session_id") if body else None)
+        self._forward(
+            "POST",
+            raw_body,
+            streaming=is_streaming,
+            session_id=body.get("session_id") if body else None,
+        )
 
     def do_DELETE(self):
         if self.path.startswith("/api/session/"):
@@ -1117,50 +1366,56 @@ class ProxyHandler(_SuppressBrokenPipe, BaseHTTPRequestHandler):
         self.send_response(404)
         self.end_headers()
 
+
 # ── Dashboard ─────────────────────────────────────────────────────────────────
 def pct_color(p):
     return "#22c55e" if p < 60 else "#f59e0b" if p < 80 else "#ef4444"
 
+
 def make_stats_json() -> dict:
     with _lock:
         rows = list(_log)
-        s    = dict(_stats)
+        s = dict(_stats)
     r = rows[0] if rows else {}
     return {
-        "pct":           r.get("pct", 0),
+        "pct": r.get("pct", 0),
         "tokens_before": r.get("tokens_before", 0),
-        "tokens_after":  r.get("tokens_after", 0),
-        "hits":          r.get("hits", []),
-        "total_saved":   s["total_saved"],
-        "total_requests":s["total_requests"],
+        "tokens_after": r.get("tokens_after", 0),
+        "hits": r.get("hits", []),
+        "total_saved": s["total_saved"],
+        "total_requests": s["total_requests"],
         "max_tokens_seen": s["max_tokens_seen"],
-        "cache_hits":    s["cache_hits"],
-        "start_time":    s["start_time"],
+        "cache_hits": s["cache_hits"],
+        "start_time": s["start_time"],
     }
+
 
 def make_dashboard() -> str:
     with _lock:
         rows = list(_log)
-        s    = dict(_stats)
+        s = dict(_stats)
 
     last_pct = rows[0]["pct"] if rows else 0
     last_tok = rows[0]["tokens_after"] if rows else 0
-    bc       = pct_color(last_pct)
+    bc = pct_color(last_pct)
 
     rows_html = ""
     for r in rows:
-        p   = r["pct"]
+        p = r["pct"]
         col = pct_color(p)
-        hits_str = " ".join(
-            f'<span class="hit">{html.escape(h["source"].replace(".md",""))} <em>{h["score"]}</em></span>'
-            for h in r.get("hits", [])
-        ) or '<span class="nh">—</span>'
-        bar = f'<div class="mini-bar"><div class="mini-fill" style="width:{min(p,100)}%;background:{col}"></div></div>'
+        hits_str = (
+            " ".join(
+                f'<span class="hit">{html.escape(h["source"].replace(".md", ""))} <em>{h["score"]}</em></span>'
+                for h in r.get("hits", [])
+            )
+            or '<span class="nh">—</span>'
+        )
+        bar = f'<div class="mini-bar"><div class="mini-fill" style="width:{min(p, 100)}%;background:{col}"></div></div>'
         rows_html += f"""<tr>
-          <td class="ts">{r['ts']}</td>
-          <td class="qcell">{html.escape(r['query'])}</td>
-          <td class="num">{r['tokens_before']}</td>
-          <td class="num">{r['tokens_after']}</td>
+          <td class="ts">{r["ts"]}</td>
+          <td class="qcell">{html.escape(r["query"])}</td>
+          <td class="num">{r["tokens_before"]}</td>
+          <td class="num">{r["tokens_after"]}</td>
           <td class="num" style="color:{col}">{p}%{bar}</td>
           <td class="hitcell">{hits_str}</td>
         </tr>"""
@@ -1170,14 +1425,22 @@ def make_dashboard() -> str:
     return f"""<!DOCTYPE html>
 """
 
+
 def make_settings_page():
     current_provider = _provider_name
-    current_url = _custom_base_url if current_provider == "Custom" else PROVIDERS.get(current_provider, {}).get("url", "")
+    current_url = (
+        _custom_base_url
+        if current_provider == "Custom"
+        else PROVIDERS.get(current_provider, {}).get("url", "")
+    )
     ollama_input_url = _ollama_url if _ollama_url else UPSTREAM
     has_key = bool(_api_key)
     masked_key = "••••••••••••••••" if has_key else ""
-    provider_opts = "".join(f'<option value="{k}" {"selected" if k==current_provider else ""}>{k}</option>' for k in PROVIDERS.keys())
-    
+    provider_opts = "".join(
+        f'<option value="{k}" {"selected" if k == current_provider else ""}>{k}</option>'
+        for k in PROVIDERS.keys()
+    )
+
     return f"""<!DOCTYPE html>
 <html lang="en">
 <head>
@@ -1432,14 +1695,21 @@ document.getElementById('togBtn').addEventListener('click',togTheme);
 </body>
 </html>"""
 
+
 def make_dashboard():
     with _lock:
         rows = list(_log)
-        s    = dict(_stats)
+        s = dict(_stats)
 
-    last_pct = rows[0]["pct"] if rows and rows[0].get("type") != "provider_switch" else 0
-    last_tok = rows[0]["tokens_after"] if rows and rows[0].get("type") != "provider_switch" else 0
-    bc       = pct_color(last_pct)
+    last_pct = (
+        rows[0]["pct"] if rows and rows[0].get("type") != "provider_switch" else 0
+    )
+    last_tok = (
+        rows[0]["tokens_after"]
+        if rows and rows[0].get("type") != "provider_switch"
+        else 0
+    )
+    bc = pct_color(last_pct)
 
     is_cloud = _provider_name != "Ollama" or not _local_only
 
@@ -1459,22 +1729,25 @@ def make_dashboard():
         if r.get("type") == "provider_switch":
             cloud_cls = "cloud-on" if r.get("is_cloud") else "cloud-off"
             rows_html += f"""<tr class="{cloud_cls}">
-              <td class="ts">{r['ts']}</td>
-              <td class="qcell" colspan="5" style="font-weight:600">{html.escape(r['query'])}</td>
+              <td class="ts">{r["ts"]}</td>
+              <td class="qcell" colspan="5" style="font-weight:600">{html.escape(r["query"])}</td>
             </tr>"""
             continue
-        p   = r["pct"]
+        p = r["pct"]
         col = pct_color(p)
-        hits_str = " ".join(
-            f'<span class="hit">{html.escape(h["source"].replace(".md",""))} <em>{h["score"]}</em></span>'
-            for h in r.get("hits", [])
-        ) or '<span class="nh">—</span>'
-        bar = f'<div class="mini-bar"><div class="mini-fill" style="width:{min(p,100)}%;background:{col}"></div></div>'
+        hits_str = (
+            " ".join(
+                f'<span class="hit">{html.escape(h["source"].replace(".md", ""))} <em>{h["score"]}</em></span>'
+                for h in r.get("hits", [])
+            )
+            or '<span class="nh">—</span>'
+        )
+        bar = f'<div class="mini-bar"><div class="mini-fill" style="width:{min(p, 100)}%;background:{col}"></div></div>'
         rows_html += f"""<tr>
-          <td class="ts">{r['ts']}</td>
-          <td class="qcell">{html.escape(r['query'])}</td>
-          <td class="num">{r['tokens_before']}</td>
-          <td class="num">{r['tokens_after']}</td>
+          <td class="ts">{r["ts"]}</td>
+          <td class="qcell">{html.escape(r["query"])}</td>
+          <td class="num">{r["tokens_before"]}</td>
+          <td class="num">{r["tokens_after"]}</td>
           <td class="num" style="color:{col}">{p}%{bar}</td>
           <td class="hitcell">{hits_str}</td>
         </tr>"""
@@ -1519,7 +1792,7 @@ body{{background:var(--bg);color:var(--text);font-family:'JetBrains Mono',monosp
 .ctx-wrap{{background:var(--surf);border:1px solid var(--border);border-radius:var(--r);padding:11px;margin-bottom:12px}}
 .ctx-label{{color:var(--muted);font-size:9px;text-transform:uppercase;letter-spacing:.1em;margin-bottom:7px}}
 .ctx-track{{background:var(--bg);border-radius:3px;height:14px;overflow:hidden}}
-.ctx-fill{{height:100%;border-radius:3px;transition:width .5s;background:{bc};width:{min(last_pct,100)}%}}
+.ctx-fill{{height:100%;border-radius:3px;transition:width .5s;background:{bc};width:{min(last_pct, 100)}%}}
 .ctx-info{{display:flex;justify-content:space-between;margin-top:4px;font-size:10px;color:var(--muted)}}
 /* table */
 .tbl-wrap{{background:var(--surf);border:1px solid var(--border);border-radius:var(--r);overflow:hidden}}
@@ -1582,6 +1855,22 @@ tr:hover td{{background:var(--surf2)}}
 .send-btn{{background:var(--accent);color:#000;border:none;border-radius:var(--r);padding:8px 16px;font-family:'Syne',sans-serif;font-weight:700;font-size:13px;cursor:pointer;white-space:nowrap;height:38px}}
 .send-btn:hover{{opacity:.85}}.send-btn:disabled{{opacity:.4;cursor:not-allowed}}
 .att-btn{{background:transparent;border:1px solid var(--border);color:var(--muted);border-radius:var(--r);padding:8px 10px;font-size:14px;cursor:pointer;line-height:1;flex-shrink:0}}
+.agent-toggle.agent-on{{background:var(--accent);color:#000;border-color:var(--accent);font-weight:600}}
+.scan-toggle{{background:transparent;border:1px solid var(--border);color:var(--muted);border-radius:3px;padding:8px 10px;font-size:11px;cursor:pointer;line-height:1;flex-shrink:0;font-family:'JetBrains Mono',monospace}}
+.scan-toggle.scan-on{{background:#f59e0b;color:#000;border-color:#f59e0b;font-weight:600}}
+.suspect{{background:rgba(245,158,11,0.2);border-left:3px solid #f59e0b;padding:2px 6px;border-radius:2px}}
+.tool-call{{background:var(--surf2);border:1px solid var(--border);border-radius:var(--r);padding:8px 12px;margin:6px 0;font-size:12px}}
+.tool-call summary{{cursor:pointer;color:var(--accent);font-weight:600}}
+.tool-call .tool-name{{color:var(--yellow)}}
+.tool-call .tool-input{{color:var(--muted);white-space:pre-wrap;word-break:break-word;font-size:11px;margin-top:4px}}
+.tool-call .tool-result{{color:var(--text);white-space:pre-wrap;word-break:break-word;font-size:11px;margin-top:4px;max-height:200px;overflow-y:auto;background:var(--bg);padding:6px;border-radius:3px}}
+.shell-btns{{display:flex;gap:4px;margin-top:6px}}
+.shell-btns button{{background:transparent;border:1px solid var(--border);color:var(--muted);border-radius:3px;padding:2px 8px;font-size:10px;cursor:pointer;font-family:'JetBrains Mono',monospace}}
+.shell-btns button:hover{{border-color:var(--accent);color:var(--accent)}}
+.shell-btns button.allow{{color:var(--green);border-color:var(--green)}}
+.shell-btns button.allow:hover{{background:var(--green);color:#000}}
+.shell-btns button.deny{{color:var(--red);border-color:var(--red)}}
+.shell-btns button.deny:hover{{background:var(--red);color:#000}}
 /* ── Settings panel ── */
 .settings-row{{display:flex;align-items:center;gap:6px;flex-wrap:wrap}}
 .param-group{{display:flex;align-items:center;gap:4px}}
@@ -1594,7 +1883,8 @@ tr:hover td{{background:var(--surf2)}}
 .settings-panel{{display:none;background:var(--surf);border-top:1px solid var(--border);padding:8px 10px}}
 .settings-panel.open{{display:block}}
 .right.fullscreen{{position:fixed;top:48px;left:0;right:0;bottom:0;z-index:100;background:var(--bg);border-top:1px solid var(--border)}}
-.right.fullscreen .chat-input-bar{{position:fixed;bottom:0;left:0;right:0}}
+.right.fullscreen .chat-messages{{flex:1;overflow-y:auto;padding:14px;display:flex;flex-direction:column;gap:10px}}
+.right.fullscreen .chat-input-bar{{flex-shrink:0}}
 #tourOv{{position:fixed;top:0;left:0;right:0;bottom:0;z-index:9998;display:none}}
 #tourOv.on{{display:block}}
 #tourSpot{{position:fixed;z-index:9999;pointer-events:none;border-radius:8px;box-shadow:0 0 0 9999px rgba(0,0,0,.55);transition:all .35s ease}}
@@ -1638,12 +1928,13 @@ tr.cloud-off td{{background:#0a1a2e!important;color:#22c55e!important;border-top
     <div class="left-scroll">
       <div class="cards">
         <div class="card"><div class="card-label">License</div><div class="card-val" id="cardLicense" style="font-size:13px">—</div></div>
-        <div class="card"><div class="card-label">Requests</div><div class="card-val" id="cardReq">{s['total_requests']}</div></div>
-        <div class="card"><div class="card-label">Last CTX</div><div class="card-val {'green' if last_pct<60 else 'yellow' if last_pct<80 else 'red'}" id="cardCtx">{last_pct}%</div></div>
-        <div class="card"><div class="card-label">Tokens Saved</div><div class="card-val green" id="cardSave">{s.get('total_saved',0):,}</div></div>
-        <div class="card"><div class="card-label">Peak Tokens</div><div class="card-val {'red' if s['max_tokens_seen']>CTX_LIMIT*0.8 else ''}" id="cardPeak">{s['max_tokens_seen']:,}</div></div>
+        <div class="card"><div class="card-label">Requests</div><div class="card-val" id="cardReq">{s["total_requests"]}</div></div>
+        <div class="card"><div class="card-label">Last CTX</div><div class="card-val {"green" if last_pct < 60 else "yellow" if last_pct < 80 else "red"}" id="cardCtx">{last_pct}%</div></div>
+        <div class="card"><div class="card-label">Tokens Saved</div><div class="card-val green" id="cardSave">{s.get("total_saved", 0):,}</div></div>
+        <div class="card"><div class="card-label">Peak Tokens</div><div class="card-val {"red" if s["max_tokens_seen"] > CTX_LIMIT * 0.8 else ""}" id="cardPeak">{s["max_tokens_seen"]:,}</div></div>
         <div class="card"><div class="card-label">CTX Limit</div><div class="card-val">{CTX_LIMIT:,}</div></div>
-        <div class="card"><div class="card-label">Cache Hits</div><div class="card-val" style="font-size:13px" id="cardCache">{s.get('cache_hits',0)}</div></div>
+        <div class="card"><div class="card-label">GPU</div><div class="card-val" id="cardGpu" style="font-size:12px">—</div></div>
+        <div class="card"><div class="card-label">Cache Hits</div><div class="card-val" style="font-size:13px" id="cardCache">{s.get("cache_hits", 0)}</div></div>
         </div>
       <div class="ctx-wrap">
         <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:7px">
@@ -1713,6 +2004,11 @@ tr.cloud-off td{{background:#0a1a2e!important;color:#22c55e!important;border-top
             <input type="range" class="param-slider" id="minscoreSlider" min="0.0" max="1.0" step="0.05" value="{MIN_SCORE}" oninput="updateMinScore()">
             <span class="param-val" id="minscoreVal">{MIN_SCORE}</span>
           </div>
+          <div class="param-group">
+            <span class="param-label">Top-K:</span>
+            <input type="range" class="param-slider" id="topkSlider" min="1" max="15" step="1" value="{TOP_K}" oninput="updateTopK()" style="width:50px">
+            <span class="param-val" id="topkVal">{TOP_K}</span>
+          </div>
           <div style="font-size:9px;color:var(--muted);margin-top:6px;border-top:1px solid var(--border);padding-top:6px">
             ⚡ 128K context = 5GB VRAM for KV cache. If responses take &gt;5s, your GPU is swapping models — set <code>OLLAMA_CONTEXT_LENGTH=32768</code> on the Ollama host to fit both embed &amp; chat models in VRAM.
           </div>
@@ -1724,6 +2020,8 @@ tr.cloud-off td{{background:#0a1a2e!important;color:#22c55e!important;border-top
         <textarea class="chat-input" id="chatInput" rows="2" role="textbox" aria-label="Message input"
           placeholder="Type a message… (Enter to send, Shift+Enter for newline). Try: /clear, /help"
           onkeydown="handleKey(event)"></textarea>
+        <button class="scan-toggle" id="scanToggle" onclick="toggleScanMode()" title="Scan responses for potential hallucinations">🧪 Scan OFF</button>
+        <button class="agent-toggle" id="agentToggle" onclick="toggleAgentMode()" title="Toggle Agent mode (tool-use)" style="background:transparent;border:1px solid var(--border);color:var(--muted);border-radius:3px;padding:8px 10px;font-size:11px;cursor:pointer;line-height:1;flex-shrink:0;font-family:'JetBrains Mono',monospace">🤖 Agent OFF</button>
         <button class="send-btn" id="sendBtn" onclick="sendMessage()" aria-label="Send message">Send ↑</button>
       </div>
     </div>
@@ -1736,12 +2034,83 @@ let sessionId = null;
 let conversationHistory = [];
 let inputHistory = [];
 let inputHistoryIdx = -1;
+let agentMode = false;
+let scanMode = false;
+let scanPending = false;
+let abortController = null;
+let lastEsc = 0;
+
+function toggleAgentMode() {{
+  agentMode = !agentMode;
+  const btn = document.getElementById('agentToggle');
+  if (btn) {{
+    btn.textContent = agentMode ? '🤖 Agent ON' : '🤖 Agent OFF';
+    btn.classList.toggle('agent-on', agentMode);
+  }}
+  const input = document.getElementById('chatInput');
+  if (input) {{
+    input.placeholder = agentMode
+      ? 'Agent: use tools, run code, search the web…'
+      : 'Type a message… (Enter to send, Shift+Enter for newline). Try: /clear, /help';
+  }}
+}}
+
+function toggleScanMode() {{
+  scanMode = !scanMode;
+  const btn = document.getElementById('scanToggle');
+  if (btn) {{
+    btn.textContent = scanMode ? '🧪 Scan ON' : '🧪 Scan OFF';
+    btn.classList.toggle('scan-on', scanMode);
+  }}
+}}
 
 function esc(s) {{
   return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/\\n/g,'<br>');
 }}
 
+async function shellConfirm(btn, allow) {{
+  const btns = btn.parentElement;
+  const cmd = btns.dataset.cmd || '';
+  btns.innerHTML = allow ? '🟢 Allowed' : '🔴 Denied';
+  // Send the decision back via a tool_result or similar mechanism
+  // For now we just visually show the decision; in a full impl we'd
+  // notify the server to continue/reject the pending tool.
+}}
+
+async function shellAlways() {{
+  try {{
+    await fetch('/api/agent/shell-mode', {{
+      method: 'POST',
+      headers: {{'Content-Type':'application/json'}},
+      body: JSON.stringify({{session_id: sessionId, mode: 'always'}})
+    }});
+    document.querySelectorAll('.shell-btns').forEach(el => el.innerHTML = '🟢 Always Allow');
+  }} catch(e) {{}}
+}}
+
+async function shellReject() {{
+  try {{
+    await fetch('/api/agent/shell-mode', {{
+      method: 'POST',
+      headers: {{'Content-Type':'application/json'}},
+      body: JSON.stringify({{session_id: sessionId, mode: 'reject'}})
+    }});
+    document.querySelectorAll('.shell-btns').forEach(el => el.innerHTML = '🔴 Always Reject');
+  }} catch(e) {{}}
+}}
+
 function handleKey(e) {{
+  if (e.key === 'Escape') {{
+    const now = Date.now();
+    if (now - lastEsc < 500) {{
+      lastEsc = 0;
+      if (abortController) abortGeneration();
+      return;
+    }}
+    lastEsc = now;
+    return;
+  }}
+  lastEsc = 0;
   const input = document.getElementById('chatInput');
   if (e.key === 'ArrowUp' && input.selectionStart === 0 && input.value === '') {{
     e.preventDefault();
@@ -1919,6 +2288,19 @@ function updateMinScore() {{
   }}
 }}
 
+function updateTopK() {{
+  const slider = document.getElementById('topkSlider');
+  const val = document.getElementById('topkVal');
+  if (slider && val) {{
+    val.textContent = parseInt(slider.value);
+    fetch('/api/settings', {{
+      method: 'POST',
+      headers: {{'Content-Type': 'application/json'}},
+      body: JSON.stringify({{top_k: parseInt(slider.value)}})
+    }}).catch(e => console.warn('top_k sync failed', e));
+  }}
+}}
+
 function getGenerationParams() {{
   const temp = parseFloat(document.getElementById('tempSlider').value);
   const topP = parseFloat(document.getElementById('toppSlider').value);
@@ -2003,6 +2385,11 @@ function handleCommand(text) {{
     clearConversation();
     return true;
   }}
+  const lower = text.toLowerCase().trim();
+  if ((lower === 'stop' || lower === "that's enough" || lower === 'stop.') && abortController) {{
+    abortGeneration();
+    return true;
+  }}
   if (text === '/help') {{
     appendMsg('assistant',
       'Commands:\\n' +
@@ -2016,6 +2403,31 @@ function handleCommand(text) {{
     return true;
   }}
   return false;
+}}
+
+function abortGeneration() {{
+  if (abortController) {{
+    abortController.abort();
+    abortController = null;
+  }}
+  const sendBtn = document.getElementById('sendBtn');
+  if (sendBtn) {{
+    sendBtn.textContent = 'Send \\u2191';
+    sendBtn.onclick = function() {{ sendMessage(); }};
+    sendBtn.disabled = false;
+  }}
+  removeTyping();
+  const input = document.getElementById('chatInput');
+  if (input) input.focus();
+}}
+
+function setSendStop() {{
+  const sendBtn = document.getElementById('sendBtn');
+  if (sendBtn) {{
+    sendBtn.textContent = '\\u25a0 Stop';
+    sendBtn.onclick = function() {{ abortGeneration(); }};
+    sendBtn.disabled = false;
+  }}
 }}
 
 function appendMsg(role, text, statHtml) {{
@@ -2163,10 +2575,50 @@ async function pollLicense() {{
   }} catch(e) {{}}
 }}
 
+async function pollGpu() {{
+  try {{
+    const r = await fetch('/api/ollama-ps');
+    const d = await r.json();
+    const el = document.getElementById('cardGpu');
+    if (d.error || !d.models || d.models.length === 0) {{
+      el.textContent = '—'; el.style.color = '';
+      return;
+    }}
+    let lines = [];
+    let totalVram = 0;
+    let totalShared = 0;
+    for (const m of d.models) {{
+      const v = m.size_vram || 0;
+      totalVram += v;
+      const s = Math.max(0, (m.size || 0) - v);
+      totalShared += s;
+      const gb = (v / 1073741824).toFixed(1);
+      lines.push(m.name + ' ' + gb + 'GB' + (s > 0 ? ' (' + (s / 1073741824).toFixed(1) + 'GB shared)' : ''));
+    }}
+    const vramGb = (totalVram / 1073741824).toFixed(1);
+    const sharedGb = (totalShared / 1073741824).toFixed(1);
+    const isOverflow = totalShared / 1073741824 > 0.7;
+    if (totalShared > 0) {{
+      el.textContent = vramGb + ' GB + ' + sharedGb + ' GB shared';
+      if (isOverflow) {{
+        el.title = '⚠ GPU VRAM exceeded — ' + sharedGb + ' GB spilling into shared/system memory.\\nModel(s) too large for available GPU memory — expect significantly slower inference.';
+      }} else {{
+        el.title = lines.join('\\n') + '\\n' + sharedGb + ' GB in shared memory.';
+      }}
+    }} else {{
+      el.textContent = vramGb + ' GB';
+      el.title = lines.join('\\n');
+    }}
+    el.style.color = isOverflow ? '#f87171' : '#22c55e';
+  }} catch(_) {{}}
+}}
+
 setInterval(pollStats, 3000);
 setInterval(pollLicense, 5000);
+setInterval(pollGpu, 5000);
 pollStats();
 pollLicense();
+pollGpu();
 fetchModels();
 initSession();
 
@@ -2183,6 +2635,8 @@ async function sendMessage() {{
   inputHistoryIdx = -1;
   input.value = '';
   sendBtn.disabled = true;
+  abortController = new AbortController();
+  setSendStop();
   appendMsg('user', text, '');
   conversationHistory.push({{role:'user', content:text}});
   showTyping();
@@ -2204,12 +2658,163 @@ async function sendMessage() {{
     assistantDiv.scrollIntoView({{behavior:'smooth', block:'start'}});
   }}
 
+  // ── Agent mode ──
+  if (agentMode) {{
+    try {{
+      const resp = await fetch('/api/agent', {{
+        method: 'POST',
+        headers: {{'Content-Type':'application/json'}},
+        signal: abortController.signal,
+        body: JSON.stringify({{message: text, session_id: sessionId, model, stream: true}})
+      }});
+      if (!resp.ok) {{
+        removeTyping();
+        let errText = await resp.text();
+        try {{
+          const errJson = JSON.parse(errText);
+          if (errJson.error && typeof errJson.error === 'object' && errJson.error.message) {{
+            errText = errJson.error.message;
+          }} else if (typeof errJson.error === 'string') {{
+            errText = errJson.error;
+          }}
+        }} catch(e) {{}}
+        let msg = '\u274c Agent Error: ' + errText;
+        if (errText.includes('does not support tools')) {{
+          msg = '\u274c Model <strong>' + model + '</strong> does not support tool calling. Agent mode requires a model with tool-use capability (e.g. qwen3, llama3, deepseek-v3). Switch to a compatible model or disable Agent ON.';
+        }}
+        appendMsg('assistant', msg, '');
+        sendBtn.disabled = false;
+        return;
+      }}
+      const reader  = resp.body.getReader();
+      const decoder = new TextDecoder();
+      let buf = '';
+      let toolDetails = null;
+      function getToolDiv() {{
+        if (!toolDetails) {{
+          ensureBubble();
+          toolDetails = document.createElement('details');
+          toolDetails.className = 'tool-call';
+          toolDetails.innerHTML = '<summary>Tool Calls</summary>';
+          assistantDiv.insertBefore(toolDetails, assistantDiv.querySelector('.msg-meta'));
+        }}
+        return toolDetails;
+      }}
+      while (true) {{
+        const {{done, value}} = await reader.read();
+        if (done) break;
+        buf += decoder.decode(value, {{stream: true}});
+        const lines = buf.split('\\n');
+        buf = lines.pop();
+        for (const line of lines) {{
+          const trimmed = line.trim();
+          if (!trimmed) continue;
+          if (trimmed.startsWith('event: ')) {{
+            const eventType = trimmed.slice(7).trim();
+            continue;
+          }}
+          if (trimmed.startsWith('data: ')) {{
+            try {{
+              const data = JSON.parse(trimmed.slice(6));
+              if (data.token) {{
+                fullText += data.token;
+                ensureBubble();
+                bubble.innerHTML = esc(fullText);
+              }} else if (data.name && data.input && !data.result) {{
+                const td = getToolDiv();
+                const div = document.createElement('div');
+                div.className = 'tool-call-entry';
+                div.innerHTML = '<span style="color:var(--yellow)">\u2699 ' + esc(data.name) + '</span>' +
+                  '<div class="tool-input">' + esc(typeof data.input === 'string' ? data.input : JSON.stringify(data.input, null, 2)) + '</div>';
+                if (data.name === 'shell_exec' && data.shell_mode === 'ask') {{
+                  const rightEl = document.querySelector('.right.fullscreen');
+                  if (rightEl) {{
+                    rightEl.classList.remove('fullscreen');
+                  }}
+                  div.innerHTML += '<div class="shell-btns" data-cmd="' + esc(data.input) + '">' +
+                    '<button class="allow" onclick="shellConfirm(this, true)">Allow</button>' +
+                    '<button class="deny" onclick="shellConfirm(this, false)">Deny</button>' +
+                    '<button class="allow" onclick="shellAlways()">Always Allow</button>' +
+                    '<button class="deny" onclick="shellReject()">Always Reject</button>' +
+                    '</div>';
+                  setTimeout(() => {{
+                    const mb = document.getElementById('messages');
+                    if (mb) mb.scrollTop = mb.scrollHeight;
+                  }}, 50);
+                }}
+                td.appendChild(div);
+              }} else if (data.name && data.result) {{
+                const existing = assistantDiv ? assistantDiv.querySelector('.tool-call-entry:last-child') : null;
+                if (existing && !existing.querySelector('.tool-result')) {{
+                  const rdiv = document.createElement('div');
+                  rdiv.className = 'tool-result';
+                  rdiv.textContent = typeof data.result === 'string' ? data.result.substring(0,2000) : JSON.stringify(data.result).substring(0,2000);
+                  existing.appendChild(rdiv);
+                }}
+              }} else if (data.response) {{
+                fullText = data.response;
+                ensureBubble();
+                bubble.innerHTML = esc(fullText);
+              }} else if (data.error) {{
+                ensureBubble();
+                bubble.innerHTML = '\u274c Agent error: ' + esc(data.error);
+              }}
+            }} catch(e) {{}}
+          }}
+        }}
+      }}
+    }} catch(e) {{
+      if (e.name === 'AbortError') return;
+      removeTyping();
+      appendMsg('assistant', '\u274c Agent network error: ' + e.message, '');
+    }}
+    if (fullText) {{
+      conversationHistory.push({{role:'assistant', content:fullText}});
+      if (scanMode && assistantDiv) {{
+        try {{
+          const sr = await fetch('/api/agent/confidence-scan', {{
+            method: 'POST',
+            headers: {{'Content-Type':'application/json'}},
+            body: JSON.stringify({{text: fullText}})
+          }});
+          if (sr.ok) {{
+            const sd = await sr.json();
+            if (sd.passages && sd.passages.length > 0) {{
+              let highlighted = fullText;
+              for (const p of sd.passages) {{
+                if ((p.confidence === 'LOW' || p.confidence === 'MEDIUM') && p.text && p.text.length > 5) {{
+                  const escaped = p.text.replace(/[.*+?^${{}}()|[\\]\\\\]/g, '\\\\$&');
+                  const icon = p.confidence === 'LOW' ? '\\u26a0\\ufe0f ' : '\\u26a1 ';
+                  const title = esc(p.confidence + ': ' + (p.reason || ''));
+                  try {{
+                    const re = new RegExp(escaped.replace(/\\n/g, '\\\\n'), 'gi');
+                    highlighted = highlighted.replace(re, (match) =>
+                      '<span class=\\"suspect\\" title=\\"' + title + '\\">' + icon + esc(match) + '</span>'
+                    );
+                  }} catch(e) {{}}
+                }}
+              }}
+              if (bubble) bubble.innerHTML = highlighted;
+            }}
+          }}
+        }} catch(e) {{ console.warn('Confidence scan failed:', e); }}
+      }}
+    }}
+    sendBtn.disabled = false;
+    abortController = null;
+    sendBtn.textContent = 'Send \\u2191';
+    sendBtn.onclick = function() {{ sendMessage(); }};
+    input.focus();
+    return;
+  }}
+
   try {{
     const genParams = getGenerationParams();
     const resp = await fetch('/v1/chat/completions', {{
       method: 'POST',
       headers: {{'Content-Type':'application/json'}},
-      body: JSON.stringify({{model, messages: conversationHistory, stream:true, session_id: sessionId, ...genParams}})
+      signal: abortController.signal,
+      body: JSON.stringify({{model, messages: conversationHistory, stream:true, stream_options: {{include_usage: true}}, session_id: sessionId, ...genParams}})
     }});
 
     if (!resp.ok) {{
@@ -2277,10 +2882,14 @@ async function sendMessage() {{
     }} catch(e) {{}}
 
   }} catch(e) {{
+    if (e.name === 'AbortError') return;
     removeTyping();
     appendMsg('assistant', '\u274c Network error: ' + e.message, '');
   }} finally {{
     sendBtn.disabled = false;
+    abortController = null;
+    sendBtn.textContent = 'Send \\u2191';
+    sendBtn.onclick = function() {{ sendMessage(); }};
     input.focus();
   }}
 }}
@@ -2804,9 +3413,11 @@ document.getElementById('togBtn').addEventListener('click',togTheme);
 </script>
 </body></html>"""
 
+
 # ── Dashboard handler ─────────────────────────────────────────────────────────
 class DashboardHandler(_SuppressBrokenPipe, BaseHTTPRequestHandler):
-    def log_message(self, fmt, *args): pass
+    def log_message(self, fmt, *args):
+        pass
 
     def do_GET(self):
         if self.path == "/log":
@@ -2826,29 +3437,54 @@ class DashboardHandler(_SuppressBrokenPipe, BaseHTTPRequestHandler):
                 if sid in _sessions:
                     s = _sessions[sid]
                     total_tok = sum(count_tokens(m["content"]) for m in s["history"])
-                    data = {"ok": True, "session": {
-                        "id": sid, "history": s["history"],
-                        "msg_count": s["msg_count"], "created": s["created"],
-                        "total_tokens": total_tok,
-                        "ctx_limit_reached": s.get("ctx_limit_reached", False),
-                    }}
+                    data = {
+                        "ok": True,
+                        "session": {
+                            "id": sid,
+                            "history": s["history"],
+                            "msg_count": s["msg_count"],
+                            "created": s["created"],
+                            "total_tokens": total_tok,
+                            "ctx_limit_reached": s.get("ctx_limit_reached", False),
+                        },
+                    }
                 else:
                     try:
                         db = _get_db()
-                        cur = db.execute("SELECT id, title, created, msg_count, total_tokens, ctx_limit_reached, preview FROM sessions WHERE id=?", (sid,))
+                        cur = db.execute(
+                            "SELECT id, title, created, msg_count, total_tokens, ctx_limit_reached, preview FROM sessions WHERE id=?",
+                            (sid,),
+                        )
                         row = cur.fetchone()
                         if row:
-                            mcur = db.execute("SELECT role, content FROM messages WHERE session_id=? ORDER BY position", (sid,))
-                            history = [{"role": r, "content": c} for r, c in mcur.fetchall()]
+                            mcur = db.execute(
+                                "SELECT role, content FROM messages WHERE session_id=? ORDER BY position",
+                                (sid,),
+                            )
+                            history = [
+                                {"role": r, "content": c} for r, c in mcur.fetchall()
+                            ]
                             global _current_sid
                             _current_sid = sid
-                            _sessions[sid] = {"history": list(history), "msg_count": row[3] or len(history), "created": row[2], "ctx_limit_reached": bool(row[5])}
-                            data = {"ok": True, "session": {
-                                "id": row[0], "title": row[1], "created": row[2],
-                                "msg_count": row[3] or len(history), "total_tokens": row[4],
-                                "ctx_limit_reached": bool(row[5]), "preview": row[6],
-                                "history": history,
-                            }}
+                            _sessions[sid] = {
+                                "history": list(history),
+                                "msg_count": row[3] or len(history),
+                                "created": row[2],
+                                "ctx_limit_reached": bool(row[5]),
+                            }
+                            data = {
+                                "ok": True,
+                                "session": {
+                                    "id": row[0],
+                                    "title": row[1],
+                                    "created": row[2],
+                                    "msg_count": row[3] or len(history),
+                                    "total_tokens": row[4],
+                                    "ctx_limit_reached": bool(row[5]),
+                                    "preview": row[6],
+                                    "history": history,
+                                },
+                            }
                         db.close()
                     except Exception as e:
                         print(f"[contextcut] Recall DB error: {e}")
@@ -2864,14 +3500,23 @@ class DashboardHandler(_SuppressBrokenPipe, BaseHTTPRequestHandler):
                 rows = list(_log)
             lines = ["ts,query,tokens_before,tokens_after,pct,hits"]
             for r in rows:
-                if r.get("type") == "provider_switch": continue
-                hits = "; ".join(f"{h['source'].replace('.md','')} ({h['score']})" for h in r.get("hits", []))
-                q = r['query'].replace('"', '""')
-                lines.append(f'{r["ts"]},"{q}",{r["tokens_before"]},{r["tokens_after"]},{r["pct"]},"{hits}"')
+                if r.get("type") == "provider_switch":
+                    continue
+                hits = "; ".join(
+                    f"{h['source'].replace('.md', '')} ({h['score']})"
+                    for h in r.get("hits", [])
+                )
+                q = r["query"].replace('"', '""')
+                lines.append(
+                    f'{r["ts"]},"{q}",{r["tokens_before"]},{r["tokens_after"]},{r["pct"]},"{hits}"'
+                )
             body = "\n".join(lines).encode("utf-8")
             self.send_response(200)
             self.send_header("Content-Type", "text/csv")
-            self.send_header("Content-Disposition", f'attachment; filename="contextcut-audit-{datetime.now().strftime("%Y%m%d")}.csv"')
+            self.send_header(
+                "Content-Disposition",
+                f'attachment; filename="contextcut-audit-{datetime.now().strftime("%Y%m%d")}.csv"',
+            )
             self.send_header("Content-Length", str(len(body)))
             self.end_headers()
             self.wfile.write(body)
@@ -2880,16 +3525,24 @@ class DashboardHandler(_SuppressBrokenPipe, BaseHTTPRequestHandler):
             try:
                 upstream = get_current_upstream()
                 api_key = get_current_api_key()
-                
+
                 if _provider_name == "Ollama":
                     req = urllib.request.Request(f"{upstream}/api/tags", method="GET")
                     with urllib.request.urlopen(req, timeout=5) as r:
                         data = json.loads(r.read().decode("utf-8"))
                         if _local_only:
-                            models = [{"name": m["name"]} for m in data.get("models", []) if "cloud" not in m["name"].lower()]
+                            models = [
+                                {"name": m["name"]}
+                                for m in data.get("models", [])
+                                if "cloud" not in m["name"].lower()
+                            ]
                         else:
-                            models = [{"name": m["name"]} for m in data.get("models", [])]
-                        body = json.dumps({"models": models}, ensure_ascii=True).encode("utf-8")
+                            models = [
+                                {"name": m["name"]} for m in data.get("models", [])
+                            ]
+                        body = json.dumps({"models": models}, ensure_ascii=True).encode(
+                            "utf-8"
+                        )
                 else:
                     url = f"{upstream}/v1/models"
                     req = urllib.request.Request(url, method="GET")
@@ -2900,27 +3553,43 @@ class DashboardHandler(_SuppressBrokenPipe, BaseHTTPRequestHandler):
                         raw = r.read()
                         if r.headers.get("Content-Encoding") == "gzip":
                             import gzip
+
                             raw = gzip.decompress(raw)
                         data = json.loads(raw.decode("utf-8"))
                         raw_models = data.get("data", [])
                         if _free_only:
+
                             def _is_free(m):
                                 p = m.get("pricing", {})
-                                return p.get("prompt", "0") == "0" and p.get("completion", "0") == "0"
-                            models = [{"name": m.get("id", str(m))} for m in raw_models if _is_free(m)]
+                                return (
+                                    p.get("prompt", "0") == "0"
+                                    and p.get("completion", "0") == "0"
+                                )
+
+                            models = [
+                                {"name": m.get("id", str(m))}
+                                for m in raw_models
+                                if _is_free(m)
+                            ]
                         else:
                             models = [{"name": m.get("id", str(m))} for m in raw_models]
                         models.sort(key=lambda x: x["name"])
-                        body = json.dumps({"models": models}, ensure_ascii=True).encode("utf-8")
-                
+                        body = json.dumps({"models": models}, ensure_ascii=True).encode(
+                            "utf-8"
+                        )
+
                 self.send_response(200)
                 self.send_header("Content-Type", "application/json")
                 self.send_header("Content-Length", str(len(body)))
                 self.end_headers()
                 self.wfile.write(body)
             except Exception as e:
-                safe_msg = str(e)[:100].encode("ascii", errors="replace").decode("ascii")
-                err_body = json.dumps({"models": [], "error": safe_msg}, ensure_ascii=True).encode("utf-8")
+                safe_msg = (
+                    str(e)[:100].encode("ascii", errors="replace").decode("ascii")
+                )
+                err_body = json.dumps(
+                    {"models": [], "error": safe_msg}, ensure_ascii=True
+                ).encode("utf-8")
                 self.send_response(200)
                 self.send_header("Content-Type", "application/json")
                 self.send_header("Content-Length", str(len(err_body)))
@@ -2945,7 +3614,10 @@ class DashboardHandler(_SuppressBrokenPipe, BaseHTTPRequestHandler):
             return
         if self.path == "/api/session/history":
             with _lock:
-                sessions = {sid: {"msg_count": s["msg_count"], "created": s["created"]} for sid, s in _sessions.items()}
+                sessions = {
+                    sid: {"msg_count": s["msg_count"], "created": s["created"]}
+                    for sid, s in _sessions.items()
+                }
             body = json.dumps({"sessions": sessions}).encode()
             self.send_response(200)
             self.send_header("Content-Type", "application/json")
@@ -2953,9 +3625,16 @@ class DashboardHandler(_SuppressBrokenPipe, BaseHTTPRequestHandler):
             self.end_headers()
             self.wfile.write(body)
             return
-        if self.path == "/api/sessions/archive" or self.path.startswith("/api/sessions/archive?"):
+        if self.path == "/api/sessions/archive" or self.path.startswith(
+            "/api/sessions/archive?"
+        ):
             from urllib.parse import urlparse, parse_qs
-            q = (parse_qs(urlparse(self.path).query).get("q") or [""])[0].strip().lower()
+
+            q = (
+                (parse_qs(urlparse(self.path).query).get("q") or [""])[0]
+                .strip()
+                .lower()
+            )
             archive = []
             try:
                 db = _get_db()
@@ -2969,11 +3648,17 @@ class DashboardHandler(_SuppressBrokenPipe, BaseHTTPRequestHandler):
                         "SELECT id, title, created, msg_count, total_tokens, ctx_limit_reached, preview FROM sessions ORDER BY created DESC LIMIT 50"
                     )
                 for row in cur.fetchall():
-                    archive.append({
-                        "id": row[0], "title": row[1] or "", "created": row[2],
-                        "msg_count": row[3], "total_tokens": row[4],
-                        "ctx_limit_reached": bool(row[5]), "preview": row[6] or "",
-                    })
+                    archive.append(
+                        {
+                            "id": row[0],
+                            "title": row[1] or "",
+                            "created": row[2],
+                            "msg_count": row[3],
+                            "total_tokens": row[4],
+                            "ctx_limit_reached": bool(row[5]),
+                            "preview": row[6] or "",
+                        }
+                    )
                 db.close()
             except Exception as e:
                 print(f"[contextcut] Archive query error: {e}")
@@ -2989,12 +3674,12 @@ class DashboardHandler(_SuppressBrokenPipe, BaseHTTPRequestHandler):
             with _lock:
                 _response_cache.clear()
                 _stats = {
-                    "total_requests":  0,
-                    "total_saved":     0,
+                    "total_requests": 0,
+                    "total_saved": 0,
                     "max_tokens_seen": 0,
-                    "last_seen":       None,
-                    "start_time":      datetime.now().isoformat(),
-                    "cache_hits":      0,
+                    "last_seen": None,
+                    "start_time": datetime.now().isoformat(),
+                    "cache_hits": 0,
                 }
                 _log.clear()
                 _sessions.clear()
@@ -3009,7 +3694,9 @@ class DashboardHandler(_SuppressBrokenPipe, BaseHTTPRequestHandler):
         if self.path == "/api/embed/config":
             cfg = {
                 "mode": _EMBED_MODE,
-                "voyage_key": _VK[:8] + "..." if _VK and _EMBED_MODE == "voyage" else "",
+                "voyage_key": _VK[:8] + "..."
+                if _VK and _EMBED_MODE == "voyage"
+                else "",
                 "ollama_model": _LOCAL_EMBED if _EMBED_MODE == "ollama" else "",
                 "ollama_url": UPSTREAM,
                 "kb_dir": str(KB_DIR),
@@ -3023,15 +3710,24 @@ class DashboardHandler(_SuppressBrokenPipe, BaseHTTPRequestHandler):
             return
         if self.path == "/api/knowledge/files":
             import glob as _glob
-            all_files = sorted(f for f in KB_DIR.iterdir() if f.is_file() and f.suffix.lower() in ALLOWED_EXT)
+
+            all_files = sorted(
+                f
+                for f in KB_DIR.iterdir()
+                if f.is_file() and f.suffix.lower() in ALLOWED_EXT
+            )
             files = []
             for f in all_files:
-                files.append({
-                    "name": f.name,
-                    "path": str(f),
-                    "size": f.stat().st_size,
-                    "modified": datetime.fromtimestamp(f.stat().st_mtime).isoformat(),
-                })
+                files.append(
+                    {
+                        "name": f.name,
+                        "path": str(f),
+                        "size": f.stat().st_size,
+                        "modified": datetime.fromtimestamp(
+                            f.stat().st_mtime
+                        ).isoformat(),
+                    }
+                )
             body = json.dumps({"files": files, "kb_dir": str(KB_DIR)}).encode()
             self.send_response(200)
             self.send_header("Content-Type", "application/json")
@@ -3042,6 +3738,7 @@ class DashboardHandler(_SuppressBrokenPipe, BaseHTTPRequestHandler):
             return
         if self.path.startswith("/api/knowledge/read"):
             from urllib.parse import urlparse, parse_qs
+
             qs = parse_qs(urlparse(self.path).query)
             fp = qs.get("path", [None])[0]
             if not fp:
@@ -3053,7 +3750,13 @@ class DashboardHandler(_SuppressBrokenPipe, BaseHTTPRequestHandler):
                 self.wfile.write(body)
                 return
             fpath = Path(fp)
-            if not fpath.suffix.lower() in ALLOWED_EXT or not fpath.resolve().absolute().as_posix().startswith(KB_DIR.resolve().absolute().as_posix()):
+            if (
+                not fpath.suffix.lower() in ALLOWED_EXT
+                or not fpath.resolve()
+                .absolute()
+                .as_posix()
+                .startswith(KB_DIR.resolve().absolute().as_posix())
+            ):
                 body = json.dumps({"error": "Forbidden"}).encode()
                 self.send_response(403)
                 self.send_header("Content-Type", "application/json")
@@ -3071,7 +3774,9 @@ class DashboardHandler(_SuppressBrokenPipe, BaseHTTPRequestHandler):
                 return
             BINARY_EXTS = {".pdf", ".docx", ".xlsx"}
             if fpath.suffix.lower() in BINARY_EXTS:
-                body = json.dumps({"name": fpath.name, "content": None, "binary": True}).encode()
+                body = json.dumps(
+                    {"name": fpath.name, "content": None, "binary": True}
+                ).encode()
             else:
                 content = fpath.read_text(encoding="utf-8", errors="replace")
                 body = json.dumps({"name": fpath.name, "content": content}).encode()
@@ -3093,48 +3798,196 @@ class DashboardHandler(_SuppressBrokenPipe, BaseHTTPRequestHandler):
         if self.path == "/stats":
             body = json.dumps(make_stats_json()).encode()
             self.send_response(200)
-            self.send_header("Content-Type","application/json")
-            self.send_header("Content-Length",str(len(body)))
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Length", str(len(body)))
             self.end_headers()
             self.wfile.write(body)
             return
         if self.path == "/api/demo/seed":
             demo_queries = [
-                ("What are the key terms in this non-compete clause?", 142, 2870, [{"source":"lawyer-smb-CONTRACT.md","score":0.81},{"source":"lawyer-smb-EMPLOYMENT.md","score":0.67}]),
-                ("Summarize the discovery deadline for the Johnson case", 98, 3240, [{"source":"lawyer-lit-DISCOVERY.md","score":0.88},{"source":"lawyer-lit-MOTIONS.md","score":0.62}]),
-                ("What is the QBI deduction limit for 2025?", 72, 1810, [{"source":"cpa-smb-QBI.md","score":0.91},{"source":"cpa-smb-SELFEMPLOYED.md","score":0.73}]),
-                ("Draft a motion to compel based on these facts", 185, 4620, [{"source":"lawyer-lit-MOTIONS.md","score":0.85},{"source":"lawyer-lit-DISCOVERY.md","score":0.71},{"source":"base-DRAFTING.md","score":0.59}]),
-                ("Explain the HIPAA privacy rule for patient records", 108, 2980, [{"source":"doctor-PATIENT.md","score":0.87},{"source":"doctor-PRACTICE.md","score":0.69},{"source":"base-COMPLIANCE.md","score":0.55}]),
-                ("What are the earnest money requirements in Texas?", 64, 1430, [{"source":"realtor-CONTRACT.md","score":0.83},{"source":"realtor-DISCLOSURE.md","score":0.74}]),
-                ("Calculate the capital gains on this property sale", 125, 3950, [{"source":"cpa-personal-INVESTMENT.md","score":0.78},{"source":"cpa-personal-INCOME.md","score":0.65}]),
-                ("What are the zoning restrictions for mixed-use development?", 88, 2110, [{"source":"architect-REGULATORY.md","score":0.86},{"source":"lawyer-re-ZONING.md","score":0.72}]),
-                ("Summarize the engagement letter for the Smith consulting project", 112, 2560, [{"source":"consultant-ENGAGEMENT.md","score":0.89},{"source":"consultant-DELIVERABLE.md","score":0.61}]),
-                ("Draft a closing statement for the Oakwood property transfer", 156, 4780, [{"source":"lawyer-re-CLOSING.md","score":0.82},{"source":"lawyer-re-PURCHASE.md","score":0.68},{"source":"realtor-CONTRACT.md","score":0.56}]),
-                ("What are the encryption requirements for client data under GDPR?", 95, 1690, [{"source":"tech-PRIVACY.md","score":0.84},{"source":"base-COMPLIANCE.md","score":0.70},{"source":"base-ETHICS.md","score":0.52}]),
-                ("Review this trust distribution schedule for compliance", 134, 3170, [{"source":"advisor-ESTATE.md","score":0.90},{"source":"cpa-personal-ESTATE.md","score":0.77}]),
+                (
+                    "What are the key terms in this non-compete clause?",
+                    142,
+                    2870,
+                    [
+                        {"source": "lawyer-smb-CONTRACT.md", "score": 0.81},
+                        {"source": "lawyer-smb-EMPLOYMENT.md", "score": 0.67},
+                    ],
+                ),
+                (
+                    "Summarize the discovery deadline for the Johnson case",
+                    98,
+                    3240,
+                    [
+                        {"source": "lawyer-lit-DISCOVERY.md", "score": 0.88},
+                        {"source": "lawyer-lit-MOTIONS.md", "score": 0.62},
+                    ],
+                ),
+                (
+                    "What is the QBI deduction limit for 2025?",
+                    72,
+                    1810,
+                    [
+                        {"source": "cpa-smb-QBI.md", "score": 0.91},
+                        {"source": "cpa-smb-SELFEMPLOYED.md", "score": 0.73},
+                    ],
+                ),
+                (
+                    "Draft a motion to compel based on these facts",
+                    185,
+                    4620,
+                    [
+                        {"source": "lawyer-lit-MOTIONS.md", "score": 0.85},
+                        {"source": "lawyer-lit-DISCOVERY.md", "score": 0.71},
+                        {"source": "base-DRAFTING.md", "score": 0.59},
+                    ],
+                ),
+                (
+                    "Explain the HIPAA privacy rule for patient records",
+                    108,
+                    2980,
+                    [
+                        {"source": "doctor-PATIENT.md", "score": 0.87},
+                        {"source": "doctor-PRACTICE.md", "score": 0.69},
+                        {"source": "base-COMPLIANCE.md", "score": 0.55},
+                    ],
+                ),
+                (
+                    "What are the earnest money requirements in Texas?",
+                    64,
+                    1430,
+                    [
+                        {"source": "realtor-CONTRACT.md", "score": 0.83},
+                        {"source": "realtor-DISCLOSURE.md", "score": 0.74},
+                    ],
+                ),
+                (
+                    "Calculate the capital gains on this property sale",
+                    125,
+                    3950,
+                    [
+                        {"source": "cpa-personal-INVESTMENT.md", "score": 0.78},
+                        {"source": "cpa-personal-INCOME.md", "score": 0.65},
+                    ],
+                ),
+                (
+                    "What are the zoning restrictions for mixed-use development?",
+                    88,
+                    2110,
+                    [
+                        {"source": "architect-REGULATORY.md", "score": 0.86},
+                        {"source": "lawyer-re-ZONING.md", "score": 0.72},
+                    ],
+                ),
+                (
+                    "Summarize the engagement letter for the Smith consulting project",
+                    112,
+                    2560,
+                    [
+                        {"source": "consultant-ENGAGEMENT.md", "score": 0.89},
+                        {"source": "consultant-DELIVERABLE.md", "score": 0.61},
+                    ],
+                ),
+                (
+                    "Draft a closing statement for the Oakwood property transfer",
+                    156,
+                    4780,
+                    [
+                        {"source": "lawyer-re-CLOSING.md", "score": 0.82},
+                        {"source": "lawyer-re-PURCHASE.md", "score": 0.68},
+                        {"source": "realtor-CONTRACT.md", "score": 0.56},
+                    ],
+                ),
+                (
+                    "What are the encryption requirements for client data under GDPR?",
+                    95,
+                    1690,
+                    [
+                        {"source": "tech-PRIVACY.md", "score": 0.84},
+                        {"source": "base-COMPLIANCE.md", "score": 0.70},
+                        {"source": "base-ETHICS.md", "score": 0.52},
+                    ],
+                ),
+                (
+                    "Review this trust distribution schedule for compliance",
+                    134,
+                    3170,
+                    [
+                        {"source": "advisor-ESTATE.md", "score": 0.90},
+                        {"source": "cpa-personal-ESTATE.md", "score": 0.77},
+                    ],
+                ),
             ]
             now = time.time()
             with _lock:
                 _log.clear()
                 total_before = total_after = 0
                 for i, (q, b, a, hits) in enumerate(demo_queries):
-                    ts = datetime.fromtimestamp(now - (len(demo_queries) - i) * 120).strftime("%H:%M:%S")
+                    ts = datetime.fromtimestamp(
+                        now - (len(demo_queries) - i) * 120
+                    ).strftime("%H:%M:%S")
                     pct = round(a / 32768 * 100, 1)
-                    _log.appendleft({"ts": ts, "query": q, "tokens_before": b, "tokens_after": a, "ctx_limit": 32768, "pct": pct, "hits": hits})
+                    _log.appendleft(
+                        {
+                            "ts": ts,
+                            "query": q,
+                            "tokens_before": b,
+                            "tokens_after": a,
+                            "ctx_limit": 32768,
+                            "pct": pct,
+                            "hits": hits,
+                        }
+                    )
                     total_before += b
                     total_after += a
                 _stats = {
-                    "total_requests":  len(demo_queries),
-                    "total_saved":     max(0, total_before - total_after),
+                    "total_requests": len(demo_queries),
+                    "total_saved": max(0, total_before - total_after),
                     "max_tokens_seen": max(e[2] for e in demo_queries),
-                    "last_seen":       datetime.fromtimestamp(now).strftime("%H:%M:%S"),
-                    "start_time":      datetime.fromtimestamp(now - len(demo_queries) * 120).isoformat(),
-                    "cache_hits":      3,
+                    "last_seen": datetime.fromtimestamp(now).strftime("%H:%M:%S"),
+                    "start_time": datetime.fromtimestamp(
+                        now - len(demo_queries) * 120
+                    ).isoformat(),
+                    "cache_hits": 3,
                 }
             body = json.dumps({"ok": True, "count": len(demo_queries)}).encode()
             self.send_response(200)
-            self.send_header("Content-Type","application/json")
-            self.send_header("Content-Length",str(len(body)))
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+            return
+        if self.path == "/api/agent/tools":
+            from agent_handler import TOOL_DESCRIPTIONS, ALL_TOOLS
+
+            tools_list = []
+            for t in ALL_TOOLS:
+                tools_list.append(
+                    {
+                        "name": t.name,
+                        "description": t.description,
+                        "summary": TOOL_DESCRIPTIONS.get(t.name, ""),
+                    }
+                )
+            body = json.dumps({"tools": tools_list}).encode()
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+            return
+        if self.path == "/api/ollama-ps":
+            upstream = get_current_upstream()
+            req = urllib.request.Request(f"{upstream}/api/ps", method="GET")
+            try:
+                with urllib.request.urlopen(req, timeout=5) as r:
+                    raw = json.loads(r.read().decode("utf-8"))
+                body = json.dumps(raw, indent=2).encode("utf-8")
+            except Exception as e:
+                body = json.dumps({"error": str(e)[:200]}).encode("utf-8")
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Length", str(len(body)))
             self.end_headers()
             self.wfile.write(body)
             return
@@ -3149,20 +4002,27 @@ class DashboardHandler(_SuppressBrokenPipe, BaseHTTPRequestHandler):
         else:
             page = make_dashboard().encode()
             self.send_response(200)
-            self.send_header("Content-Type","text/html; charset=utf-8")
-            self.send_header("Content-Length",str(len(page)))
+            self.send_header("Content-Type", "text/html; charset=utf-8")
+            self.send_header("Content-Length", str(len(page)))
             self.end_headers()
             self.wfile.write(page)
 
     def do_POST(self):
-        length   = int(self.headers.get("Content-Length",0))
+        length = int(self.headers.get("Content-Length", 0))
         raw_body = self.rfile.read(length)
 
         # ── Settings endpoints ──
         if self.path == "/api/settings/provider":
             try:
                 body = json.loads(raw_body)
-                global _provider_name, _custom_base_url, _ollama_url, _api_key, _free_only, _local_only, UPSTREAM
+                global \
+                    _provider_name, \
+                    _custom_base_url, \
+                    _ollama_url, \
+                    _api_key, \
+                    _free_only, \
+                    _local_only, \
+                    UPSTREAM
                 _provider_name = body.get("provider", "Ollama")
                 _custom_base_url = body.get("custom_url", "").strip()
                 incoming_key = body.get("api_key", "").strip()
@@ -3183,17 +4043,28 @@ class DashboardHandler(_SuppressBrokenPipe, BaseHTTPRequestHandler):
                 CredentialManager.save("ollama_url", ollama_url)
                 CredentialManager.save("free_only", _free_only)
                 CredentialManager.save("local_only", _local_only)
-                if _api_key: CredentialManager.save("api_key", _api_key)
+                if _api_key:
+                    CredentialManager.save("api_key", _api_key)
 
-                print(f"[contextcut] Provider switched to {_provider_name} | upstream: {UPSTREAM}")
+                print(
+                    f"[contextcut] Provider switched to {_provider_name} | upstream: {UPSTREAM}"
+                )
                 is_cloud = _provider_name != "Ollama" or not _local_only
-                _log.appendleft({
-                    "ts": datetime.now().strftime("%H:%M:%S"),
-                    "query": f"⚠ Provider switched to {'☁ ' + _provider_name if is_cloud else '✓ Ollama (local)'}",
-                    "tokens_before": "—", "tokens_after": "—", "pct": 0, "hits": [],
-                    "type": "provider_switch", "is_cloud": is_cloud
-                })
-                resp = json.dumps({"ok": True, "upstream": UPSTREAM, "has_key": bool(_api_key)}).encode()
+                _log.appendleft(
+                    {
+                        "ts": datetime.now().strftime("%H:%M:%S"),
+                        "query": f"⚠ Provider switched to {'☁ ' + _provider_name if is_cloud else '✓ Ollama (local)'}",
+                        "tokens_before": "—",
+                        "tokens_after": "—",
+                        "pct": 0,
+                        "hits": [],
+                        "type": "provider_switch",
+                        "is_cloud": is_cloud,
+                    }
+                )
+                resp = json.dumps(
+                    {"ok": True, "upstream": UPSTREAM, "has_key": bool(_api_key)}
+                ).encode()
                 self.send_response(200)
                 self.send_header("Content-Type", "application/json")
                 self.send_header("Content-Length", str(len(resp)))
@@ -3201,13 +4072,15 @@ class DashboardHandler(_SuppressBrokenPipe, BaseHTTPRequestHandler):
                 self.wfile.write(resp)
                 return
             except Exception as e:
-                err = json.dumps({"error": str(e).encode("ascii", errors="replace").decode("ascii")}).encode()
+                err = json.dumps(
+                    {"error": str(e).encode("ascii", errors="replace").decode("ascii")}
+                ).encode()
                 self.send_response(400)
                 self.send_header("Content-Type", "application/json")
                 self.send_header("Content-Length", str(len(err)))
                 self.end_headers()
                 self.wfile.write(err)
-                return
+            return
 
         if self.path == "/api/settings/models":
             try:
@@ -3218,52 +4091,79 @@ class DashboardHandler(_SuppressBrokenPipe, BaseHTTPRequestHandler):
                 ollama_url = body.get("ollama_url", "").strip()
                 free_only = body.get("free_only", False)
                 local_only = body.get("local_only", False)
-                
+
                 # If frontend sent masked value, use server-side stored key
                 if not api_key or api_key == "••••••••••••••••":
                     api_key = _api_key
-                
+
                 if provider == "Ollama":
                     # Ollama uses /api/tags, NOT /v1/models
-                    base = ollama_url if ollama_url else (_ollama_url or UPSTREAM or "http://localhost:11434")
+                    base = (
+                        ollama_url
+                        if ollama_url
+                        else (_ollama_url or UPSTREAM or "http://localhost:11434")
+                    )
                     req = urllib.request.Request(f"{base}/api/tags", method="GET")
                     with urllib.request.urlopen(req, timeout=5) as r:
                         data = json.loads(r.read().decode("utf-8"))
-                        models = sorted([m["name"] for m in data.get("models", []) if not (local_only and "cloud" in m["name"].lower())])
+                        models = sorted(
+                            [
+                                m["name"]
+                                for m in data.get("models", [])
+                                if not (local_only and "cloud" in m["name"].lower())
+                            ]
+                        )
                 elif provider == "Custom" and custom_url:
                     base = custom_url.rstrip("/")
                     req = urllib.request.Request(f"{base}/v1/models", method="GET")
-                    if api_key: req.add_header("Authorization", f"Bearer {api_key}")
+                    if api_key:
+                        req.add_header("Authorization", f"Bearer {api_key}")
                     req.add_header("Accept", "application/json")
                     with urllib.request.urlopen(req, timeout=15) as r:
                         raw = r.read()
                         if r.headers.get("Content-Encoding") == "gzip":
                             import gzip
+
                             raw = gzip.decompress(raw)
                         data = json.loads(raw.decode("utf-8"))
-                        models = sorted([m.get("id", str(m)) for m in data.get("data", [])])
+                        models = sorted(
+                            [m.get("id", str(m)) for m in data.get("data", [])]
+                        )
                 else:
                     base = PROVIDERS.get(provider, {}).get("url", "")
                     url = f"{base}/v1/models"
                     req = urllib.request.Request(url, method="GET")
-                    if api_key: req.add_header("Authorization", f"Bearer {api_key}")
+                    if api_key:
+                        req.add_header("Authorization", f"Bearer {api_key}")
                     req.add_header("Accept", "application/json")
                     with urllib.request.urlopen(req, timeout=15) as r:
                         raw = r.read()
                         if r.headers.get("Content-Encoding") == "gzip":
                             import gzip
+
                             raw = gzip.decompress(raw)
                         data = json.loads(raw.decode("utf-8"))
                         if free_only:
+
                             def is_free(m):
                                 p = m.get("pricing", {})
-                                return p.get("prompt", "0") == "0" and p.get("completion", "0") == "0"
-                            models = sorted([
-                                m.get("id", str(m)) for m in data.get("data", []) if is_free(m)
-                            ])
+                                return (
+                                    p.get("prompt", "0") == "0"
+                                    and p.get("completion", "0") == "0"
+                                )
+
+                            models = sorted(
+                                [
+                                    m.get("id", str(m))
+                                    for m in data.get("data", [])
+                                    if is_free(m)
+                                ]
+                            )
                         else:
-                            models = sorted([m.get("id", str(m)) for m in data.get("data", [])])
-                
+                            models = sorted(
+                                [m.get("id", str(m)) for m in data.get("data", [])]
+                            )
+
                 # Ensure ASCII-safe response
                 resp = json.dumps({"models": models}, ensure_ascii=True).encode("utf-8")
                 self.send_response(200)
@@ -3274,7 +4174,9 @@ class DashboardHandler(_SuppressBrokenPipe, BaseHTTPRequestHandler):
                 return
             except (ConnectionRefusedError, OSError) as e:
                 err_msg = "Connection refused - is the service running?"
-                resp = json.dumps({"models": [], "error": err_msg}, ensure_ascii=True).encode("utf-8")
+                resp = json.dumps(
+                    {"models": [], "error": err_msg}, ensure_ascii=True
+                ).encode("utf-8")
                 self.send_response(200)
                 self.send_header("Content-Type", "application/json; charset=utf-8")
                 self.send_header("Content-Length", str(len(resp)))
@@ -3286,7 +4188,9 @@ class DashboardHandler(_SuppressBrokenPipe, BaseHTTPRequestHandler):
                 err_text = raw_err.decode("utf-8", errors="replace")[:200]
                 err_text = err_text.encode("ascii", errors="replace").decode("ascii")
                 err_msg = "HTTP %d: %s" % (e.code, err_text)
-                resp = json.dumps({"models": [], "error": err_msg}, ensure_ascii=True).encode("utf-8")
+                resp = json.dumps(
+                    {"models": [], "error": err_msg}, ensure_ascii=True
+                ).encode("utf-8")
                 self.send_response(200)
                 self.send_header("Content-Type", "application/json; charset=utf-8")
                 self.send_header("Content-Length", str(len(resp)))
@@ -3295,7 +4199,9 @@ class DashboardHandler(_SuppressBrokenPipe, BaseHTTPRequestHandler):
                 return
             except Exception as e:
                 err_msg = str(e)[:200].encode("ascii", errors="replace").decode("ascii")
-                resp = json.dumps({"models": [], "error": err_msg}, ensure_ascii=True).encode("utf-8")
+                resp = json.dumps(
+                    {"models": [], "error": err_msg}, ensure_ascii=True
+                ).encode("utf-8")
                 self.send_response(200)
                 self.send_header("Content-Type", "application/json; charset=utf-8")
                 self.send_header("Content-Length", str(len(resp)))
@@ -3303,7 +4209,7 @@ class DashboardHandler(_SuppressBrokenPipe, BaseHTTPRequestHandler):
                 self.wfile.write(resp)
                 return
 
-        # ── Settings endpoint: update global MIN_SCORE live ──
+        # ── Settings endpoint: update global MIN_SCORE / TOP_K live ──
         if self.path == "/api/settings":
             try:
                 body = json.loads(raw_body)
@@ -3313,6 +4219,18 @@ class DashboardHandler(_SuppressBrokenPipe, BaseHTTPRequestHandler):
                         MIN_SCORE = float(body["min_score"])
                     print(f"[contextcut] Min score updated live: {MIN_SCORE}")
                     resp = json.dumps({"ok": True, "min_score": MIN_SCORE}).encode()
+                    self.send_response(200)
+                    self.send_header("Content-Type", "application/json")
+                    self.send_header("Content-Length", str(len(resp)))
+                    self.end_headers()
+                    self.wfile.write(resp)
+                    return
+                if "top_k" in body:
+                    global TOP_K
+                    with _lock:
+                        TOP_K = int(body["top_k"])
+                    print(f"[contextcut] Top-K updated live: {TOP_K}")
+                    resp = json.dumps({"ok": True, "top_k": TOP_K}).encode()
                     self.send_response(200)
                     self.send_header("Content-Type", "application/json")
                     self.send_header("Content-Length", str(len(resp)))
@@ -3336,15 +4254,21 @@ class DashboardHandler(_SuppressBrokenPipe, BaseHTTPRequestHandler):
                 proposed_mode = body.get("mode", "voyage")
 
                 if proposed_mode == "voyage" and not _VOYAGE_AVAILABLE:
-                    print("[contextcut] voyageai not installed — attempting auto-install...")
+                    print(
+                        "[contextcut] voyageai not installed — attempting auto-install..."
+                    )
                     import subprocess
+
                     pip_path = str(Path(sys.executable).parent / "pip")
                     result = subprocess.run(
                         [pip_path, "install", "voyageai", "-q"],
-                        capture_output=True, text=True, timeout=120
+                        capture_output=True,
+                        text=True,
+                        timeout=120,
                     )
                     if result.returncode == 0:
                         import importlib
+
                         _voyage_mod = importlib.import_module("voyageai")
                         globals()["_voyage_mod"] = _voyage_mod
                         _VOYAGE_AVAILABLE = True
@@ -3361,8 +4285,10 @@ class DashboardHandler(_SuppressBrokenPipe, BaseHTTPRequestHandler):
                 _LOCAL_EMBED = body.get("ollama_model", "").strip()
 
                 CredentialManager.save("embed_mode", _EMBED_MODE)
-                if _VK: CredentialManager.save("voyage_key", _VK)
-                if _LOCAL_EMBED: CredentialManager.save("embed_model", _LOCAL_EMBED)
+                if _VK:
+                    CredentialManager.save("voyage_key", _VK)
+                if _LOCAL_EMBED:
+                    CredentialManager.save("embed_model", _LOCAL_EMBED)
 
                 # Also update .env so ingest.py picks up the change on restart
                 try:
@@ -3393,16 +4319,24 @@ class DashboardHandler(_SuppressBrokenPipe, BaseHTTPRequestHandler):
                         qclient = QdrantClient(host=QDRANT_HOST, port=QDRANT_PORT)
                         qclient.delete_collection(COLLECTION)
                         import time
+
                         time.sleep(2)
                         qclient.create_collection(
                             collection_name=COLLECTION,
-                            vectors_config=VectorParams(size=expected_dim, distance=Distance.COSINE),
+                            vectors_config=VectorParams(
+                                size=expected_dim, distance=Distance.COSINE
+                            ),
                         )
-                        print(f"[contextcut] Collection recreated with dim={expected_dim}")
+                        print(
+                            f"[contextcut] Collection recreated with dim={expected_dim}"
+                        )
                         # Auto trigger re-ingest
-                        print(f"[contextcut] Triggering re-ingest with new embedding config...")
+                        print(
+                            f"[contextcut] Triggering re-ingest with new embedding config..."
+                        )
                         try:
                             import subprocess
+
                             ingest_path = Path(__file__).parent / "ingest.py"
                             if ingest_path.exists():
                                 env = os.environ.copy()
@@ -3417,15 +4351,20 @@ class DashboardHandler(_SuppressBrokenPipe, BaseHTTPRequestHandler):
                                 env["CONTEXTCUT_COLLECTION"] = COLLECTION
                                 result = subprocess.run(
                                     [sys.executable, str(ingest_path)],
-                                    env=env, capture_output=True, text=True, timeout=300
+                                    env=env,
+                                    capture_output=True,
+                                    text=True,
+                                    timeout=300,
                                 )
-                                for line in result.stdout.strip().split('\n'):
+                                for line in result.stdout.strip().split("\n"):
                                     print(f"  [re-ingest] {line}")
                                 if result.stderr.strip():
-                                    for line in result.stderr.strip().split('\n'):
+                                    for line in result.stderr.strip().split("\n"):
                                         print(f"  [re-ingest:err] {line}")
                             else:
-                                print(f"[contextcut] ingest.py not found at {ingest_path}")
+                                print(
+                                    f"[contextcut] ingest.py not found at {ingest_path}"
+                                )
                         except subprocess.TimeoutExpired:
                             print(f"[contextcut] Re-ingest timed out after 5 minutes")
                         except Exception as e:
@@ -3433,7 +4372,9 @@ class DashboardHandler(_SuppressBrokenPipe, BaseHTTPRequestHandler):
                     except Exception as e:
                         print(f"[contextcut] Dimension check warning: {e}")
 
-                print(f"[contextcut] Embed mode: {_EMBED_MODE} | model: {_LOCAL_EMBED or 'voyage-3'}")
+                print(
+                    f"[contextcut] Embed mode: {_EMBED_MODE} | model: {_LOCAL_EMBED or 'voyage-3'}"
+                )
                 resp = json.dumps({"ok": True, "mode": _EMBED_MODE}).encode()
                 self.send_response(200)
                 self.send_header("Content-Type", "application/json")
@@ -3442,7 +4383,9 @@ class DashboardHandler(_SuppressBrokenPipe, BaseHTTPRequestHandler):
                 self.wfile.write(resp)
                 return
             except Exception as e:
-                err = json.dumps({"error": str(e).encode("ascii", errors="replace").decode("ascii")}).encode()
+                err = json.dumps(
+                    {"error": str(e).encode("ascii", errors="replace").decode("ascii")}
+                ).encode()
                 self.send_response(400)
                 self.send_header("Content-Type", "application/json")
                 self.send_header("Content-Length", str(len(err)))
@@ -3454,6 +4397,7 @@ class DashboardHandler(_SuppressBrokenPipe, BaseHTTPRequestHandler):
         if self.path == "/api/embed/reingest":
             try:
                 import subprocess
+
                 ingest_path = Path(__file__).parent / "ingest.py"
                 if not ingest_path.exists():
                     raise FileNotFoundError(f"ingest.py not found at {ingest_path}")
@@ -3472,10 +4416,17 @@ class DashboardHandler(_SuppressBrokenPipe, BaseHTTPRequestHandler):
 
                 result = subprocess.run(
                     [sys.executable, str(ingest_path)],
-                    env=env, capture_output=True, text=True, timeout=300
+                    env=env,
+                    capture_output=True,
+                    text=True,
+                    timeout=300,
                 )
-                lines = result.stdout.strip().split('\n') if result.stdout.strip() else []
-                resp = json.dumps({"ok": True, "output": lines[-10:] if lines else ["No output"]}).encode()
+                lines = (
+                    result.stdout.strip().split("\n") if result.stdout.strip() else []
+                )
+                resp = json.dumps(
+                    {"ok": True, "output": lines[-10:] if lines else ["No output"]}
+                ).encode()
                 self.send_response(200)
                 self.send_header("Content-Type", "application/json")
                 self.send_header("Content-Length", str(len(resp)))
@@ -3491,7 +4442,9 @@ class DashboardHandler(_SuppressBrokenPipe, BaseHTTPRequestHandler):
                 self.wfile.write(err)
                 return
             except Exception as e:
-                err = json.dumps({"error": str(e).encode("ascii", errors="replace").decode("ascii")}).encode()
+                err = json.dumps(
+                    {"error": str(e).encode("ascii", errors="replace").decode("ascii")}
+                ).encode()
                 self.send_response(500)
                 self.send_header("Content-Type", "application/json")
                 self.send_header("Content-Length", str(len(err)))
@@ -3506,7 +4459,13 @@ class DashboardHandler(_SuppressBrokenPipe, BaseHTTPRequestHandler):
                 fp = body.get("path", "")
                 content = body.get("content", "")
                 fpath = Path(fp)
-                if not fpath.suffix.lower() in ALLOWED_EXT or not fpath.resolve().absolute().as_posix().startswith(KB_DIR.resolve().absolute().as_posix()):
+                if (
+                    not fpath.suffix.lower() in ALLOWED_EXT
+                    or not fpath.resolve()
+                    .absolute()
+                    .as_posix()
+                    .startswith(KB_DIR.resolve().absolute().as_posix())
+                ):
                     resp = json.dumps({"error": "Forbidden"}).encode()
                     self.send_response(403)
                 elif fpath.suffix.lower() in (".pdf", ".docx", ".xlsx"):
@@ -3549,9 +4508,12 @@ class DashboardHandler(_SuppressBrokenPipe, BaseHTTPRequestHandler):
                     content = body.get("content", "")
                     if content_b64:
                         import base64
+
                         raw_bytes = base64.b64decode(content_b64)
                         if len(raw_bytes) > 10 * 1024 * 1024:
-                            resp = json.dumps({"error": "Too large (max 10MB)"}).encode()
+                            resp = json.dumps(
+                                {"error": "Too large (max 10MB)"}
+                            ).encode()
                             self.send_response(400)
                         else:
                             fpath.write_bytes(raw_bytes)
@@ -3560,7 +4522,9 @@ class DashboardHandler(_SuppressBrokenPipe, BaseHTTPRequestHandler):
                             self.send_response(200)
                     else:
                         if len(content) > 10 * 1024 * 1024:
-                            resp = json.dumps({"error": "Too large (max 10MB)"}).encode()
+                            resp = json.dumps(
+                                {"error": "Too large (max 10MB)"}
+                            ).encode()
                             self.send_response(400)
                         else:
                             fpath.write_text(content, encoding="utf-8")
@@ -3587,7 +4551,13 @@ class DashboardHandler(_SuppressBrokenPipe, BaseHTTPRequestHandler):
                 body = json.loads(raw_body)
                 fp = body.get("path", "")
                 fpath = Path(fp)
-                if not fpath.suffix.lower() in ALLOWED_EXT or not fpath.resolve().absolute().as_posix().startswith(KB_DIR.resolve().absolute().as_posix()):
+                if (
+                    not fpath.suffix.lower() in ALLOWED_EXT
+                    or not fpath.resolve()
+                    .absolute()
+                    .as_posix()
+                    .startswith(KB_DIR.resolve().absolute().as_posix())
+                ):
                     resp = json.dumps({"error": "Forbidden"}).encode()
                     self.send_response(403)
                 elif not fpath.exists():
@@ -3613,30 +4583,290 @@ class DashboardHandler(_SuppressBrokenPipe, BaseHTTPRequestHandler):
                 self.wfile.write(err)
                 return
 
+        # ── Agent endpoints ──
+        if self.path == "/api/agent/shell-mode":
+            try:
+                body = json.loads(raw_body)
+                sid = body.get("session_id", _current_sid)
+                mode = body.get("mode", "ask")
+                if mode not in ("ask", "always", "reject"):
+                    raise ValueError("mode must be ask/always/reject")
+                if sid and sid in _sessions:
+                    _sessions[sid]["shell_confirm_mode"] = mode
+                resp = json.dumps({"ok": True, "mode": mode}).encode()
+                self.send_response(200)
+                self.send_header("Content-Type", "application/json")
+                self.send_header("Content-Length", str(len(resp)))
+                self.end_headers()
+                self.wfile.write(resp)
+            except Exception as e:
+                err = json.dumps({"error": str(e)}).encode()
+                self.send_response(400)
+                self.send_header("Content-Type", "application/json")
+                self.send_header("Content-Length", str(len(err)))
+                self.end_headers()
+                self.wfile.write(err)
+            return
+
+        if self.path == "/api/agent/confidence-scan":
+            try:
+                body = json.loads(raw_body)
+                text = body.get("text", "")
+                model_name = body.get("model", DEFAULT_MODEL or "qwen3:14b-q8_0")
+                if not text.strip():
+                    resp = json.dumps({"error": "text is required"}).encode()
+                    self.send_response(400)
+                    self.send_header("Content-Type", "application/json")
+                    self.send_header("Content-Length", str(len(resp)))
+                    self.end_headers()
+                    self.wfile.write(resp)
+                    return
+                from agent_handler import _confidence_scan
+
+                result = _confidence_scan(
+                    text,
+                    model_name,
+                    upstream=get_current_upstream(),
+                    api_key=get_current_api_key(),
+                )
+                body_resp = json.dumps({"passages": result}).encode()
+                self.send_response(200)
+                self.send_header("Content-Type", "application/json")
+                self.send_header("Content-Length", str(len(body_resp)))
+                self.end_headers()
+                self.wfile.write(body_resp)
+            except Exception as e:
+                err = json.dumps({"error": str(e)}).encode()
+                self.send_response(500)
+                self.send_header("Content-Type", "application/json")
+                self.send_header("Content-Length", str(len(err)))
+                self.end_headers()
+                self.wfile.write(err)
+            return
+
+        if self.path == "/api/agent":
+            try:
+                body = json.loads(raw_body)
+                message = body.get("message", "")
+                sid = body.get("session_id", _current_sid)
+                model_name = body.get("model", DEFAULT_MODEL)
+                is_stream = body.get("stream", True)
+
+                if not sid or sid not in _sessions:
+                    sid = new_session()
+                if not message.strip():
+                    resp = json.dumps({"error": "message is required"}).encode()
+                    self.send_response(400)
+                    self.send_header("Content-Type", "application/json")
+                    self.send_header("Content-Length", str(len(resp)))
+                    self.end_headers()
+                    self.wfile.write(resp)
+                    return
+
+                from agent_handler import (
+                    build_agent,
+                    build_messages_from_history,
+                    _check_tool_usage,
+                )
+                from langchain_core.messages import HumanMessage
+
+                add_to_history(sid, "user", message)
+                session = _sessions[sid]
+                chat_history = build_messages_from_history(session["history"][:-1])
+                try:
+                    agent = build_agent(
+                        model_name,
+                        upstream=get_current_upstream(),
+                        api_key=get_current_api_key(),
+                    )
+                except Exception as e:
+                    err_str = str(e)
+                    if "does not support tools" in err_str:
+                        msg = (
+                            f"Model '{model_name}' does not support tool calling. "
+                            "Agent mode requires a model with tool-use capability "
+                            "(e.g. qwen3, llama3, deepseek-v3). "
+                            "Switch to a compatible model or disable Agent ON."
+                        )
+                    else:
+                        msg = f"Failed to initialize agent: {err_str}"
+                    resp = json.dumps({"error": msg}).encode()
+                    self.send_response(400)
+                    self.send_header("Content-Type", "application/json")
+                    self.send_header("Content-Length", str(len(resp)))
+                    self.end_headers()
+                    self.wfile.write(resp)
+                    return
+                input_messages = chat_history + [HumanMessage(content=message)]
+                shell_mode = session.get("shell_confirm_mode", "ask")
+
+                import asyncio
+
+                async def _run_agent() -> str:
+                    result = await agent.ainvoke({"messages": input_messages})
+                    msgs = result.get("messages", [])
+                    return msgs[-1].content if msgs else ""
+
+                async def _run_agent_stream():
+                    sse_events = []
+                    called_tools = set()
+                    full_output = ""
+
+                    async def _invoke_and_stream(msgs, is_retry=False):
+                        nonlocal full_output
+                        local_tools = set()
+                        try:
+                            async for event in agent.astream_events(
+                                {"messages": msgs},
+                                version="v2",
+                            ):
+                                kind = event.get("event", "")
+                                if kind == "on_chat_model_stream":
+                                    chunk = event.get("data", {}).get("chunk", None)
+                                    if (
+                                        chunk
+                                        and hasattr(chunk, "content")
+                                        and chunk.content
+                                    ):
+                                        text = chunk.content
+                                        if isinstance(text, str) and text:
+                                            sse_events.append(
+                                                f"event: token\ndata: {json.dumps({'token': text})}\n\n"
+                                            )
+                                elif kind == "on_tool_start":
+                                    tool_name = event.get("name", "unknown")
+                                    local_tools.add(tool_name)
+                                    tool_input = event.get("data", {}).get("input", {})
+                                    if isinstance(tool_input, dict):
+                                        cmd = tool_input.get(
+                                            "command",
+                                            tool_input.get(
+                                                "path", json.dumps(tool_input)
+                                            ),
+                                        )
+                                    else:
+                                        cmd = str(tool_input)[:200]
+                                    sse_events.append(
+                                        f"event: tool_call\ndata: {json.dumps({'name': tool_name, 'input': cmd, 'shell_mode': shell_mode})}\n\n"
+                                    )
+                                    if (
+                                        tool_name == "shell_exec"
+                                        and shell_mode == "reject"
+                                    ):
+                                        sse_events.append(
+                                            f"event: tool_result\ndata: {json.dumps({'name': tool_name, 'result': 'Rejected by policy.'})}\n\n"
+                                        )
+                                elif kind == "on_tool_end":
+                                    tool_name = event.get("name", "unknown")
+                                    output_data = event.get("data", {}).get(
+                                        "output", ""
+                                    )
+                                    output_str = (
+                                        str(output_data)[:2000] if output_data else ""
+                                    )
+                                    sse_events.append(
+                                        f"event: tool_result\ndata: {json.dumps({'name': tool_name, 'result': output_str})}\n\n"
+                                    )
+                            result = await agent.ainvoke({"messages": msgs})
+                            final_msgs = result.get("messages", [])
+                            full_output = final_msgs[-1].content if final_msgs else ""
+                        except Exception as e:
+                            sse_events.append(
+                                f"event: error\ndata: {json.dumps({'error': str(e)})}\n\n"
+                            )
+                        return local_tools
+
+                    # First pass: stream + track tools
+                    called_tools = await _invoke_and_stream(input_messages)
+
+                    # Layer 1: Check tool usage and re-run if needed
+                    blocked, reason = _check_tool_usage(message, called_tools)
+                    max_retries = 2
+                    retry_count = 0
+                    while blocked and retry_count < max_retries:
+                        sse_events.append(
+                            f"event: enforcer\ndata: {json.dumps({'blocked': True, 'reason': reason})}\n\n"
+                        )
+                        retry_msgs = input_messages + [
+                            HumanMessage(content=f"IMPORTANT: {reason}")
+                        ]
+                        retry_tools = await _invoke_and_stream(retry_msgs)
+                        blocked, reason = _check_tool_usage(message, retry_tools)
+                        retry_count += 1
+
+                    sse_events.append(
+                        f"event: done\ndata: {json.dumps({'response': full_output})}\n\n"
+                    )
+                    return sse_events, full_output
+
+                if not is_stream:
+                    output = asyncio.run(_run_agent())
+                    add_to_history(sid, "assistant", output)
+                    resp = json.dumps({"response": output}).encode()
+                    self.send_response(200)
+                    self.send_header("Content-Type", "application/json")
+                    self.send_header("Content-Length", str(len(resp)))
+                    self.end_headers()
+                    self.wfile.write(resp)
+                else:
+                    self.send_response(200)
+                    self.send_header("Content-Type", "text/event-stream")
+                    self.send_header("Cache-Control", "no-cache")
+                    self.send_header("Connection", "keep-alive")
+                    self.end_headers()
+
+                    sse_events, full_output = asyncio.run(_run_agent_stream())
+                    for sse in sse_events:
+                        try:
+                            self.wfile.write(sse.encode())
+                            self.wfile.flush()
+                        except Exception:
+                            break
+
+                    add_to_history(sid, "assistant", full_output)
+                return
+            except Exception as e:
+                import traceback
+
+                traceback.print_exc()
+                err = json.dumps({"error": str(e)}).encode()
+                self.send_response(500)
+                self.send_header("Content-Type", "application/json")
+                self.send_header("Content-Length", str(len(err)))
+                self.end_headers()
+                self.wfile.write(err)
+                return
+
         try:
             parsed_body = json.loads(raw_body)
         except Exception:
             parsed_body = None
-        safe_prefixes = ("/v1/chat/completions", "/api/chat", "/api/generate", "/v1/completions")
+        safe_prefixes = (
+            "/v1/chat/completions",
+            "/api/chat",
+            "/api/generate",
+            "/v1/completions",
+        )
         if not self.path.startswith(safe_prefixes):
             self.send_response(404)
             self.end_headers()
             self.wfile.write(b'{"error":"Not found"}')
             return
-        is_streaming = isinstance(parsed_body, dict) and parsed_body.get("stream", False)
-        req = urllib.request.Request(
-            f"http://127.0.0.1:{LISTEN_PORT}{self.path}",
-            data=raw_body, method="POST"
+        is_streaming = isinstance(parsed_body, dict) and parsed_body.get(
+            "stream", False
         )
-        for k,v in self.headers.items():
+        req = urllib.request.Request(
+            f"http://127.0.0.1:{LISTEN_PORT}{self.path}", data=raw_body, method="POST"
+        )
+        for k, v in self.headers.items():
             if k.lower() not in ("host",):
-                req.add_header(k,v)
+                req.add_header(k, v)
         try:
             with urllib.request.urlopen(req, timeout=120) as resp:
                 self.send_response(resp.status)
-                for k,v in resp.getheaders():
+                for k, v in resp.getheaders():
                     if k.lower() not in ("transfer-encoding", "content-length"):
-                        self.send_header(k,v)
+                        self.send_header(k, v)
                 if is_streaming:
                     self.send_header("Transfer-Encoding", "chunked")
                     self.send_header("Cache-Control", "no-cache")
@@ -3659,8 +4889,11 @@ class DashboardHandler(_SuppressBrokenPipe, BaseHTTPRequestHandler):
             self.end_headers()
             self.wfile.write(str(e).encode())
 
+
 # ── Main ──────────────────────────────────────────────────────────────────────
 if __name__ == "__main__":
+    signal.signal(signal.SIGINT, _handle_signal)
+    signal.signal(signal.SIGTERM, _handle_signal)
     load_saved_credentials()
 
     # Sync .env first so ingest.py reads correct settings
@@ -3689,15 +4922,21 @@ if __name__ == "__main__":
     if LICENSE_KEY:
         print("[contextcut] Validating license key...")
         if not validate_license():
-            msg = _license_state['message']
+            msg = _license_state["message"]
             print(f"ERROR: {msg}")
             if "limit reached" in msg.lower() or "seats" in msg.lower():
                 try:
                     if sys.stdin.isatty():
-                        answer = input("\n  Release all license seats and retry? [y/N]: ").strip().lower()
+                        answer = (
+                            input("\n  Release all license seats and retry? [y/N]: ")
+                            .strip()
+                            .lower()
+                        )
                         should_release = answer in ("y", "yes")
                     else:
-                        print("[contextcut] Non-interactive mode — auto-releasing stale seats...")
+                        print(
+                            "[contextcut] Non-interactive mode — auto-releasing stale seats..."
+                        )
                         should_release = True
                     if should_release:
                         payload = json.dumps({"license_key": LICENSE_KEY}).encode()
@@ -3713,9 +4952,13 @@ if __name__ == "__main__":
                         print("[contextcut] Retrying license validation...")
                         time.sleep(1)
                         if validate_license():
-                            print(f"[contextcut] License: {_license_state.get('license_type','?')} | {_license_state['message']}")
+                            print(
+                                f"[contextcut] License: {_license_state.get('license_type', '?')} | {_license_state['message']}"
+                            )
                             threading.Thread(target=heartbeat_loop, daemon=True).start()
-                            print(f"[contextcut] Heartbeat: every {HEARTBEAT_INTERVAL}s | grace: {GRACE_PERIOD}s")
+                            print(
+                                f"[contextcut] Heartbeat: every {HEARTBEAT_INTERVAL}s | grace: {GRACE_PERIOD}s"
+                            )
                         else:
                             print(f"ERROR: {_license_state['message']}")
                             raise SystemExit(1)
@@ -3728,9 +4971,13 @@ if __name__ == "__main__":
             else:
                 raise SystemExit(1)
         else:
-            print(f"[contextcut] License: {_license_state.get('license_type','?')} | {_license_state['message']}")
+            print(
+                f"[contextcut] License: {_license_state.get('license_type', '?')} | {_license_state['message']}"
+            )
             threading.Thread(target=heartbeat_loop, daemon=True).start()
-            print(f"[contextcut] Heartbeat: every {HEARTBEAT_INTERVAL}s | grace: {GRACE_PERIOD}s")
+            print(
+                f"[contextcut] Heartbeat: every {HEARTBEAT_INTERVAL}s | grace: {GRACE_PERIOD}s"
+            )
     else:
         print("[contextcut] WARNING: No license key set. Set CONTEXTCUT_LICENSE_KEY.")
 
@@ -3738,16 +4985,20 @@ if __name__ == "__main__":
     _READY_FILE = Path(__file__).parent / ".proxy_ready"
     _READY_FILE.write_text("ready\n")
 
-    dash = ReusableHTTPServer(("127.0.0.1", DASHBOARD_PORT), DashboardHandler)
+    dash = ReusableHTTPServer(("0.0.0.0", DASHBOARD_PORT), DashboardHandler)
     threading.Thread(target=dash.serve_forever, daemon=True).start()
 
-    print(f"[contextcut] Dashboard  → http://localhost:{DASHBOARD_PORT}  (Chat + Monitor tabs)")
+    print(
+        f"[contextcut] Dashboard  → http://localhost:{DASHBOARD_PORT}  (Chat + Monitor tabs)"
+    )
     print(f"[contextcut] Proxy      → http://127.0.0.1:{LISTEN_PORT} → {UPSTREAM}")
     print(f"[contextcut] Qdrant     → {QDRANT_HOST}:{QDRANT_PORT} / {COLLECTION}")
     print(f"[contextcut] Min score  → {MIN_SCORE}  Top-K → {TOP_K}  CTX → {CTX_LIMIT}")
     print(f"[contextcut] Tokens     → {TOKEN_METHOD}")
-    print(f"[contextcut] Params     → temp={DEFAULT_TEMP} top_p={DEFAULT_TOP_P} max_tokens={DEFAULT_MAX_TK}")
+    print(
+        f"[contextcut] Params     → temp={DEFAULT_TEMP} top_p={DEFAULT_TOP_P} max_tokens={DEFAULT_MAX_TK}"
+    )
     if DEFAULT_MODEL:
         print(f"[contextcut] Model      → {DEFAULT_MODEL}")
 
-    ReusableHTTPServer(("127.0.0.1", LISTEN_PORT), ProxyHandler).serve_forever()
+    ReusableHTTPServer(("0.0.0.0", LISTEN_PORT), ProxyHandler).serve_forever()
