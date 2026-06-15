@@ -1066,8 +1066,11 @@ def qdrant_context(query: str) -> tuple[str, list[dict]]:
 # ── Context injection ─────────────────────────────────────────────────────────
 SYSTEM_BASE = (
     "You are a helpful AI assistant. "
-    "If asked about a case, statute, regulation, or other authority you are "
-    "not certain exists, state that you cannot confirm it rather than fabricating details."
+    "Use the provided context to answer the user's question. "
+    "Cite the source filename in brackets (e.g., [filename.md]) for each "
+    "claim you make from the context. "
+    "If the context does not contain relevant information, say so clearly "
+    "rather than fabricating details."
 )
 
 
