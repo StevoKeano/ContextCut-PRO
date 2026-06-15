@@ -339,6 +339,7 @@ curl -sf "$REPO/ingest.py"              -o "$INSTALL_DIR/ingest.py"
 curl -sf "$REPO/datasette.yml"          -o "$INSTALL_DIR/datasette.yml"
 curl -sf "$REPO/run_datasette.sh"       -o "$INSTALL_DIR/run_datasette.sh"
 curl -sf "$REPO/uninstall.sh"           -o "$INSTALL_DIR/uninstall.sh"
+curl -sf "$REPO/agent_handler.py"       -o "$INSTALL_DIR/agent_handler.py"
 chmod +x "$INSTALL_DIR/uninstall.sh"
 chmod +x "$INSTALL_DIR/run_datasette.sh"
 
