@@ -2731,6 +2731,8 @@ async function sendMessage() {{
         }}
         appendMsg('assistant', msg, '');
         sendBtn.disabled = false;
+        sendBtn.textContent = 'Send \\u2191';
+        sendBtn.onclick = function() {{ sendMessage(); }};
         return;
       }}
       const reader  = resp.body.getReader();
@@ -2812,9 +2814,20 @@ async function sendMessage() {{
         }}
       }}
     }} catch(e) {{
-      if (e.name === 'AbortError') return;
+        if (e.name === 'AbortError') {{
+          sendBtn.disabled = false;
+          abortController = null;
+          sendBtn.textContent = 'Send \\u2191';
+          sendBtn.onclick = function() {{ sendMessage(); }};
+          return;
+        }}
       removeTyping();
       appendMsg('assistant', '\u274c Agent network error: ' + e.message, '');
+      sendBtn.disabled = false;
+      abortController = null;
+      sendBtn.textContent = 'Send \\u2191';
+      sendBtn.onclick = function() {{ sendMessage(); }};
+      input.focus();
     }}
     if (fullText) {{
       conversationHistory.push({{role:'assistant', content:fullText}});

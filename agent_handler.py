@@ -128,6 +128,64 @@ _TOOL_KEYWORDS = {
         "query kb",
         "what do you know about",
     ],
+    "get_context_logs": [
+        "context log",
+        "session log",
+        "chat history",
+        "conversation history",
+        "what did we talk about",
+        "get log",
+        "show history",
+    ],
+    "get_session_stats": [
+        "session stats",
+        "token usage",
+        "context usage",
+        "how many tokens",
+        "session info",
+    ],
+    "ingest_file": [
+        "ingest",
+        "re-ingest",
+        "reingest",
+        "add to knowledge",
+        "embed file",
+    ],
+    "list_knowledge": [
+        "list knowledge",
+        "list files",
+        "what files",
+        "knowledge base",
+        "what's ingested",
+        "show knowledge",
+    ],
+    "delete_knowledge": [
+        "delete knowledge",
+        "remove from qdrant",
+        "remove vector",
+        "delete file from knowledge",
+    ],
+    "run_python": [
+        "run python",
+        "execute python",
+        "python code",
+        "run script",
+        "calculate",
+    ],
+    "run_sql": [
+        "run sql",
+        "query database",
+        "select from",
+        "sql query",
+    ],
+    "plan": [
+        "plan",
+        "multi-step",
+        "complex task",
+        "step by step",
+        "break down",
+        "outline steps",
+    ],
     "system_info": [
         "system",
         "resource",
@@ -500,6 +558,271 @@ def system_info(component: str = "all") -> str:
     return json.dumps(parts, indent=2)
 
 
+# ── New tools ──────────────────────────────────────────────────────────────────
+
+
+@tool
+def get_context_logs(session_id: str = "") -> str:
+    """
+    Retrieve the conversation history for the current or specified session.
+    Returns all messages with role labels and timestamps.
+    """
+    try:
+        from qdrant_proxy_final import _sessions, add_to_history
+
+        sessions = _sessions
+        if session_id and session_id in sessions:
+            sid = session_id
+        elif sessions:
+            sid = list(sessions.keys())[-1]
+        else:
+            return "No active sessions found."
+        session = sessions.get(sid, {})
+        history = session.get("history", [])
+        if not history:
+            return f"Session {sid} has no messages yet."
+        lines = [f"Session: {sid} ({session.get('msg_count', 0)} messages)"]
+        for m in history:
+            role = m.get("role", "?")
+            content = m.get("content", "")
+            preview = content[:200] + "..." if len(content) > 200 else content
+            lines.append(f"\n[{role.upper()}]\n{preview}")
+        return "\n".join(lines)
+    except Exception as e:
+        return f"get_context_logs error: {e}"
+
+
+@tool
+def get_session_stats(session_id: str = "") -> str:
+    """
+    Return token counts, context usage %, and message count for a session.
+    """
+    try:
+        from qdrant_proxy_final import _sessions, count_tokens, CTX_LIMIT
+
+        sessions = _sessions
+        if session_id and session_id in sessions:
+            sid = session_id
+        elif sessions:
+            sid = list(sessions.keys())[-1]
+        else:
+            return "No active sessions found."
+        session = sessions.get(sid, {})
+        history = session.get("history", [])
+        total_tok = sum(count_tokens(m["content"]) for m in history)
+        pct = round(total_tok / CTX_LIMIT * 100, 1) if CTX_LIMIT > 0 else 0
+        return (
+            f"Session: {sid}\n"
+            f"Messages: {len(history)}\n"
+            f"Total tokens: {total_tok}\n"
+            f"CTX limit: {CTX_LIMIT}\n"
+            f"Usage: {pct}%\n"
+            f"Created: {session.get('created', '?')}"
+        )
+    except Exception as e:
+        return f"get_session_stats error: {e}"
+
+
+@tool
+def ingest_file(filename: str) -> str:
+    """
+    Ingest a knowledge file into Qdrant by filename (relative to the KB dir).
+    Re-embeds a single .md / .pdf / .docx / .xlsx file.
+    """
+    try:
+        from qdrant_proxy_final import KB_DIR, QDRANT_HOST, QDRANT_PORT, COLLECTION, _VK, _EMBED_MODE, _EMBED_MODEL, UPSTREAM
+        import subprocess, sys, json
+        from pathlib import Path
+
+        fpath = (Path(KB_DIR) / filename).resolve()
+        kb_resolved = Path(KB_DIR).resolve()
+        if not str(fpath).startswith(str(kb_resolved)):
+            return f"Access denied: file must be under KB_DIR ({KB_DIR})"
+        if not fpath.exists():
+            return f"File not found: {fpath}"
+        ingest_path = Path(__file__).parent / "ingest.py"
+        if not ingest_path.exists():
+            return f"ingest.py not found at {ingest_path}"
+        env = os.environ.copy()
+        env["CONTEXTCUT_QDRANT_HOST"] = QDRANT_HOST
+        env["CONTEXTCUT_QDRANT_PORT"] = str(QDRANT_PORT)
+        env["CONTEXTCUT_COLLECTION"] = COLLECTION
+        env["CONTEXTCUT_KB_DIR"] = str(KB_DIR)
+        env["CONTEXTCUT_EMBED_MODE"] = _EMBED_MODE
+        env["CONTEXTCUT_EMBED_MODEL"] = _EMBED_MODEL
+        env["CONTEXTCUT_UPSTREAM"] = UPSTREAM
+        if _VK:
+            env["VOYAGE_API_KEY"] = _VK
+        result = _run_subprocess(
+            [sys.executable, str(ingest_path), "--file", str(fpath)],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+            timeout=120,
+        )
+        out = (result.stdout or "").strip()[:2000]
+        err = (result.stderr or "").strip()[:500]
+        if result.returncode != 0:
+            return f"Ingest failed (code {result.returncode}):\n{err}\n{out}"
+        return f"Ingested {filename} successfully.\n{out[:1000]}"
+    except subprocess.TimeoutExpired:
+        return "Ingest timed out after 120s"
+    except Exception as e:
+        return f"ingest_file error: {e}"
+
+
+@tool
+def list_knowledge() -> str:
+    """
+    List all files in the knowledge base with chunk counts from Qdrant.
+    """
+    try:
+        from qdrant_proxy_final import KB_DIR, QDRANT_HOST, QDRANT_PORT, COLLECTION
+        from qdrant_client import QdrantClient
+
+        qclient = QdrantClient(host=QDRANT_HOST, port=QDRANT_PORT)
+        try:
+            collection_info = qclient.get_collection(COLLECTION)
+            total_points = collection_info.points_count
+        except Exception:
+            total_points = 0
+        # Scroll all points to count chunks per source
+        from qdrant_client import models
+        seen = {}
+        next_offset = None
+        limit = 100
+        while True:
+            hits, next_offset = qclient.scroll(
+                collection_name=COLLECTION,
+                limit=limit,
+                offset=next_offset,
+                with_payload=["source"],
+            )
+            for pt in hits:
+                src = pt.payload.get("source", "unknown") if pt.payload else "unknown"
+                seen[src] = seen.get(src, 0) + 1
+            if next_offset is None:
+                break
+        if not seen:
+            return "Knowledge base is empty."
+        lines = [f"Knowledge base: {KB_DIR} ({total_points} total vectors)"]
+        for src, count in sorted(seen.items()):
+            lines.append(f"  {src}: {count} chunk(s)")
+        return "\n".join(lines)
+    except Exception as e:
+        return f"list_knowledge error: {e}"
+
+
+@tool
+def delete_knowledge(filename: str) -> str:
+    """
+    Delete a knowledge file's vectors from Qdrant by filename.
+    The file itself is NOT removed from disk — only Qdrant vectors are deleted.
+    To also delete the file from disk, use shell_exec rm afterward.
+    """
+    try:
+        from qdrant_proxy_final import QDRANT_HOST, QDRANT_PORT, COLLECTION
+        from qdrant_client import QdrantClient, models
+
+        qclient = QdrantClient(host=QDRANT_HOST, port=QDRANT_PORT)
+        result = qclient.delete(
+            collection_name=COLLECTION,
+            points_selector=models.Filter(
+                must=[
+                    models.FieldCondition(
+                        key="source",
+                        match=models.MatchValue(value=filename),
+                    )
+                ]
+            ),
+        )
+        return f"Deleted vectors for '{filename}' from Qdrant collection '{COLLECTION}'."
+    except Exception as e:
+        return f"delete_knowledge error: {e}"
+
+
+@tool
+def run_python(code: str, timeout: int = 30) -> str:
+    """
+    Execute Python code in a subprocess and return stdout + stderr.
+    Output is capped at 64 KB. Useful for data analysis, testing, or scripting.
+    """
+    try:
+        result = _run_subprocess(
+            ["python3", "-c", code],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+            timeout=timeout,
+        )
+        out = (result.stdout or "").strip()
+        err = (result.stderr or "").strip()
+        if len(out) > 64000:
+            out = out[:64000] + "\n… [truncated at 64 KB]"
+        if len(err) > 64000:
+            err = err[:64000] + "\n… [truncated at 64 KB]"
+        parts = []
+        if out:
+            parts.append(out)
+        if err:
+            parts.append(f"[stderr]\n{err}")
+        return "\n".join(parts) if parts else "(no output)"
+    except subprocess.TimeoutExpired:
+        return f"Python execution timed out after {timeout}s"
+    except Exception as e:
+        return f"run_python error: {e}"
+
+
+@tool
+def run_sql(query: str) -> str:
+    """
+    Execute a read-only SELECT query on the ContextCut session database.
+    Only SELECT statements are allowed. Returns results as JSON.
+    """
+    try:
+        import sqlite3, json
+        from pathlib import Path
+
+        session_file = str(
+            Path(__file__).parent / ".contextcut_sessions.db"
+        )
+        if not Path(session_file).exists():
+            return f"Session database not found at {session_file}"
+        qs = query.strip().upper()
+        if not qs.startswith("SELECT"):
+            return "Only SELECT queries are allowed."
+        db = sqlite3.connect(session_file, check_same_thread=False)
+        db.row_factory = sqlite3.Row
+        cursor = db.execute(query)
+        rows = [dict(row) for row in cursor.fetchall()]
+        db.close()
+        if not rows:
+            return "Query returned no results."
+        return json.dumps(rows, indent=2, default=str)[:16000]
+    except Exception as e:
+        return f"run_sql error: {e}"
+
+
+@tool
+def plan(objective: str, context: str = "") -> str:
+    """
+    Create a structured, multi-step plan to accomplish a complex objective.
+    Use this for tasks that require multiple tool calls in sequence.
+    The agent should execute each step in order and report progress.
+    """
+    steps = [
+        f"1. Analyze: Understand the objective and identify key requirements.",
+        f"2. Research: Gather information using tools (web_search, vector_search, fetch_url).",
+        f"3. Execute: Process the information — write code, run queries, analyze data.",
+        f"4. Verify: Check results for accuracy and completeness.",
+        f"5. Deliver: Present the final result to the user.",
+    ]
+    header = f"## Plan: {objective}"
+    if context:
+        header += f"\n\nContext: {context[:500]}"
+    return header + "\n\n" + "\n".join(steps) + "\n\nProceed step by step. Call this tool again to revise the plan as needed."
+
+
 # ── Tool registry ─────────────────────────────────────────────────────────────
 
 ALL_TOOLS = [
@@ -513,6 +836,14 @@ ALL_TOOLS = [
     fetch_url,
     vector_search,
     system_info,
+    get_context_logs,
+    get_session_stats,
+    ingest_file,
+    list_knowledge,
+    delete_knowledge,
+    run_python,
+    run_sql,
+    plan,
 ]
 
 TOOL_DESCRIPTIONS = {
@@ -526,6 +857,14 @@ TOOL_DESCRIPTIONS = {
     "fetch_url": "Fetch a URL as plain text",
     "vector_search": "Query Qdrant RAG via ContextCut-PRO",
     "system_info": "CPU / RAM / GPU / disk snapshot",
+    "get_context_logs": "Retrieve conversation history for a session",
+    "get_session_stats": "Token counts and context usage for a session",
+    "ingest_file": "Re-ingest a knowledge file into Qdrant",
+    "list_knowledge": "List all files in KB with chunk counts",
+    "delete_knowledge": "Delete vectors for a file from Qdrant",
+    "run_python": "Execute Python code in a subprocess",
+    "run_sql": "Run a SELECT query on the session database",
+    "plan": "Create a structured multi-step plan for complex tasks",
 }
 
 # ── Agent builder ─────────────────────────────────────────────────────────────
@@ -539,6 +878,14 @@ You have access to:
 - fetch_url: Fetch URL contents as text
 - vector_search: Search the local knowledge base (Qdrant RAG)
 - system_info: Hardware/software snapshot
+- get_context_logs: Retrieve conversation history for a session
+- get_session_stats: Token counts and context usage for a session
+- ingest_file: Re-ingest a knowledge file into Qdrant
+- list_knowledge: List all files in KB with chunk counts from Qdrant
+- delete_knowledge: Delete vectors for a file from Qdrant
+- run_python: Execute Python code in a subprocess
+- run_sql: Run a SELECT query on the session database
+- plan: Create a structured multi-step plan for complex tasks
 
 Rules:
 1. For shell_exec, inform the user what command you want to run and why.
@@ -546,7 +893,8 @@ Rules:
 3. Write well-structured, correct code.
 4. When reading files, respect the file size limit.
 5. Do NOT fabricate information — use tools to verify facts.
-6. Always explain what you plan to do before doing it."""
+6. Always explain what you plan to do before doing it.
+7. For complex tasks, call plan() first to create a structured approach, then execute each step."""
 
 
 def build_agent(model_name: str = None, upstream: str = None, api_key: str = None):
