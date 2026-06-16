@@ -3,18 +3,21 @@ Live integration tests — require a running ContextCut-PRO server.
 
 These tests are skipped unless ``--live`` is passed to pytest.
 
-Target server: http://192.168.137.252:18788 (proxy) and :18787 (dashboard).
+Override addresses with env vars:
+  CONTEXTCUT_DASHBOARD_URL=http://192.168.137.252:18787
+  CONTEXTCUT_PROXY_URL=http://192.168.137.252:18788
 """
 
 import json
+import os
 
 import pytest
 
 
 @pytest.mark.live
 class TestLiveIntegration:
-    DASHBOARD = "http://192.168.137.252:18787"
-    PROXY = "http://192.168.137.252:18788"
+    DASHBOARD = os.environ.get("CONTEXTCUT_DASHBOARD_URL", "http://192.168.137.252:18787")
+    PROXY = os.environ.get("CONTEXTCUT_PROXY_URL", "http://192.168.137.252:18788")
 
     def test_proxy_health(self):
         import urllib.request
