@@ -2734,9 +2734,6 @@ async function sendMessage() {{
           msg = '\u274c Model <strong>' + model + '</strong> does not support tool calling. Agent mode requires a model with tool-use capability (e.g. qwen3, llama3, deepseek-v3). Switch to a compatible model or disable Agent ON.';
         }}
         appendMsg('assistant', msg, '');
-        sendBtn.disabled = false;
-        sendBtn.textContent = 'Send \\u2191';
-        sendBtn.onclick = function() {{ sendMessage(); }};
         return;
       }}
       const reader  = resp.body.getReader();
@@ -2818,58 +2815,51 @@ async function sendMessage() {{
         }}
       }}
     }} catch(e) {{
-        if (e.name === 'AbortError') {{
-          sendBtn.disabled = false;
-          abortController = null;
-          sendBtn.textContent = 'Send \\u2191';
-          sendBtn.onclick = function() {{ sendMessage(); }};
-          return;
+      if (e.name !== 'AbortError') {{
+        removeTyping();
+        appendMsg('assistant', '\u274c Agent network error: ' + e.message, '');
+        input.focus();
+      }}
+    }} finally {{
+      // Always reset the send button, regardless of how the try/catch exits
+      if (fullText) {{
+        conversationHistory.push({{role:'assistant', content:fullText}});
+        if (scanMode && assistantDiv) {{
+          try {{
+            const sr = await fetch('/api/agent/confidence-scan', {{
+              method: 'POST',
+              headers: {{'Content-Type':'application/json'}},
+              body: JSON.stringify({{text: fullText}})
+            }});
+            if (sr.ok) {{
+              const sd = await sr.json();
+              if (sd.passages && sd.passages.length > 0) {{
+                let highlighted = fullText;
+                for (const p of sd.passages) {{
+                  if ((p.confidence === 'LOW' || p.confidence === 'MEDIUM') && p.text && p.text.length > 5) {{
+                    const escaped = p.text.replace(/[.*+?^${{}}()|[\\]\\\\]/g, '\\\\$&');
+                    const icon = p.confidence === 'LOW' ? '\\u26a0\\ufe0f ' : '\\u26a1 ';
+                    const title = esc(p.confidence + ': ' + (p.reason || ''));
+                    try {{
+                      const re = new RegExp(escaped.replace(/\\n/g, '\\\\n'), 'gi');
+                      highlighted = highlighted.replace(re, (match) =>
+                        '<span class=\\"suspect\\" title=\\"' + title + '\\">' + icon + esc(match) + '</span>'
+                      );
+                    }} catch(e) {{}}
+                  }}
+                }}
+                if (bubble) bubble.innerHTML = highlighted;
+              }}
+            }}
+          }} catch(e) {{ console.warn('Confidence scan failed:', e); }}
         }}
-      removeTyping();
-      appendMsg('assistant', '\u274c Agent network error: ' + e.message, '');
+      }}
       sendBtn.disabled = false;
       abortController = null;
       sendBtn.textContent = 'Send \\u2191';
       sendBtn.onclick = function() {{ sendMessage(); }};
       input.focus();
     }}
-    if (fullText) {{
-      conversationHistory.push({{role:'assistant', content:fullText}});
-      if (scanMode && assistantDiv) {{
-        try {{
-          const sr = await fetch('/api/agent/confidence-scan', {{
-            method: 'POST',
-            headers: {{'Content-Type':'application/json'}},
-            body: JSON.stringify({{text: fullText}})
-          }});
-          if (sr.ok) {{
-            const sd = await sr.json();
-            if (sd.passages && sd.passages.length > 0) {{
-              let highlighted = fullText;
-              for (const p of sd.passages) {{
-                if ((p.confidence === 'LOW' || p.confidence === 'MEDIUM') && p.text && p.text.length > 5) {{
-                  const escaped = p.text.replace(/[.*+?^${{}}()|[\\]\\\\]/g, '\\\\$&');
-                  const icon = p.confidence === 'LOW' ? '\\u26a0\\ufe0f ' : '\\u26a1 ';
-                  const title = esc(p.confidence + ': ' + (p.reason || ''));
-                  try {{
-                    const re = new RegExp(escaped.replace(/\\n/g, '\\\\n'), 'gi');
-                    highlighted = highlighted.replace(re, (match) =>
-                      '<span class=\\"suspect\\" title=\\"' + title + '\\">' + icon + esc(match) + '</span>'
-                    );
-                  }} catch(e) {{}}
-                }}
-              }}
-              if (bubble) bubble.innerHTML = highlighted;
-            }}
-          }}
-        }} catch(e) {{ console.warn('Confidence scan failed:', e); }}
-      }}
-    }}
-    sendBtn.disabled = false;
-    abortController = null;
-    sendBtn.textContent = 'Send \\u2191';
-    sendBtn.onclick = function() {{ sendMessage(); }};
-    input.focus();
     return;
   }}
 
