@@ -4006,7 +4006,8 @@ class DashboardHandler(_SuppressBrokenPipe, BaseHTTPRequestHandler):
             filename = self.path.split("/knowledge/")[-1]
             fpath = (KB_DIR / filename).resolve()
             kb_resolved = KB_DIR.resolve()
-            if not str(fpath).startswith(str(kb_resolved)) or fpath.suffix.lower() not in ALLOWED_EXT:
+            ext = fpath.suffix.lower()
+            if not str(fpath).startswith(str(kb_resolved)) or ext not in ALLOWED_EXT:
                 self.send_response(403)
                 self.end_headers()
                 self.wfile.write(b"Forbidden")
@@ -4016,19 +4017,26 @@ class DashboardHandler(_SuppressBrokenPipe, BaseHTTPRequestHandler):
                 self.end_headers()
                 self.wfile.write(b"Not found")
                 return
-            raw = fpath.read_text(encoding="utf-8", errors="replace")
-            escaped = (
-                raw
-                .replace("&", "&amp;")
-                .replace("<", "&lt;")
-                .replace(">", "&gt;")
-            )
-            body = self._md_to_html(escaped, filename)
-            self.send_response(200)
-            self.send_header("Content-Type", "text/html; charset=utf-8")
-            self.send_header("Content-Length", str(len(body)))
-            self.end_headers()
-            self.wfile.write(body)
+            TEXT_EXTS = {".md",".txt",".py",".js",".ts",".html",".css",".csv",".json",".xml",".yaml",".yml",
+                         ".go",".rs",".rb",".java",".c",".cpp",".h",".sh",".sql",".log"}
+            if ext in TEXT_EXTS:
+                raw = fpath.read_text(encoding="utf-8", errors="replace")
+                escaped = raw.replace("&","&amp;").replace("<","&lt;").replace(">","&gt;")
+                body = self._md_to_html(escaped, filename)
+                self.send_response(200)
+                self.send_header("Content-Type", "text/html; charset=utf-8")
+                self.send_header("Content-Length", str(len(body)))
+                self.end_headers()
+                self.wfile.write(body)
+            else:
+                data = fpath.read_bytes()
+                ct = {"pdf":"application/pdf","docx":"application/vnd.openxmlformats-officedocument.wordprocessingml.document","xlsx":"application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"}.get(ext.lstrip("."), "application/octet-stream")
+                self.send_response(200)
+                self.send_header("Content-Type", ct)
+                self.send_header("Content-Disposition", f'inline; filename="{filename}"')
+                self.send_header("Content-Length", str(len(data)))
+                self.end_headers()
+                self.wfile.write(data)
             return
         if self.path == "/settings":
             page = make_settings_page().encode("utf-8")
