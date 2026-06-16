@@ -186,6 +186,36 @@ _TOOL_KEYWORDS = {
         "break down",
         "outline steps",
     ],
+    "remember": [
+        "remember",
+        "store",
+        "save fact",
+        "keep this",
+        "don't forget",
+        "save my",
+        "persist",
+    ],
+    "recall": [
+        "recall",
+        "remember what",
+        "what do you know about me",
+        "what did i tell you",
+        "load memory",
+        "persistent memory",
+    ],
+    "forget": [
+        "forget",
+        "delete memory",
+        "remove memory",
+        "erase",
+    ],
+    "compose_tool": [
+        "compose",
+        "create tool",
+        "new compound",
+        "chain tools",
+        "custom tool",
+    ],
     "system_info": [
         "system",
         "resource",
@@ -823,6 +853,230 @@ def plan(objective: str, context: str = "") -> str:
     return header + "\n\n" + "\n".join(steps) + "\n\nProceed step by step. Call this tool again to revise the plan as needed."
 
 
+# ── Persistent Memory (key-value across sessions) ──────────────────────────────
+
+_AGENT_MEMORY_DB: str | None = None
+
+
+def _get_memory_db() -> str:
+    global _AGENT_MEMORY_DB
+    if _AGENT_MEMORY_DB is None:
+        _AGENT_MEMORY_DB = str(Path(__file__).parent / ".contextcut_sessions.db")
+    return _AGENT_MEMORY_DB
+
+
+def _ensure_memory_table(db_path: str):
+    import sqlite3
+    db = sqlite3.connect(db_path, check_same_thread=False)
+    db.execute(
+        """CREATE TABLE IF NOT EXISTS agent_memory (
+            key   TEXT PRIMARY KEY,
+            value TEXT NOT NULL,
+            updated TEXT NOT NULL
+        )"""
+    )
+    db.commit()
+    db.close()
+
+
+@tool
+def remember(key: str, value: str) -> str:
+    """
+    Store a fact or value in persistent memory that persists across sessions.
+    Use this to remember user preferences, important facts, or context
+    that should be available in future conversations.
+    Key should be a short, descriptive name (e.g. 'user_name', 'project_path').
+    """
+    try:
+        db_path = _get_memory_db()
+        _ensure_memory_table(db_path)
+        import sqlite3
+        from datetime import datetime
+        db = sqlite3.connect(db_path, check_same_thread=False)
+        db.execute(
+            "INSERT OR REPLACE INTO agent_memory (key, value, updated) VALUES (?, ?, ?)",
+            (key, value, datetime.now().isoformat()),
+        )
+        db.commit()
+        db.close()
+        return f"Stored '{key}' in persistent memory."
+    except Exception as e:
+        return f"remember error: {e}"
+
+
+@tool
+def recall(key: str = "") -> str:
+    """
+    Retrieve facts from persistent memory. If key is provided, returns that
+    specific value. If key is empty, returns ALL stored memories.
+    Use this at the start of a conversation to recall relevant context.
+    """
+    try:
+        db_path = _get_memory_db()
+        _ensure_memory_table(db_path)
+        import sqlite3
+        db = sqlite3.connect(db_path, check_same_thread=False)
+        db.row_factory = sqlite3.Row
+        if key:
+            cursor = db.execute(
+                "SELECT key, value, updated FROM agent_memory WHERE key = ?", (key,)
+            )
+        else:
+            cursor = db.execute(
+                "SELECT key, value, updated FROM agent_memory ORDER BY updated DESC"
+            )
+        rows = cursor.fetchall()
+        db.close()
+        if not rows:
+            if key:
+                return f"No memory found for key '{key}'."
+            return "No memories stored yet."
+        results = []
+        for r in rows:
+            results.append(f"[{r['key']}] ({r['updated']})\n{r['value']}")
+        return "\n\n".join(results)
+    except Exception as e:
+        return f"recall error: {e}"
+
+
+@tool
+def forget(key: str) -> str:
+    """
+    Delete a specific fact from persistent memory by key.
+    """
+    try:
+        db_path = _get_memory_db()
+        _ensure_memory_table(db_path)
+        import sqlite3
+        db = sqlite3.connect(db_path, check_same_thread=False)
+        db.execute("DELETE FROM agent_memory WHERE key = ?", (key,))
+        affected = db.total_changes
+        db.commit()
+        db.close()
+        if affected:
+            return f"Deleted memory '{key}'."
+        return f"No memory found with key '{key}'."
+    except Exception as e:
+        return f"forget error: {e}"
+
+
+# ── Tool Composition (custom compound tools) ──────────────────────────────────
+
+COMPOUND_TOOLS: dict[str, dict] = {}
+
+# Cache for dynamically created @tool functions so build_agent reuses them
+_COMPOUND_TOOL_FUNCS: dict[str, object] = {}
+
+
+def _execute_compound_tool(name: str, **kwargs) -> str:
+    """Execute a registered compound tool by name."""
+    spec = COMPOUND_TOOLS.get(name)
+    if not spec:
+        return f"Compound tool '{name}' not found."
+    steps = spec.get("steps", [])
+    lines = [f"Running compound tool '{name}':"]
+    for i, step in enumerate(steps):
+        tool_name = step.get("tool", "")
+        step_input = step.get("input", {})
+        lines.append(f"\nStep {i+1}: {tool_name}({step_input})")
+        # Find the function in ALL_TOOLS by name
+        func = None
+        for t in ALL_TOOLS:
+            if t.name == tool_name:
+                func = t
+                break
+        if not func:
+            lines.append(f"  Error: tool '{tool_name}' not found.")
+            continue
+        try:
+            if isinstance(step_input, dict):
+                result = func.invoke(step_input)
+            else:
+                result = func.invoke({"input": step_input})
+            result_str = str(result)[:2000]
+            lines.append(f"  Result: {result_str}")
+        except Exception as e:
+            lines.append(f"  Error: {e}")
+    return "\n".join(lines)
+
+
+@tool
+def compose_tool(
+    name: str,
+    description: str,
+    steps: str,
+) -> str:
+    """
+    Create a new compound tool that chains multiple primitive tools together.
+    Once created, the compound tool can be called by name like any other tool.
+    
+    Parameters:
+      name: Short unique name for the new tool (e.g. 'research_and_summarize')
+      description: What this compound tool does (shown to the LLM)
+      steps: JSON array of step objects. Each step has:
+             {"tool": "tool_name", "input": {"param": "value"}}
+             
+    Example steps:
+      [{"tool": "vector_search", "input": {"query": "topic", "top_k": 3}},
+       {"tool": "web_search", "input": {"query": "topic recent"}},
+       {"tool": "run_python", "input": {"code": "print('done')"}}]
+    """
+    try:
+        import json
+        parsed_steps = json.loads(steps) if isinstance(steps, str) else steps
+        if not isinstance(parsed_steps, list) or not parsed_steps:
+            return "steps must be a non-empty JSON array."
+        for s in parsed_steps:
+            if not isinstance(s, dict) or "tool" not in s:
+                return "Each step must be an object with a 'tool' key."
+            # Validate tool exists
+            found = False
+            for t in ALL_TOOLS:
+                if t.name == s["tool"]:
+                    found = True
+                    break
+            if not found:
+                return f"Tool '{s['tool']}' is not a valid primitive tool."
+        COMPOUND_TOOLS[name] = {
+            "description": description,
+            "steps": parsed_steps,
+        }
+        # Clear cache so build_agent picks it up
+        if name in _COMPOUND_TOOL_FUNCS:
+            del _COMPOUND_TOOL_FUNCS[name]
+        return (
+            f"Compound tool '{name}' created with {len(parsed_steps)} steps.\n"
+            f"Description: {description}\n"
+            f"You can now call {name}() like any other tool."
+        )
+    except json.JSONDecodeError as e:
+        return f"Invalid JSON in steps: {e}"
+    except Exception as e:
+        return f"compose_tool error: {e}"
+
+
+def _get_dynamic_tools() -> list:
+    """Return compound tool wrappers for registered COMPOUND_TOOLS."""
+    import functools
+    result = []
+    for name, spec in COMPOUND_TOOLS.items():
+        if name in _COMPOUND_TOOL_FUNCS:
+            result.append(_COMPOUND_TOOL_FUNCS[name])
+            continue
+
+        def _make_runner(n=name):
+            return lambda **kwargs: _execute_compound_tool(n, **kwargs)
+
+        dynamic_func = tool(
+            _make_runner(name),
+            name=name,
+            description=spec.get("description", ""),
+        )
+        _COMPOUND_TOOL_FUNCS[name] = dynamic_func
+        result.append(dynamic_func)
+    return result
+
+
 # ── Tool registry ─────────────────────────────────────────────────────────────
 
 ALL_TOOLS = [
@@ -844,6 +1098,10 @@ ALL_TOOLS = [
     run_python,
     run_sql,
     plan,
+    remember,
+    recall,
+    forget,
+    compose_tool,
 ]
 
 TOOL_DESCRIPTIONS = {
@@ -865,6 +1123,10 @@ TOOL_DESCRIPTIONS = {
     "run_python": "Execute Python code in a subprocess",
     "run_sql": "Run a SELECT query on the session database",
     "plan": "Create a structured multi-step plan for complex tasks",
+    "remember": "Store a fact in persistent memory (key-value across sessions)",
+    "recall": "Retrieve facts from persistent memory (optionally by key)",
+    "forget": "Delete a fact from persistent memory by key",
+    "compose_tool": "Create a new compound tool that chains multiple primitive tools",
 }
 
 # ── Agent builder ─────────────────────────────────────────────────────────────
@@ -886,6 +1148,8 @@ You have access to:
 - run_python: Execute Python code in a subprocess
 - run_sql: Run a SELECT query on the session database
 - plan: Create a structured multi-step plan for complex tasks
+- remember / recall / forget: Persistent key-value memory across sessions
+- compose_tool: Create new compound tools that chain primitive tools
 
 Rules:
 1. For shell_exec, inform the user what command you want to run and why.
@@ -894,7 +1158,9 @@ Rules:
 4. When reading files, respect the file size limit.
 5. Do NOT fabricate information — use tools to verify facts.
 6. Always explain what you plan to do before doing it.
-7. For complex tasks, call plan() first to create a structured approach, then execute each step."""
+7. For complex tasks, call plan() first to create a structured approach, then execute each step.
+8. At the start of a conversation, call recall() to load persistent memories relevant to the user's request.
+9. Use remember() to store important facts about the user (name, preferences, project details) so they persist across sessions."""
 
 
 def build_agent(model_name: str = None, upstream: str = None, api_key: str = None):
@@ -907,9 +1173,11 @@ def build_agent(model_name: str = None, upstream: str = None, api_key: str = Non
         streaming=True,
     )
 
+    tools = ALL_TOOLS + _get_dynamic_tools()
+
     agent = create_agent(
         model=llm,
-        tools=ALL_TOOLS,
+        tools=tools,
         system_prompt=SYSTEM_PROMPT,
     )
     return agent

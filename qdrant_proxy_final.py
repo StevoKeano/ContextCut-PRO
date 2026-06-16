@@ -394,7 +394,11 @@ def _init_db():
         );
         CREATE INDEX IF NOT EXISTS idx_messages_session ON messages(session_id);
         CREATE INDEX IF NOT EXISTS idx_sessions_created  ON sessions(created DESC);
-    """)
+        CREATE TABLE IF NOT EXISTS agent_memory (
+            key     TEXT PRIMARY KEY,
+            value   TEXT NOT NULL,
+            updated TEXT NOT NULL
+        );""")
     db.commit()
     db.close()
 
@@ -4951,6 +4955,66 @@ class DashboardHandler(_SuppressBrokenPipe, BaseHTTPRequestHandler):
                         retry_tools = await _invoke_and_stream(retry_msgs)
                         blocked, reason = _check_tool_usage(message, retry_tools)
                         retry_count += 1
+
+                    # Layer 2: Self-correction loop — auto-retry on LOW confidence
+                    if full_output:
+                        try:
+                            from agent_handler import _confidence_scan
+                            loop = asyncio.get_event_loop()
+                            scan_result = await loop.run_in_executor(
+                                None,
+                                lambda: _confidence_scan(
+                                    full_output,
+                                    model_name,
+                                    upstream=get_current_upstream(),
+                                    api_key=get_current_api_key(),
+                                ),
+                            )
+                            low_passages = [
+                                p for p in scan_result
+                                if p.get("confidence") == "LOW"
+                            ]
+                            correction_retries = 0
+                            max_corrections = 2
+                            while low_passages and correction_retries < max_corrections:
+                                reasons = "; ".join(
+                                    p.get("reason", "") for p in low_passages
+                                )
+                                sse_events.append(
+                                    f"event: correction\ndata: {json.dumps({'confidence': 'LOW', 'reasons': reasons})}\n\n"
+                                )
+                                correction_msg = (
+                                    f"Your previous response contained passages with LOW factual confidence. "
+                                    f"Reasons: {reasons}. "
+                                    f"Please correct these issues in your response."
+                                )
+                                retry_msgs = input_messages + [
+                                    AIMessage(content=full_output),
+                                    HumanMessage(content=correction_msg),
+                                ]
+                                await _invoke_and_stream(retry_msgs)
+                                correction_retries += 1
+                                # Re-scan the new output
+                                if full_output:
+                                    scan_result = await loop.run_in_executor(
+                                        None,
+                                        lambda: _confidence_scan(
+                                            full_output,
+                                            model_name,
+                                            upstream=get_current_upstream(),
+                                            api_key=get_current_api_key(),
+                                        ),
+                                    )
+                                    low_passages = [
+                                        p for p in scan_result
+                                        if p.get("confidence") == "LOW"
+                                    ]
+                        except ImportError:
+                            pass
+                        except Exception as scan_e:
+                            sse_events.append(
+                                f"event: correction\ndata: {json.dumps({'error': str(scan_e)})}\n\n"
+                            )
 
                     sse_events.append(
                         f"event: done\ndata: {json.dumps({'response': full_output})}\n\n"
