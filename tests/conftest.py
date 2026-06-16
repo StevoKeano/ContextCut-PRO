@@ -23,6 +23,12 @@ def _ensure_ddgs():
 
 _ensure_ddgs()
 
+# voyageai triggers a broken dependency chain (spacy → typer → click)
+# on Python 3.13 / Windows.  Stub it so qdrant_proxy_final's import
+# resolves via sys.modules instead of loading the real package.
+if "voyageai" not in sys.modules:
+    sys.modules["voyageai"] = types.ModuleType("voyageai")
+
 
 def pytest_addoption(parser):
     parser.addoption(
