@@ -1034,11 +1034,11 @@ def qdrant_context(query: str) -> tuple[str, list[dict]]:
         response = qclient.query_points(
             collection_name=COLLECTION,
             query=emb,
-            limit=TOP_K,
+            limit=TOP_K * 2,
             with_payload=True,
             with_vectors=False,
         )
-        chunks, meta = [], []
+        chunks, meta, seen_ids = [], [], set()
         for h in response.points:
             score = round(h.score, 3)
             if score < MIN_SCORE:
@@ -1046,10 +1046,42 @@ def qdrant_context(query: str) -> tuple[str, list[dict]]:
                     f"[contextcut] skip score={score} < {MIN_SCORE} for {h.payload.get('filename', '?')}"
                 )
                 continue
+            seen_ids.add(h.id)
             src = h.payload.get("filename", h.payload.get("source", "?"))
             text = h.payload.get("text", "")
             chunks.append(f"[{src} | relevance={score}]\n{text}")
             meta.append({"source": src, "score": score, "chars": len(text)})
+
+        # keyword fallback: scroll all points and substring-match in Python
+        stopwords = frozenset({"the","a","an","is","are","was","were","be","been",
+            "have","has","had","do","does","did","will","would","can","could",
+            "shall","should","may","might","must","this","that","these","those",
+            "it","its","you","your","my","me","we","our","they","them","their",
+            "in","on","at","to","for","of","with","by","from","as","into",
+            "about","what","which","who","how","when","where","why","not","no",
+            "or","and","but","if","so","than","then","also","just","very"})
+        raw_keywords = [w for w in query.lower().split() if len(w) > 2 and w not in stopwords]
+        if raw_keywords:
+            try:
+                all_points = qclient.scroll(COLLECTION, limit=500, with_payload=True)[0]
+                # score keywords: proper nouns (upper in original) and longer words first
+                kw_score = lambda w: (w in query.split() and w[0].isupper(), len(w))
+                raw_keywords.sort(key=kw_score, reverse=True)
+                for kw in raw_keywords:
+                    for h in all_points:
+                        if h.id in seen_ids:
+                            continue
+                        txt = (h.payload.get("text", "") or "").lower()
+                        fn = (h.payload.get("filename", "") or "").lower()
+                        if kw in txt or kw in fn:
+                            seen_ids.add(h.id)
+                            src = h.payload.get("filename", "?")
+                            text = h.payload.get("text", "")
+                            chunks.append(f"[{src} | keyword:{kw}]\n{text}")
+                            meta.append({"source": src, "score": 0.0, "chars": len(text), "keyword": kw})
+            except Exception:
+                pass
+
         if meta:
             print(
                 f"[contextcut] qdrant_context: {len(meta)} hits for query={query[:60]!r}"
@@ -2436,7 +2468,7 @@ function setSendStop() {{
 }}
 
 function linkCitations(text) {{
-  return text.replace(/\\[([\\w\\-. ]+\\.md)\\]/g, '<a href="/knowledge/$1" target="_blank" style="color:var(--accent);text-decoration:underline">$1</a>');
+  return text.replace(/\\[([\\w\\-. ]+\\.(?:md|pdf|docx|xlsx|txt))\\]/g, '<a href="/knowledge/$1" target="_blank" style="color:var(--accent);text-decoration:underline">$1</a>');
 }}
 
 function appendMsg(role, text, statHtml) {{

@@ -202,9 +202,16 @@ def extract_text(path: Path) -> str:
     if ext == ".pdf":
         try:
             import fitz
+        except ImportError:
+            print(f"  [!] PDF extraction requires PyMuPDF: pip install PyMuPDF")
+            return ""
+        try:
             doc = fitz.open(path)
-            return "\n".join(page.get_text() for page in doc)
-        except (ImportError, Exception) as e:
+            text = "\n".join(page.get_text() for page in doc)
+            if not text.strip():
+                print(f"  [!] {path.name}: no text extracted — may be a scanned/image PDF, try OCR (pytesseract + pdf2image)")
+            return text
+        except Exception as e:
             print(f"  [!] PDF extraction failed for {path.name}: {e}")
             return ""
     elif ext == ".docx":
