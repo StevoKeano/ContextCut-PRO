@@ -36,6 +36,7 @@ import base64
 import urllib.request
 import urllib.error
 import urllib.parse
+import re
 from collections import deque
 from pathlib import Path
 from datetime import datetime
@@ -471,18 +472,9 @@ def new_session() -> str:
         "msg_count": 0,
         "ctx_limit_reached": False,
         "shell_confirm_mode": "ask",
+        "_db_inserted": False,
     }
     _current_sid = sid
-    try:
-        db = _get_db()
-        db.execute(
-            "INSERT INTO sessions (id, created) VALUES (?,?)",
-            (sid, _sessions[sid]["created"]),
-        )
-        db.commit()
-        db.close()
-    except Exception as e:
-        print(f"[contextcut] DB insert session error: {e}")
     return sid
 
 
@@ -501,6 +493,12 @@ def add_to_history(sid: str, role: str, content: str):
     _trim_history(session)
     try:
         db = _get_db()
+        if not session.get("_db_inserted"):
+            db.execute(
+                "INSERT OR IGNORE INTO sessions (id, created) VALUES (?,?)",
+                (sid, session["created"]),
+            )
+            session["_db_inserted"] = True
         pos = session["msg_count"] - 1
         tok = count_tokens(content)
         db.execute(
@@ -613,11 +611,15 @@ def load_sessions():
                     (sid,),
                 )
                 history = [{"role": r, "content": c} for r, c, _ in mcur.fetchall()]
+                if not history and not msg_count:
+                    continue
                 _sessions[sid] = {
                     "history": history,
                     "created": created,
                     "msg_count": msg_count or len(history),
                     "ctx_limit_reached": bool(ctx_hit),
+                    "shell_confirm_mode": "ask",
+                    "_db_inserted": True,
                 }
         db.close()
         print(f"[contextcut] Loaded {len(_sessions)} sessions from {SESSION_FILE}")
@@ -2433,12 +2435,17 @@ function setSendStop() {{
   }}
 }}
 
+function linkCitations(text) {{
+  return text.replace(/\\[([\\w\\-. ]+\\.md)\\]/g, '<a href="/knowledge/$1" target="_blank" style="color:var(--accent);text-decoration:underline">$1</a>');
+}}
+
 function appendMsg(role, text, statHtml) {{
   const box = document.getElementById('messages');
   const div = document.createElement('div');
   div.className = 'msg ' + role;
+  const display = role === 'assistant' ? linkCitations(esc(text)) : esc(text);
   div.innerHTML =
-    `<div class="bubble">${{esc(text)}}</div>` +
+    `<div class="bubble">${{display}}</div>` +
     (statHtml ? `<div class="msg-meta"><div class="msg-stat">${{statHtml}}</div></div>` : '');
   box.appendChild(div);
   div.scrollIntoView({{behavior:'smooth', block:'start'}});
@@ -2722,7 +2729,7 @@ async function sendMessage() {{
               if (data.token) {{
                 fullText += data.token;
                 ensureBubble();
-                bubble.innerHTML = esc(fullText);
+                bubble.innerHTML = linkCitations(esc(fullText));
               }} else if (data.name && data.input && !data.result) {{
                 const td = getToolDiv();
                 const div = document.createElement('div');
@@ -2730,6 +2737,7 @@ async function sendMessage() {{
                 div.innerHTML = '<span style="color:var(--yellow)">\u2699 ' + esc(data.name) + '</span>' +
                   '<div class="tool-input">' + esc(typeof data.input === 'string' ? data.input : JSON.stringify(data.input, null, 2)) + '</div>';
                 if (data.name === 'shell_exec' && data.shell_mode === 'ask') {{
+                  td.open = true;
                   const rightEl = document.querySelector('.right.fullscreen');
                   if (rightEl) {{
                     rightEl.classList.remove('fullscreen');
@@ -2757,7 +2765,7 @@ async function sendMessage() {{
               }} else if (data.response) {{
                 fullText = data.response;
                 ensureBubble();
-                bubble.innerHTML = esc(fullText);
+                bubble.innerHTML = linkCitations(esc(fullText));
               }} else if (data.error) {{
                 ensureBubble();
                 bubble.innerHTML = '\u274c Agent error: ' + esc(data.error);
@@ -2849,7 +2857,7 @@ async function sendMessage() {{
           if (!token) continue;
           fullText += token;
           ensureBubble();
-          bubble.innerHTML = esc(fullText);
+          bubble.innerHTML = linkCitations(esc(fullText));
         }} catch(e) {{}}
       }}
     }}
@@ -3150,7 +3158,7 @@ async function recallSession(sid) {{
     conversationHistory = s.history.map(m => ({{role: m.role, content: m.content}}));
     const msgs = document.getElementById('messages');
     if (msgs) {{
-      msgs.innerHTML = s.history.map(m => '<div class="msg ' + m.role + '"><div class="bubble">' + esc(m.content) + '</div></div>').join('');
+      msgs.innerHTML = s.history.map(m => '<div class="msg ' + m.role + '"><div class="bubble">' + (m.role === 'assistant' ? linkCitations(esc(m.content)) : esc(m.content)) + '</div></div>').join('');
       msgs.querySelector('.bubble:last-of-type')?.scrollIntoView({{behavior:'instant', block:'end'}});
     }}
     document.querySelectorAll('[style*="z-index:1000"]').forEach(el => el.remove());
@@ -3994,6 +4002,34 @@ class DashboardHandler(_SuppressBrokenPipe, BaseHTTPRequestHandler):
             self.end_headers()
             self.wfile.write(body)
             return
+        if self.path.startswith("/knowledge/"):
+            filename = self.path.split("/knowledge/")[-1]
+            fpath = (KB_DIR / filename).resolve()
+            kb_resolved = KB_DIR.resolve()
+            if not str(fpath).startswith(str(kb_resolved)) or fpath.suffix.lower() not in ALLOWED_EXT:
+                self.send_response(403)
+                self.end_headers()
+                self.wfile.write(b"Forbidden")
+                return
+            if not fpath.exists():
+                self.send_response(404)
+                self.end_headers()
+                self.wfile.write(b"Not found")
+                return
+            raw = fpath.read_text(encoding="utf-8", errors="replace")
+            escaped = (
+                raw
+                .replace("&", "&amp;")
+                .replace("<", "&lt;")
+                .replace(">", "&gt;")
+            )
+            body = self._md_to_html(escaped, filename)
+            self.send_response(200)
+            self.send_header("Content-Type", "text/html; charset=utf-8")
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+            return
         if self.path == "/settings":
             page = make_settings_page().encode("utf-8")
             self.send_response(200)
@@ -4009,6 +4045,67 @@ class DashboardHandler(_SuppressBrokenPipe, BaseHTTPRequestHandler):
             self.send_header("Content-Length", str(len(page)))
             self.end_headers()
             self.wfile.write(page)
+
+    def _md_to_html(self, text, filename):
+        lines = text.split("\n")
+        out = []
+        in_code_block = False
+        in_list = False
+
+        def _inline(s):
+            s = s.replace("&amp;", "\x00a").replace("&lt;", "\x00l").replace("&gt;", "\x00g")
+            s = re.sub(r'`([^`]+)`', r'<code>\1</code>', s)
+            s = re.sub(r'\*\*(.+?)\*\*', r'<strong>\1</strong>', s)
+            s = re.sub(r'(?<!\*)\*(?!\*)(.+?)(?<!\*)\*(?!\*)', r'<em>\1</em>', s)
+            s = s.replace("\x00a", "&amp;").replace("\x00l", "&lt;").replace("\x00g", "&gt;")
+            return s
+
+        for line in lines:
+            if line.startswith("```"):
+                if in_code_block:
+                    out.append("</pre>")
+                    in_code_block = False
+                else:
+                    out.append("<pre>")
+                    in_code_block = True
+                continue
+            if in_code_block:
+                out.append(line)
+                continue
+            if line.startswith("### "):
+                if in_list: out.append("</ul>"); in_list = False
+                out.append(f"<h3>{line[4:]}</h3>")
+            elif line.startswith("## "):
+                if in_list: out.append("</ul>"); in_list = False
+                out.append(f"<h2>{line[3:]}</h2>")
+            elif line.startswith("# "):
+                if in_list: out.append("</ul>"); in_list = False
+                out.append(f"<h2>{line[2:]}</h2>")
+            elif line.strip() == "---":
+                if in_list: out.append("</ul>"); in_list = False
+                out.append("<hr>")
+            elif line.strip().startswith("- "):
+                if not in_list: out.append("<ul>"); in_list = True
+                out.append(f"<li>{_inline(line.strip()[2:])}</li>")
+            elif line.strip() == "":
+                if in_list: out.append("</ul>"); in_list = False
+                out.append("")
+            else:
+                if in_list: out.append("</ul>"); in_list = False
+                out.append(f"<p>{_inline(line)}</p>")
+        if in_list: out.append("</ul>")
+        html_body = "\n".join(out)
+        return ("<html><head><meta charset='utf-8'>"
+                "<style>body{background:#0f172a;color:#e2e8f0;font-family:system-ui;padding:24px;max-width:720px;margin:0 auto;line-height:1.7}"
+                "pre{background:#1e293b;padding:12px;border-radius:6px;overflow-x:auto;white-space:pre-wrap;word-wrap:break-word}"
+                "code{font-size:13px;background:#1e293b;padding:2px 6px;border-radius:3px}"
+                "h1{color:#0ea5e9}h2{color:#38bdf8;border-bottom:1px solid #334155;padding-bottom:4px}h3{color:#7dd3fc}"
+                "a{color:#0ea5e9}ul{padding-left:20px}li{margin:4px 0}p{margin:8px 0}"
+                "</style>"
+                f"<title>{filename}</title></head>"
+                f"<body><h1>{filename}</h1><hr>"
+                f"{html_body}"
+                "<hr><p style='color:#64748b;font-size:12px'><a href='/'>Back to dashboard</a></p></body></html>").encode("utf-8")
 
     def do_POST(self):
         length = int(self.headers.get("Content-Length", 0))
@@ -4805,6 +4902,19 @@ class DashboardHandler(_SuppressBrokenPipe, BaseHTTPRequestHandler):
                 if not is_stream:
                     output = asyncio.run(_run_agent())
                     add_to_history(sid, "assistant", output)
+                    tok = count_tokens(message) + count_tokens(output)
+                    record(
+                        {
+                            "ts": datetime.now().strftime("%H:%M:%S"),
+                            "query": message[:120],
+                            "tokens_before": count_tokens(message),
+                            "tokens_after": tok,
+                            "ctx_limit": CTX_LIMIT,
+                            "pct": round(tok / CTX_LIMIT * 100, 1),
+                            "hits": [],
+                            "type": "agent",
+                        }
+                    )
                     resp = json.dumps({"response": output}).encode()
                     self.send_response(200)
                     self.send_header("Content-Type", "application/json")
@@ -4827,6 +4937,19 @@ class DashboardHandler(_SuppressBrokenPipe, BaseHTTPRequestHandler):
                             break
 
                     add_to_history(sid, "assistant", full_output)
+                    tok = count_tokens(message) + count_tokens(full_output)
+                    record(
+                        {
+                            "ts": datetime.now().strftime("%H:%M:%S"),
+                            "query": message[:120],
+                            "tokens_before": count_tokens(message),
+                            "tokens_after": tok,
+                            "ctx_limit": CTX_LIMIT,
+                            "pct": round(tok / CTX_LIMIT * 100, 1),
+                            "hits": [],
+                            "type": "agent",
+                        }
+                    )
                 return
             except Exception as e:
                 import traceback
