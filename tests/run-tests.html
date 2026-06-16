@@ -1,0 +1,49 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>ContextCut-PRO — Run Tests</title>
+<style>
+  body { font: 14px/1.5 monospace; max-width: 720px; margin: 40px auto; padding: 0 20px; background: #0d1117; color: #c9d1d9; }
+  h1 { color: #58a6ff; }
+  h2 { color: #f0883e; margin-top: 2em; }
+  pre { background: #161b22; padding: 12px 16px; border-radius: 8px; overflow-x: auto; color: #7ee787; }
+  code { background: #161b22; padding: 2px 6px; border-radius: 4px; }
+  .note { background: #1c2128; border-left: 4px solid #d29922; padding: 8px 12px; border-radius: 4px; margin: 1em 0; }
+  a { color: #58a6ff; }
+</style>
+</head>
+<body>
+
+<h1>🧪 ContextCut-PRO — Test Suite</h1>
+<p>131 unit tests + 5 optional live integration tests.</p>
+
+<h2>Quick run (no server needed)</h2>
+<pre>python -m pytest tests/ -v --tb=short</pre>
+
+<h2>Live integration tests</h2>
+<p>Requires a running proxy reachable on <code>192.168.137.252</code>, or override with env vars.</p>
+<pre>python -m pytest tests/test_integration.py -v --live --tb=short</pre>
+
+<div class="note">
+  <strong>Override addresses:</strong><br>
+  <code>CONTEXTCUT_DASHBOARD_URL=http://localhost:18787</code><br>
+  <code>CONTEXTCUT_PROXY_URL=http://localhost:18788</code>
+</div>
+
+<h2>Run a single test file</h2>
+<pre>python -m pytest tests/test_ingest.py -v --tb=short</pre>
+
+<h2>Run by keyword</h2>
+<pre>python -m pytest tests/ -v -k "health or memory" --tb=short</pre>
+
+<h2>Full suite with warnings</h2>
+<pre>python -m pytest tests/ -v --tb=short -W ignore::pytest.PytestUnknownMarkWarning</pre>
+
+<h2>Environment</h2>
+<p>Python 3.12+ &middot; pytest 8.3.4 &middot; pytest-mock 3.14.0</p>
+
+<p style="margin-top: 3em; color: #8b949e; font-size: 0.9em;">Last updated June 2026.</p>
+
+</body>
+</html>
