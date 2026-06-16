@@ -212,6 +212,7 @@ DASHBOARD_PORT = int(os.getenv("CONTEXTCUT_DASHBOARD_PORT", "18787"))
 CTX_LIMIT = int(os.getenv("CONTEXTCUT_CTX_LIMIT", "32768"))
 TOP_K = int(os.getenv("CONTEXTCUT_TOP_K", "5"))
 MIN_SCORE = float(os.getenv("CONTEXTCUT_MIN_SCORE", "0.50"))
+MAX_CTX_CHARS = int(os.getenv("CONTEXTCUT_MAX_CTX_CHARS", str(CTX_LIMIT * 3)))
 DEFAULT_MODEL = os.getenv("CONTEXTCUT_MODEL", "qwen3:14b-q8_0")
 
 # ── Dynamic Provider Settings ────────────────────────────────────────────────
@@ -1084,7 +1085,11 @@ def qdrant_context(query: str) -> tuple[str, list[dict]]:
             )
         else:
             print(f"[contextcut] qdrant_context: 0 hits for query={query[:60]!r}")
-        return "\n\n---\n\n".join(chunks), meta
+        ctx_str = "\n\n---\n\n".join(chunks)
+        if len(ctx_str) > MAX_CTX_CHARS:
+            print(f"[contextcut] truncating context {len(ctx_str)} → {MAX_CTX_CHARS} chars")
+            ctx_str = ctx_str[:MAX_CTX_CHARS] + "\n\n[...truncated...]"
+        return ctx_str, meta
     except Exception as e:
         print(f"[contextcut] Qdrant error: {e}")
         import traceback
