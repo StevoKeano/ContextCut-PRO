@@ -4987,8 +4987,8 @@ class DashboardHandler(_SuppressBrokenPipe, BaseHTTPRequestHandler):
                     except _AgentAbort:
                         return full_output
 
-                    # Layer 2: Self-correction loop
-                    if full_output:
+                    # Layer 2: Self-correction loop (skip for trivial responses)
+                    if full_output and len(full_output) > 80:
                         try:
                             from agent_handler import _confidence_scan
                             loop = asyncio.get_event_loop()
@@ -5001,17 +5001,24 @@ class DashboardHandler(_SuppressBrokenPipe, BaseHTTPRequestHandler):
                                     api_key=get_current_api_key(),
                                 ),
                             )
+                            if not isinstance(scan_result, list):
+                                scan_result = []
                             low_passages = [
                                 p for p in scan_result
-                                if p.get("confidence") == "LOW"
+                                if isinstance(p, dict) and p.get("confidence") == "LOW"
                             ]
+                            import sys
+                            if low_passages:
+                                print(f"[{datetime.now().strftime('%H:%M:%S')}] [Agent] \U0001f50d Confidence scan: {len(low_passages)} LOW passages", flush=True)
                             correction_retries = 0
-                            max_corrections = 2
+                            max_corrections = 1
                             while low_passages and correction_retries < max_corrections:
                                 reasons = "; ".join(
-                                    p.get("reason", "") for p in low_passages
+                                    p.get("reason", "") for p in low_passages if isinstance(p, dict)
                                 )
+                                print(f"[{datetime.now().strftime('%H:%M:%S')}] [Agent] \U0001f504 Correction attempt {correction_retries + 1}: {reasons[:120]}", flush=True)
                                 emit({'confidence': 'LOW', 'reasons': reasons, 'type': 'correction'})
+                                prev_output = full_output
                                 correction_msg = (
                                     f"Your previous response contained passages with LOW factual confidence. "
                                     f"Reasons: {reasons}. "
@@ -5023,7 +5030,7 @@ class DashboardHandler(_SuppressBrokenPipe, BaseHTTPRequestHandler):
                                 ]
                                 await _invoke_and_stream(retry_msgs)
                                 correction_retries += 1
-                                if full_output:
+                                if full_output and full_output != prev_output and len(full_output) > 80:
                                     scan_result = await loop.run_in_executor(
                                         None,
                                         lambda: _confidence_scan(
@@ -5034,9 +5041,11 @@ class DashboardHandler(_SuppressBrokenPipe, BaseHTTPRequestHandler):
                                         ),
                                     )
                                     low_passages = [
-                                        p for p in scan_result
-                                        if p.get("confidence") == "LOW"
+                                        p for p in (scan_result or [])
+                                        if isinstance(p, dict) and p.get("confidence") == "LOW"
                                     ]
+                                else:
+                                    low_passages = []
                         except _AgentAbort:
                             return full_output
                         except ImportError:
