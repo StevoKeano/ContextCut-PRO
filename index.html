@@ -1,369 +1,889 @@
-<!doctype html>
+<!DOCTYPE html>
 <html lang="en">
-  <head>
-    <meta charset="UTF-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>ContextCut — Smart RAG for Self-Hosted LLMs</title>
-    <style>
-      body {
-        font-family:
-          -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
-        margin: 0;
-        background: #0f172a;
-        color: #e2e8f0;
-        line-height: 1.6;
-      }
-      .container {
-        max-width: 1100px;
-        margin: 0 auto;
-        padding: 2rem;
-      }
-      header {
-        text-align: center;
-        padding: 4rem 0 2rem;
-      }
-      h1 {
-        font-size: 3.2rem;
-        margin: 0;
-        background: linear-gradient(90deg, #60a5fa, #a78bfa);
-        -webkit-background-clip: text;
-        -webkit-text-fill-color: transparent;
-      }
-      .hero {
-        background: #1e2937;
-        border-radius: 16px;
-        padding: 3rem;
-        margin: 2rem 0;
-        text-align: center;
-      }
-      .cta {
-        background: #3b82f6;
-        color: white;
-        padding: 1rem 2rem;
-        font-size: 1.1rem;
-        border: none;
-        border-radius: 8px;
-        cursor: pointer;
-        margin: 1rem;
-      }
-      .cta:hover {
-        background: #2563eb;
-      }
-      table {
-        width: 100%;
-        border-collapse: collapse;
-        margin: 2rem 0;
-      }
-      th,
-      td {
-        padding: 1rem;
-        text-align: left;
-        border-bottom: 1px solid #334155;
-      }
-      th {
-        background: #1e2937;
-      }
-      .calculator {
-        background: #1e2937;
-        padding: 2rem;
-        border-radius: 16px;
-        margin: 2rem 0;
-      }
-      input[type="range"] {
-        width: 100%;
-        accent-color: #3b82f6;
-      }
-      .result {
-        font-size: 1.4rem;
-        font-weight: bold;
-        color: #4ade80;
-      }
-      .savings {
-        color: #facc15;
-        font-size: 1.8rem;
-      }
-      .steps {
-        display: grid;
-        grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
-        gap: 1.5rem;
-        margin: 2rem 0;
-      }
-      .step {
-        background: #1e2937;
-        border-radius: 16px;
-        padding: 2rem;
-        text-align: center;
-        border: 1px solid #334155;
-        transition: border-color 0.2s;
-      }
-      .step:hover {
-        border-color: #3b82f6;
-      }
-      .step-num {
-        font-size: 2rem;
-        font-weight: 800;
-        color: #3b82f6;
-        margin-bottom: 0.5rem;
-      }
-      .step h3 {
-        margin: 0.5rem 0;
-        font-size: 1.2rem;
-      }
-      .step p {
-        color: #94a3b8;
-        margin: 0;
-      }
-      .features {
-        background: #1e2937;
-        border-radius: 16px;
-        padding: 2rem;
-        margin: 2rem 0;
-      }
-      .features ul {
-        list-style: none;
-        padding: 0;
-        margin: 0;
-      }
-      .features li {
-        padding: 0.8rem 0;
-        border-bottom: 1px solid #334155;
-        display: flex;
-        align-items: center;
-        gap: 0.8rem;
-      }
-      .features li:last-child {
-        border-bottom: none;
-      }
-      .features .icon {
-        font-size: 1.4rem;
-        flex-shrink: 0;
-      }
-      .features .label {
-        font-weight: 600;
-        color: #e2e8f0;
-      }
-      .features .desc {
-        color: #94a3b8;
-        font-size: 0.9rem;
-      }
-    </style>
-  </head>
-  <body>
-    <div class="container">
-      <header>
-        <h1>ContextCut-PRO</h1>
-        <p style="font-size: 1.5rem; margin: 1rem 0">
-          Stop wasting tokens on AI.<br />Inject only what matters.
-        </p>
-        <p>Smart context management for your local LLM — Ollama, OpenClaw, and any OpenAI-compatible endpoint.</p>
-      </header>
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>ContextCut PRO — Private AI RAG Layer</title>
+<style>
+  *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+  body {
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Inter, Roboto, sans-serif;
+    background: #07070d;
+    color: #e2e8f0;
+    line-height: 1.7;
+    -webkit-font-smoothing: antialiased;
+  }
 
-      <div class="hero">
-        <p style="font-size: 2rem; margin: 1rem 0">
-          Give your local LLM a <strong>perfect memory</strong> without the context window bloat.
-        </p>
-        <button
-          class="cta"
-          onclick="
-            document
-              .getElementById('calc')
-              .scrollIntoView({ behavior: 'smooth' })
-          "
-        >
-          Calculate Your Savings →
-        </button>
-        <div style="text-align: center; margin: 3rem 0">
-          <a
-            href="https://5984630877416.gumroad.com/l/ContextCut-Pro"
-            class="cta"
-            style="
-              display: inline-block;
-              font-size: 1.3rem;
-              padding: 1.2rem 3rem;
-              text-decoration: none;
-            "
-          >
-            Buy on Gumroad →</a
-          >
-        </div>
-      </div>
+  body::before {
+    content: '';
+    position: fixed;
+    inset: 0;
+    background-image:
+      linear-gradient(rgba(99,102,241,0.03) 1px, transparent 1px),
+      linear-gradient(90deg, rgba(99,102,241,0.03) 1px, transparent 1px);
+    background-size: 64px 64px;
+    pointer-events: none;
+    z-index: 0;
+  }
 
-      <!-- How It Works -->
-      <h2 style="text-align: center; margin: 3rem 0 1rem">How It Works</h2>
-      <div class="steps">
-        <div class="step">
-          <div class="step-num">1</div>
-          <h3>Drop Your Docs In</h3>
-          <p>Add .md files to the knowledge folder. That's it.</p>
-        </div>
-        <div class="step">
-          <div class="step-num">2</div>
-          <h3>Semantic Search</h3>
-          <p>ContextCut finds the exact chunks relevant to your query.</p>
-        </div>
-        <div class="step">
-          <div class="step-num">3</div>
-          <h3>Smart Injection</h3>
-          <p>Only the important parts get injected — no token bloat.</p>
-        </div>
-      </div>
+  .glow-top-right {
+    position: fixed; top: -256px; right: -196px;
+    width: 600px; height: 600px;
+    background: radial-gradient(circle, rgba(99,102,241,0.12) 0%, transparent 70%);
+    pointer-events: none; z-index: 0;
+  }
+  .glow-bottom-left {
+    position: fixed; bottom: -320px; left: -220px;
+    width: 640px; height: 640px;
+    background: radial-gradient(circle, rgba(168,85,247,0.08) 0%, transparent 70%);
+    pointer-events: none; z-index: 0;
+  }
 
-      <!-- Cost Calculator -->
-      <div class="calculator" id="calc">
-        <h2>Calculate Your Monthly Savings</h2>
+  .container { max-width: 1040px; margin: 0 auto; padding: 0 24px; position: relative; z-index: 1; }
 
-        <label>Monthly Queries: <span id="qval">5000</span></label>
-        <input
-          type="range"
-          id="queries"
-          min="100"
-          max="50000"
-          value="5000"
-          step="100"
-          oninput="updateCalc()"
-        />
+  /* ── Nav ── */
+  nav {
+    display: flex; align-items: center; justify-content: space-between;
+    padding: 20px 0; border-bottom: 1px solid rgba(255,255,255,0.04);
+  }
+  nav .logo { font-size: 1.25rem; font-weight: 700; letter-spacing: -0.02em; }
+  nav .logo span { color: #818cf8; }
+  nav a { color: #94a3b8; text-decoration: none; font-size: 0.9rem; transition: color 0.2s; }
+  nav a:hover { color: #e2e8f0; }
+  nav .nav-links { display: flex; gap: 28px; align-items: center; }
+  .nav-cta {
+    background: linear-gradient(135deg, #6366f1, #a855f7);
+    color: #fff !important; padding: 8px 20px; border-radius: 8px;
+    font-weight: 600; font-size: 0.85rem !important;
+  }
+  .nav-cta:hover { opacity: 0.9; }
 
-        <label style="margin-top: 1rem">Cost per 1K tokens:</label>
-        <select id="cost" onchange="updateCalc()">
-          <option value="0.03">$0.03 (GPT-4)</option>
-          <option value="0.015">$0.015 (Claude Opus)</option>
-          <option value="0.01">$0.01 (Custom)</option>
-        </select>
+  /* ── Hero ── */
+  .hero { text-align: center; padding: 80px 0 40px; }
+  .hero .badge {
+    display: inline-block;
+    background: rgba(99,102,241,0.12); border: 1px solid rgba(99,102,241,0.2);
+    color: #a5b4fc; font-size: 0.8rem; font-weight: 600;
+    padding: 6px 14px; border-radius: 20px; margin-bottom: 28px;
+    letter-spacing: 0.3px; text-transform: uppercase;
+  }
+  .hero h1 {
+    font-size: clamp(2.4rem, 7vw, 4.5rem); font-weight: 800; line-height: 1.08;
+    letter-spacing: -0.03em; margin-bottom: 16px;
+    background: linear-gradient(135deg, #e2e8f0 0%, #818cf8 45%, #a855f7 70%, #22d3ee 100%);
+    -webkit-background-clip: text; -webkit-text-fill-color: transparent;
+    background-clip: text;
+  }
+  .hero p {
+    font-size: clamp(1rem, 2vw, 1.2rem); color: #94a3b8;
+    max-width: 600px; margin: 0 auto 36px; line-height: 1.6;
+  }
+  .hero .cta-group { display: flex; gap: 16px; justify-content: center; flex-wrap: wrap; }
+  .btn-primary {
+    display: inline-flex; align-items: center; gap: 8px;
+    background: linear-gradient(135deg, #6366f1, #a855f7);
+    color: #fff; font-weight: 600; font-size: 1rem; padding: 14px 32px;
+    border-radius: 10px; text-decoration: none; transition: transform 0.15s, box-shadow 0.2s;
+    box-shadow: 0 4px 24px rgba(99,102,241,0.25);
+  }
+  .btn-primary:hover { transform: translateY(-2px); box-shadow: 0 8px 32px rgba(99,102,241,0.35); }
+  .btn-secondary {
+    display: inline-flex; align-items: center; gap: 8px;
+    background: rgba(255,255,255,0.05); border: 1px solid rgba(255,255,255,0.08);
+    color: #e2e8f0; font-weight: 500; font-size: 1rem; padding: 14px 32px;
+    border-radius: 10px; text-decoration: none; transition: background 0.2s;
+  }
+  .btn-secondary:hover { background: rgba(255,255,255,0.08); }
 
-        <label style="margin-top: 1rem">Current Setup:</label>
-        <select id="strategy" onchange="updateCalc()">
-          <option value="3000">Naive Top-5 RAG (3000 tokens)</option>
-          <option value="10000">Manual Paste (10k tokens)</option>
-          <option value="30000">OpenClaw Dump-All (30k tokens)</option>
-          <option value="5000" selected>Your Old Setup</option>
-        </select>
+  /* ── Metrics bar ── */
+  .metrics {
+    display: flex; justify-content: center; gap: 48px; flex-wrap: wrap;
+    padding: 36px 0;
+    border-top: 1px solid rgba(255,255,255,0.04);
+    border-bottom: 1px solid rgba(255,255,255,0.04);
+  }
+  .metrics .num { font-size: 1.8rem; font-weight: 800; color: #e2e8f0; }
+  .metrics .num span { color: #22d3ee; }
+  .metrics .label { font-size: 0.85rem; color: #64748b; margin-top: 2px; }
 
-        <div
-          style="
-            margin-top: 2rem;
-            padding: 1.5rem;
-            background: #0f172a;
-            border-radius: 12px;
-          "
-        >
-          <div class="result">
-            Current Monthly Cost: <span id="currentCost">$450</span>
-          </div>
-          <div class="result" style="color: #4ade80">
-            With ContextCut: <span id="newCost">$134</span>
-          </div>
-          <div class="savings">
-            You Save: <span id="savings">$316 / month</span>
-          </div>
-          <p style="margin-top: 1rem; color: #94a3b8">
-            Pays for itself in <strong>~3 days</strong>
-          </p>
-        </div>
-      </div>
+  /* ── Hero visual (animation container) ── */
+  .hero-visual {
+    width: 100%;
+    height: clamp(320px, 50vmin, 500px);
+    position: relative;
+    overflow: hidden;
+    margin: 20px 0;
+    z-index: 1;
+  }
+  .hero-visual canvas {
+    display: block;
+    width: 100%;
+    height: 100%;
+  }
+  .hero-visual .hl-label,
+  .hero-visual .hl-dot {
+    position: absolute;
+    pointer-events: none;
+    transition: opacity 0.6s;
+  }
+  .hero-visual .hl-label {
+    font-size: clamp(0.5rem, 1.2vmin, 0.85rem);
+    font-weight: 500; text-transform: uppercase; letter-spacing: 0.15em;
+  }
+  .hero-visual .hl-dot {
+    width: clamp(5px, 1vmin, 10px); height: clamp(5px, 1vmin, 10px);
+    border-radius: 50%;
+  }
+  #hv-client  { bottom: 14%; left: 8%; }
+  #hv-proxy   { bottom: 14%; left: 38%; }
+  #hv-llm     { bottom: 14%; right: 8%; }
+  #hv-cloud   { bottom: 14%; right: 8%; }
+  #hv-kb      { top: 24%; right: calc(50% + 12px); transform: translateY(-50%); }
+  #hv-local   { top: 4%; left: 50%; transform: translateX(-50%); font-size: clamp(0.4rem, 0.8vmin, 0.65rem); color: rgba(34,211,238,0.35); }
 
-      <!-- Comparison Table -->
-      <h2 style="text-align: center; margin: 3rem 0 1.5rem">
-        Why ContextCut Works
-      </h2>
-      <table>
-        <tr>
-          <th>Your Query</th>
-          <th>ContextCut</th>
-          <th>Typical RAG</th>
-        </tr>
-        <tr>
-          <td>"What are the guardrails?"</td>
-          <td>806 tokens (1 relevant chunk)</td>
-          <td>3,000+ tokens</td>
-        </tr>
-        <tr>
-          <td>"Explain quantum physics"</td>
-          <td>~5 tokens (nothing relevant)</td>
-          <td>3,000+ tokens (junk)</td>
-        </tr>
-      </table>
+  #hv-dot-client { bottom: calc(14% + 2.2vmin); left: 8%; transform: translateX(-50%); background: #22d3ee; box-shadow: 0 0 12px rgba(34,211,238,0.4); }
+  #hv-dot-proxy  { bottom: calc(14% + 2.2vmin); left: 38%; transform: translateX(-50%); background: #a855f7; box-shadow: 0 0 12px rgba(168,85,247,0.5); }
+  #hv-dot-llm    { bottom: calc(14% + 2.2vmin); right: 8%; transform: translateX(50%); background: #f59e0b; box-shadow: 0 0 12px rgba(245,158,11,0.4); }
+  #hv-dot-cloud  { bottom: calc(14% + 2.2vmin); right: 8%; transform: translateX(50%); background: #ef4444; box-shadow: 0 0 12px rgba(239,68,68,0.4); }
+  #hv-dot-kb     { top: 24%; left: 35%; transform: translate(-50%, -50%); background: #818cf8; box-shadow: 0 0 20px rgba(129,140,248,0.4); width: clamp(6px, 1.4vmin, 14px); height: clamp(6px, 1.4vmin, 14px); }
 
-      <!-- Why PRO -->
-      <div class="features">
-        <h2 style="margin: 0 0 1.5rem; text-align: center;">Why ContextCut PRO</h2>
-        <ul>
-          <li>
-            <span class="icon">🖥️</span>
-            <div>
-              <div class="label">Multi-Device</div>
-              <div class="desc">Works on desktop, laptop, and server — 3 seats included</div>
-            </div>
-          </li>
-          <li>
-            <span class="icon">⚡</span>
-            <div>
-              <div class="label">Zero Config</div>
-              <div class="desc">Files auto-index in the background. No manual re-indexing.</div>
-            </div>
-          </li>
-          <li>
-            <span class="icon">📊</span>
-            <div>
-              <div class="label">Token Savings Dashboard</div>
-              <div class="desc">See exactly what you saved on every query</div>
-            </div>
-          </li>
-          <li>
-            <span class="icon">🔧</span>
-            <div>
-              <div class="label">One-Command Install</div>
-              <div class="desc"><code style="background:#0f172a;padding:2px 8px;border-radius:4px;">curl | bash</code> and you're done</div>
-            </div>
-          </li>
-        </ul>
-      </div>
+  .hl-client, .hl-proxy, .hl-llm { color: rgba(255,255,255,0.45); }
+  .hl-cloud { color: rgba(239,68,68,0.55); }
+  .hl-kb { color: rgba(129,140,248,0.65); }
 
-      <h2 style="text-align: center; margin: 3rem 0">Ready to Install?</h2>
-      <p style="text-align: center; font-size: 1.2rem">
-        One command on Mac/Windows/Linux → Proxy on :18788 + beautiful dashboard
-        on :18787
-      </p>
+  #hv-badge-before, #hv-badge-after {
+    position: absolute; top: 10%;
+    font-size: clamp(1rem, 3vmin, 2rem); font-weight: 800;
+    letter-spacing: -0.03em; pointer-events: none; transition: opacity 0.8s;
+  }
+  #hv-badge-before { left: 50%; transform: translateX(-50%); color: rgba(239,68,68,0.12); }
+  #hv-badge-after  { left: 50%; color: rgba(34,211,238,0.12); }
 
-      <div style="text-align: center; margin: 3rem 0">
-        <a
-          href="https://5984630877416.gumroad.com/l/ContextCut-Pro"
-          class="cta"
-          style="
-            display: inline-block;
-            font-size: 1.3rem;
-            padding: 1.2rem 3rem;
-            text-decoration: none;
-          "
-        >
-          Download ContextCut PRO</a
-        >
-      </div>
-      <footer style="text-align: center; margin-top: 4rem; color: #64748b">
-        © 2026 ContextCut • Built for homelab power users
-      </footer>
+  /* ── Rest of page ── */
+  .install { padding: 80px 0; }
+  .install h2 { text-align: center; font-size: 2rem; font-weight: 700; margin-bottom: 12px; }
+  .install .sub { text-align: center; color: #94a3b8; margin-bottom: 40px; font-size: 1rem; }
+  .terminal {
+    background: #0d0d1a; border: 1px solid #1e1e30; border-radius: 12px;
+    padding: 20px 24px; max-width: 640px; margin: 0 auto;
+    font-family: "SF Mono", "Fira Code", "Cascadia Code", monospace; font-size: 0.9rem;
+    color: #7ee787; position: relative;
+  }
+  .terminal .prompt { color: #818cf8; }
+  .terminal .comment { color: #64748b; }
+  .terminal .cursor { display: inline-block; width: 8px; height: 1.1em; background: #818cf8; vertical-align: text-bottom; animation: blink 1s step-end infinite; }
+  @keyframes blink { 50% { opacity: 0; } }
+  .os-tabs {
+    display: flex; justify-content: center; gap: 4px; margin-top: 28px;
+    background: rgba(255,255,255,0.03); border-radius: 10px; padding: 4px;
+    max-width: 320px; margin-left: auto; margin-right: auto;
+  }
+  .os-tab {
+    padding: 8px 20px; border-radius: 8px; border: none; background: transparent;
+    color: #64748b; font-size: 0.85rem; cursor: pointer; font-weight: 500;
+    transition: all 0.2s;
+  }
+  .os-tab.active { background: rgba(99,102,241,0.15); color: #a5b4fc; }
+
+  .features { padding: 80px 0; }
+  .features h2 { text-align: center; font-size: 2rem; font-weight: 700; margin-bottom: 48px; }
+  .feature-grid {
+    display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
+    gap: 20px;
+  }
+  .feature-card {
+    background: rgba(18,18,30,0.6); border: 1px solid #1e1e30; border-radius: 14px;
+    padding: 28px; transition: border-color 0.25s, transform 0.2s;
+    backdrop-filter: blur(4px);
+  }
+  .feature-card:hover { border-color: #6366f1; transform: translateY(-3px); }
+  .feature-card .icon {
+    width: 44px; height: 44px; border-radius: 10px; display: flex; align-items: center; justify-content: center;
+    font-size: 1.3rem; margin-bottom: 16px;
+  }
+  .feature-card h3 { font-size: 1.05rem; font-weight: 600; margin-bottom: 8px; }
+  .feature-card p { font-size: 0.9rem; color: #94a3b8; line-height: 1.6; }
+
+  .professions { padding: 80px 0; }
+  .professions h2 { text-align: center; font-size: 2rem; font-weight: 700; margin-bottom: 48px; }
+  .prof-grid {
+    display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 16px;
+  }
+  .prof-card {
+    background: rgba(18,18,30,0.4); border: 1px solid #1e1e30; border-radius: 12px;
+    padding: 24px; text-align: center; transition: border-color 0.25s, transform 0.2s;
+  }
+  .prof-card:hover { border-color: #a855f7; transform: translateY(-2px); }
+  .prof-card .emoji { font-size: 2rem; margin-bottom: 8px; }
+  .prof-card h4 { font-size: 1rem; font-weight: 600; margin-bottom: 4px; }
+  .prof-card p { font-size: 0.8rem; color: #64748b; }
+
+  .how-it-works { padding: 80px 0; }
+  .how-it-works h2 { text-align: center; font-size: 2rem; font-weight: 700; margin-bottom: 48px; }
+  .steps {
+    display: grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); gap: 24px;
+  }
+  .step {
+    text-align: center; padding: 32px 20px;
+    background: rgba(18,18,30,0.4); border: 1px solid #1e1e30; border-radius: 14px;
+  }
+  .step .num {
+    width: 48px; height: 48px; margin: 0 auto 16px; border-radius: 50%;
+    background: linear-gradient(135deg, rgba(99,102,241,0.15), rgba(168,85,247,0.15));
+    border: 1px solid rgba(99,102,241,0.2);
+    display: flex; align-items: center; justify-content: center;
+    font-weight: 700; font-size: 1.1rem; color: #a5b4fc;
+  }
+  .step h3 { font-size: 1.05rem; font-weight: 600; margin-bottom: 8px; }
+  .step p { font-size: 0.9rem; color: #94a3b8; line-height: 1.6; max-width: 240px; margin: 0 auto; }
+
+  .security { padding: 80px 0; }
+  .security h2 { text-align: center; font-size: 2rem; font-weight: 700; margin-bottom: 12px; }
+  .security .sub { text-align: center; color: #94a3b8; margin-bottom: 48px; font-size: 1rem; }
+  .security-grid {
+    display: grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); gap: 16px;
+  }
+  .sec-item {
+    background: rgba(18,18,30,0.4); border: 1px solid #1e1e30; border-radius: 10px;
+    padding: 20px; display: flex; gap: 14px; align-items: flex-start;
+  }
+  .sec-item .check { color: #10b981; font-size: 1.1rem; flex-shrink: 0; margin-top: 2px; }
+  .sec-item h4 { font-size: 0.95rem; font-weight: 600; margin-bottom: 4px; }
+  .sec-item p { font-size: 0.85rem; color: #64748b; line-height: 1.5; }
+
+  .pricing { padding: 80px 0; }
+  .pricing h2 { text-align: center; font-size: 2rem; font-weight: 700; margin-bottom: 12px; }
+  .pricing .sub { text-align: center; color: #94a3b8; margin-bottom: 48px; font-size: 1rem; }
+  .price-card {
+    max-width: 400px; margin: 0 auto;
+    background: linear-gradient(135deg, rgba(18,18,30,0.8), rgba(18,18,30,0.4));
+    border: 1px solid #1e1e30; border-radius: 16px; padding: 40px;
+    text-align: center; position: relative; overflow: hidden;
+  }
+  .price-card::before {
+    content: ''; position: absolute; top: 0; left: 0; right: 0;
+    height: 3px; background: linear-gradient(90deg, #6366f1, #a855f7, #22d3ee);
+  }
+  .price-card .amount { font-size: 3rem; font-weight: 800; color: #e2e8f0; margin: 12px 0; }
+  .price-card .amount small { font-size: 1rem; font-weight: 400; color: #64748b; }
+  .price-card .tagline { color: #94a3b8; font-size: 0.9rem; margin-bottom: 24px; }
+  .price-card ul { list-style: none; text-align: left; margin: 24px 0 32px; }
+  .price-card li { padding: 8px 0; font-size: 0.9rem; color: #cbd5e1; display: flex; align-items: center; gap: 10px; }
+  .price-card li .tick { color: #10b981; }
+
+  footer {
+    text-align: center; padding: 48px 0 32px;
+    border-top: 1px solid rgba(255,255,255,0.04); color: #475569; font-size: 0.85rem;
+  }
+  footer a { color: #64748b; text-decoration: none; }
+  footer a:hover { color: #94a3b8; }
+  footer .links { display: flex; justify-content: center; gap: 24px; margin-bottom: 16px; flex-wrap: wrap; }
+
+  ::-webkit-scrollbar { width: 8px; }
+  ::-webkit-scrollbar-track { background: #07070d; }
+  ::-webkit-scrollbar-thumb { background: #1e1e30; border-radius: 4px; }
+  ::-webkit-scrollbar-thumb:hover { background: #2e2e40; }
+
+  @media (max-width: 640px) {
+    .hero { padding: 40px 0 20px; }
+    .hero .cta-group { flex-direction: column; align-items: center; }
+    .metrics { gap: 24px; }
+    nav .nav-links a:not(.nav-cta) { display: none; }
+  }
+</style>
+</head>
+<body>
+
+<div class="glow-top-right"></div>
+<div class="glow-bottom-left"></div>
+
+<!-- ── Nav ── -->
+<nav class="container">
+  <div class="logo">ContextCut<span>PRO</span></div>
+  <div class="nav-links">
+    <a href="#how">How It Works</a>
+    <a href="#features">Features</a>
+    <a href="#pricing">Pricing</a>
+    <a href="#security">Security</a>
+    <a href="https://github.com/StevoKeano/ContextCut-PRO">GitHub</a>
+    <a href="https://5984630877416.gumroad.com/l/ContextCut-Pro" class="nav-cta">Get PRO</a>
+  </div>
+</nav>
+
+<!-- ── Hero ── -->
+<section class="hero container">
+  <div class="badge">&#9679; 100% Local &#183; No Cloud &#183; No Telemetry</div>
+  <h1>The RAG proxy that<br>respects your privacy.</h1>
+  <p>
+    ContextCut PRO sits between your AI tools and your local LLM. It injects
+    relevant context from your knowledge base into every prompt — all on your
+    machine. Zero data ever leaves your network.
+  </p>
+  <div class="cta-group">
+    <a href="https://5984630877416.gumroad.com/l/ContextCut-Pro" class="btn-primary">
+      Buy Now — $99.88 Lifetime &rarr;
+    </a>
+    <a href="#install" class="btn-secondary">
+      &#9661; Install Guide
+    </a>
+  </div>
+</section>
+
+<!-- ── Hero animation ── -->
+<div class="hero-visual" id="hv">
+  <canvas id="hv-canvas"></canvas>
+
+  <div class="hl-label" id="hv-client">Your AI App</div>
+  <div class="hl-dot" id="hv-dot-client"></div>
+
+  <div class="hl-label hl-proxy" id="hv-proxy">ContextCut PRO</div>
+  <div class="hl-dot" id="hv-dot-proxy"></div>
+
+  <div class="hl-label hl-llm" id="hv-llm">Local LLM</div>
+  <div class="hl-dot" id="hv-dot-llm"></div>
+
+  <div class="hl-label hl-cloud" id="hv-cloud">&#9729; Cloud LLM</div>
+  <div class="hl-dot" id="hv-dot-cloud"></div>
+
+  <div class="hl-label hl-kb" id="hv-kb">Knowledge Base</div>
+  <div class="hl-dot" id="hv-dot-kb"></div>
+
+  <div class="hl-label" id="hv-local">&#9670; 100% LOCAL</div>
+
+  <div id="hv-badge-before">&#9729; BEFORE</div>
+  <div id="hv-badge-after">&#9670; AFTER WITH CONTEXTCUT-PRO</div>
+</div>
+
+<!-- ── Metrics ── -->
+<div class="container">
+  <div class="metrics">
+    <div><div class="num"><span>60+</span></div><div class="label">Starter Knowledge Packs</div></div>
+    <div><div class="num"><span>3</span> seats</div><div class="label">One-time purchase</div></div>
+    <div><div class="num"><span>50&ndash;90</span>%</div><div class="label">Token savings</div></div>
+    <div><div class="num"><span>Zero</span></div><div class="label">Data leaving your network</div></div>
+  </div>
+</div>
+
+<!-- ── Install ── -->
+<section class="install container" id="install">
+  <h2>One command. Done.</h2>
+  <p class="sub">Run this on any machine with Docker + Ollama.</p>
+  <div class="terminal">
+    <span class="comment"># Install ContextCut PRO &rarr; proxy on :18788, dashboard on :18787</span><br>
+    <span class="prompt">$</span> curl -fsSL <span style="color:#a5b4fc;">"https://api.contextcut-pro.com/install/CC-PRO-<span style="color:#fbbf24;">your-license-key</span>"</span> | bash<span class="cursor">&nbsp;</span>
+  </div>
+  <div class="os-tabs">
+    <span class="os-tab active">macOS</span>
+    <span class="os-tab">Linux</span>
+    <span class="os-tab">Windows</span>
+  </div>
+</section>
+
+<!-- ── How It Works ── -->
+<section class="how-it-works container" id="how">
+  <h2>How It Works</h2>
+  <div class="steps">
+    <div class="step">
+      <div class="num">1</div>
+      <h3>Drop Your Docs In</h3>
+      <p>Add <code style="background:#1e1e30;padding:1px 6px;border-radius:4px;font-size:0.85rem;">.md</code> files to the knowledge folder. Auto-indexed.</p>
     </div>
+    <div class="step">
+      <div class="num">2</div>
+      <h3>Point Your Client</h3>
+      <p>Change your LLM endpoint to <code style="background:#1e1e30;padding:1px 6px;border-radius:4px;font-size:0.85rem;">localhost:18788</code>. No code changes.</p>
+    </div>
+    <div class="step">
+      <div class="num">3</div>
+      <h3>Smart Injection</h3>
+      <p>Only relevant chunks pass the threshold. Irrelevant queries cost ~5 tokens.</p>
+    </div>
+  </div>
+</section>
 
-    <script>
-      function updateCalc() {
-        const queries = parseInt(document.getElementById("queries").value);
-        const costPerK = parseFloat(document.getElementById("cost").value);
-        const avgTokens = parseInt(document.getElementById("strategy").value);
+<!-- ── Features ── -->
+<section class="features container" id="features">
+  <h2>What You Get</h2>
+  <div class="feature-grid">
+    <div class="feature-card">
+      <div class="icon" style="background:rgba(99,102,241,0.12);color:#818cf8;">&#9670;</div>
+      <h3>Transparent RAG Proxy</h3>
+      <p>Drop-in replacement for any OpenAI-compatible LLM. Change one URL, get context injection instantly.</p>
+    </div>
+    <div class="feature-card">
+      <div class="icon" style="background:rgba(16,185,129,0.12);color:#34d399;">&#9400;</div>
+      <h3>Smart Context Window</h3>
+      <p>Real-time CTX% bar shows exactly how much of your window is used. Trimmed responses never exceed the limit.</p>
+    </div>
+    <div class="feature-card">
+      <div class="icon" style="background:rgba(168,85,247,0.12);color:#c084fc;">&#9632;</div>
+      <h3>Live Dashboard</h3>
+      <p>Split-panel: streaming chat + per-request token analytics, source hits, and relevance scores.</p>
+    </div>
+    <div class="feature-card">
+      <div class="icon" style="background:rgba(34,211,238,0.12);color:#22d3ee;">&#9678;</div>
+      <h3>File Watcher</h3>
+      <p>Drop a <code>.md</code> file in the knowledge folder — it's ingested, chunked, and searchable in seconds.</p>
+    </div>
+    <div class="feature-card">
+      <div class="icon" style="background:rgba(251,191,36,0.12);color:#fbbf24;">&#9733;</div>
+      <h3>Multi-Provider</h3>
+      <p>Ollama, OpenAI, OpenRouter, Anthropic, xAI — any OpenAI-compatible endpoint works out of the box.</p>
+    </div>
+    <div class="feature-card">
+      <div class="icon" style="background:rgba(239,68,68,0.12);color:#f87171;">&#9679;</div>
+      <h3>Session History</h3>
+      <p>Every request logged to SQLite. Searchable archive with per-request breakdowns and token savings.</p>
+    </div>
+    <div class="feature-card">
+      <div class="icon" style="background:rgba(99,102,241,0.12);color:#818cf8;">&#9830;</div>
+      <h3>MCP Knowledge Server</h3>
+      <p>Expose your knowledge base via Model Context Protocol — usable from Claude Desktop, Cursor, VS Code, and more.</p>
+    </div>
+    <div class="feature-card">
+      <div class="icon" style="background:rgba(16,185,129,0.12);color:#34d399;">&#9650;</div>
+      <h3>Embedding Choice</h3>
+      <p>Local (Ollama nomic-embed-text) or cloud (Voyage AI). Your data, your embedding, your call.</p>
+    </div>
+  </div>
+</section>
 
-        document.getElementById("qval").textContent = queries.toLocaleString();
+<!-- ── Professions ── -->
+<section class="professions container">
+  <h2>Starter Packs for Professionals</h2>
+  <div class="prof-grid">
+    <div class="prof-card"><div class="emoji">&#9878;</div><h4>Lawyer</h4><p>Litigation, real estate, SMB, contracts</p></div>
+    <div class="prof-card"><div class="emoji">&#128202;</div><h4>CPA</h4><p>Corporate, personal, SMB tax &amp; books</p></div>
+    <div class="prof-card"><div class="emoji">&#9877;</div><h4>Doctor</h4><p>Clinical, billing, practice, research</p></div>
+    <div class="prof-card"><div class="emoji">&#127968;</div><h4>Realtor</h4><p>Listings, contracts, disclosures</p></div>
+    <div class="prof-card"><div class="emoji">&#128188;</div><h4>Advisor</h4><p>Estate, investment, retirement</p></div>
+    <div class="prof-card"><div class="emoji">&#127959;</div><h4>Architect</h4><p>Contracts, regulatory compliance</p></div>
+    <div class="prof-card"><div class="emoji">&#128187;</div><h4>Tech</h4><p>Contracts, privacy compliance</p></div>
+    <div class="prof-card"><div class="emoji">&#128200;</div><h4>Consultant</h4><p>Methodology, deliverables, engagement</p></div>
+  </div>
+</section>
 
-        const currentCost = (((queries * avgTokens) / 1000) * costPerK).toFixed(
-          0,
-        );
-        const newTokens = 890; // average from your tests
-        const newCost = (((queries * newTokens) / 1000) * costPerK).toFixed(0);
-        const savings = currentCost - newCost;
+<!-- ── Security ── -->
+<section class="security container" id="security">
+  <h2>Privacy by Architecture</h2>
+  <p class="sub">Designed for professionals who cannot send client data to cloud AI services.</p>
+  <div class="security-grid">
+    <div class="sec-item">
+      <div class="check">&#10003;</div>
+      <div><h4>Localhost-only binding</h4><p>Dashboard (:18787), proxy (:18788), and Qdrant (:6333) all bind to 127.0.0.1. Not reachable from LAN or WAN.</p></div>
+    </div>
+    <div class="sec-item">
+      <div class="check">&#10003;</div>
+      <div><h4>No telemetry</h4><p>Zero outbound data. No document content, queries, or metadata is ever transmitted. The only outbound traffic is a lightweight heartbeat every 15 minutes to verify your license.</p></div>
+    </div>
+    <div class="sec-item">
+      <div class="check">&#10003;</div>
+      <div><h4>Open proxy prevention</h4><p>Only <code>/v1/chat/completions</code>, <code>/api/chat</code>, <code>/api/generate</code>, and <code>/v1/completions</code> are forwarded. All other paths return 404.</p></div>
+    </div>
+    <div class="sec-item">
+      <div class="check">&#10003;</div>
+      <div><h4>HMAC-verified licensing</h4><p>Gumroad webhooks are verified via HMAC-SHA256 signature before processing. License check is stateless and minimal.</p></div>
+    </div>
+    <div class="sec-item">
+      <div class="check">&#10003;</div>
+      <div><h4>Ollama hardening</h4><p>Management endpoints (<code>/api/pull</code>, <code>/api/push</code>, <code>/api/delete</code>, <code>/api/copy</code>, <code>/api/create</code>) return 403 through the proxy.</p></div>
+    </div>
+    <div class="sec-item">
+      <div class="check">&#10003;</div>
+      <div><h4>Open source core</h4><p>Full source available on GitHub. No binary blobs. Every security claim is verifiable by inspection. MIT-licensed free edition available.</p></div>
+    </div>
+  </div>
+</section>
 
-        document.getElementById("currentCost").textContent = "$" + currentCost;
-        document.getElementById("newCost").textContent = "$" + newCost;
-        document.getElementById("savings").textContent =
-          "$" + savings + " / month";
+<!-- ── Pricing ── -->
+<section class="pricing container" id="pricing">
+  <h2>Simple Pricing</h2>
+  <p class="sub">One purchase. No subscriptions. No surprises.</p>
+  <div class="price-card">
+    <h3 style="font-size:1.2rem;font-weight:600;">ContextCut PRO</h3>
+    <div class="amount">$99.88 <small>one-time</small></div>
+    <p class="tagline">3 seats &middot; Lifetime &middot; No subscription</p>
+    <ul>
+      <li><span class="tick">&#10003;</span> Transparent RAG proxy (drop-in replacement)</li>
+      <li><span class="tick">&#10003;</span> Real-time dashboard with token analytics</li>
+      <li><span class="tick">&#10003;</span> 60+ domain-specific starter knowledge packs</li>
+      <li><span class="tick">&#10003;</span> File watcher — auto-ingest on change</li>
+      <li><span class="tick">&#10003;</span> MCP Knowledge Server for Claude/Cursor/VS Code</li>
+      <li><span class="tick">&#10003;</span> Multi-provider: Ollama, OpenAI, OpenRouter, Anthropic</li>
+      <li><span class="tick">&#10003;</span> Priority email support</li>
+      <li><span class="tick">&#10003;</span> Lifetime updates</li>
+    </ul>
+    <a href="https://5984630877416.gumroad.com/l/ContextCut-Pro" class="btn-primary" style="width:100%;justify-content:center;">
+      Buy PRO &rarr;
+    </a>
+  </div>
+</section>
+
+<!-- ── Footer ── -->
+<footer class="container">
+  <div class="links">
+    <a href="https://github.com/StevoKeano/ContextCut-PRO">GitHub</a>
+    <a href="https://5984630877416.gumroad.com/l/ContextCut-Pro">Buy</a>
+    <a href="mailto:support@contextcut-pro.com">Contact</a>
+    <a href="https://api.contextcut-pro.com/promo">Legacy Page</a>
+  </div>
+  <p>&copy; 2026 ContextCut &middot; MIT License (free edition) &middot; Built for homelab power users &amp; privacy-conscious professionals</p>
+</footer>
+
+<script>
+// ── OS tab toggle ──
+document.querySelectorAll('.os-tab').forEach(tab => {
+  tab.addEventListener('click', () => {
+    document.querySelectorAll('.os-tab').forEach(t => t.classList.remove('active'));
+    tab.classList.add('active');
+  });
+});
+
+// ── Hero animation ──
+(() => {
+  const container = document.getElementById('hv');
+  const canvas = document.getElementById('hv-canvas');
+  const ctx = canvas.getContext('2d');
+
+  function resize() {
+    const rect = container.getBoundingClientRect();
+    canvas.width = rect.width;
+    canvas.height = rect.height;
+  }
+  window.addEventListener('resize', resize);
+
+  const W = () => canvas.width;
+  const H = () => canvas.height;
+  const s = () => Math.min(W(), H()) / 600;
+
+  // ── Node positions (relative to container) ──
+  const P = () => ({
+    client: { x: W() * 0.08, y: H() * 0.80 },
+    proxy:  { x: W() * 0.38, y: H() * 0.80 },
+    llm:    { x: W() * 0.82, y: H() * 0.80 },
+    cloud:  { x: W() * 0.82, y: H() * 0.80 },
+    kb:     { x: W() * 0.38, y: H() * 0.24 },
+  });
+
+  // ── Phase timeline ──
+  function getPhase(t) {
+    if (t < 3) return 'before';
+    if (t < 6) return 'transition';
+    return 'after';
+  }
+
+  function lerp(a, b, t) { return a + (b - a) * t; }
+  function clamp(v, mn, mx) { return Math.max(mn, Math.min(mx, v)); }
+
+  function nodeOpacity(phase, t) {
+    const cloudVis  = phase === 'before' ? 1 : phase === 'transition' ? clamp(1 - (t - 3) / 2, 0, 1) : 0;
+    const proxyVis  = phase === 'before' ? 0 : phase === 'transition' ? clamp((t - 3) / 1.5, 0, 1) : 1;
+    const kbVis     = phase === 'before' ? 0 : phase === 'transition' ? clamp((t - 3.5) / 1.5, 0, 1) : 1;
+    const llmVis    = phase === 'before' ? 0 : phase === 'transition' ? clamp((t - 4) / 1.5, 0, 1) : 1;
+    const localVis  = phase === 'after' ? 1 : phase === 'transition' && t > 4.5 ? clamp((t - 4.5) / 1, 0, 1) : 0;
+    return { cloudVis, proxyVis, kbVis, llmVis, localVis };
+  }
+
+  // ── KB orbiting docs ──
+  class DocNode {
+    constructor() {
+      this.angle = Math.random() * Math.PI * 2;
+      this.radius = 45 + Math.random() * 18;
+      this.speed = (0.003 + Math.random() * 0.004) * (Math.random() > 0.5 ? 1 : -1);
+      this.hue = 220 + Math.random() * 50;
+      this.size = 2 + Math.random() * 3;
+      this.alpha = 0.2 + Math.random() * 0.3;
+      this.phase = Math.random() * Math.PI * 2;
+    }
+    draw(time, kbOpacity, p) {
+      if (kbOpacity < 0.01) return;
+      const x = p.kb.x + Math.cos(this.angle) * this.radius;
+      const y = p.kb.y + Math.sin(this.angle) * this.radius;
+      const sz = this.size * (1 + 0.2 * Math.sin(time * 0.002 + this.phase));
+      const a = this.alpha * (0.8 + 0.2 * Math.sin(time * 0.002 + this.phase)) * kbOpacity;
+      ctx.beginPath();
+      ctx.arc(x, y, sz, 0, Math.PI * 2);
+      ctx.fillStyle = `hsla(${this.hue}, 60%, 65%, ${a})`;
+      ctx.shadowColor = `hsla(${this.hue}, 60%, 65%, ${a * 0.4})`;
+      ctx.shadowBlur = sz * 4;
+      ctx.fill(); ctx.shadowBlur = 0;
+    }
+    update() { this.angle += this.speed; }
+  }
+
+  // ── Particles ──
+  class Particle {
+    constructor() { this.reset('before'); }
+    reset(phase) {
+      this.progress = Math.random();
+      this.speed = 0.003 + Math.random() * 0.005;
+      this.size = 2 + Math.random() * 3;
+      this.alpha = 0.5 + Math.random() * 0.4;
+      this.phase = Math.random() * Math.PI * 2;
+      this.trail = [];
+      this.pathType = this.pickPath(phase);
+    }
+    pickPath(phase) {
+      if (phase === 'before') return Math.random() > 0.5 ? 'client-cloud' : 'cloud-client';
+      const paths = ['client-proxy','proxy-kb','kb-proxy','proxy-llm','llm-proxy','proxy-client'];
+      return paths[Math.floor(Math.random() * paths.length)];
+    }
+    getWaypoints(p) {
+      const paths = {
+        'client-cloud':  { a: p.client, c: { x: (p.client.x + W()) / 2, y: p.client.y - 30 }, b: p.cloud, hue: 0 },
+        'cloud-client':  { a: p.cloud, c: { x: (W() + p.client.x) / 2, y: p.cloud.y - 30 },   b: p.client, hue: 0 },
+        'client-proxy':  { a: p.client, c: { x: (p.client.x + p.proxy.x) / 2, y: p.client.y - 24 }, b: p.proxy, hue: 190 },
+        'proxy-kb':      { a: p.proxy,  c: { x: p.proxy.x, y: (p.proxy.y + p.kb.y) / 2 },          b: p.kb,    hue: 210 },
+        'kb-proxy':      { a: p.kb,     c: { x: p.kb.x, y: (p.kb.y + p.proxy.y) / 2 },              b: p.proxy, hue: 260 },
+        'proxy-llm':     { a: p.proxy,  c: { x: (p.proxy.x + p.llm.x) / 2, y: p.proxy.y - 24 },     b: p.llm,   hue: 35 },
+        'llm-proxy':     { a: p.llm,    c: { x: (p.llm.x + p.proxy.x) / 2, y: p.llm.y - 24 },       b: p.proxy, hue: 170 },
+        'proxy-client':  { a: p.proxy,  c: { x: (p.proxy.x + p.client.x) / 2, y: p.client.y - 24 },  b: p.client, hue: 180 },
+      };
+      return paths[this.pathType] || paths['client-proxy'];
+    }
+    getPos(p) {
+      const wp = this.getWaypoints(p);
+      const t = this.progress;
+      const mt = 1 - t;
+      return {
+        x: mt * mt * wp.a.x + 2 * mt * t * wp.c.x + t * t * wp.b.x,
+        y: mt * mt * wp.a.y + 2 * mt * t * wp.c.y + t * t * wp.b.y,
+      };
+    }
+    update(phase, p) {
+      if (phase === 'before' && !['client-cloud','cloud-client'].includes(this.pathType)) {
+        this.pathType = this.pickPath(phase); this.progress = 0;
+      } else if (phase === 'after' && ['client-cloud','cloud-client'].includes(this.pathType)) {
+        this.pathType = this.pickPath(phase); this.progress = 0;
       }
-      updateCalc();
-    </script>
-  </body>
+      this.progress += this.speed;
+      if (this.progress > 1) this.progress = 0;
+      const pos = this.getPos(p);
+      this.trail.push(pos);
+      if (this.trail.length > 12) this.trail.shift();
+    }
+    draw(opacity, p) {
+      if (opacity < 0.01) return;
+      const wp = this.getWaypoints(p);
+      const hue = wp.hue;
+      for (let i = 0; i < this.trail.length; i++) {
+        const a = (i / this.trail.length) * this.alpha * 0.2 * opacity;
+        const sz = (i / this.trail.length) * this.size * 0.4 * opacity;
+        ctx.beginPath();
+        ctx.arc(this.trail[i].x, this.trail[i].y, sz, 0, Math.PI * 2);
+        ctx.fillStyle = `hsla(${hue}, 80%, 65%, ${a})`;
+        ctx.fill();
+      }
+      const pos = this.getPos(p);
+      const pulse = 1 + 0.15 * Math.sin(this.progress * Math.PI * 4 + this.phase);
+      ctx.beginPath();
+      ctx.arc(pos.x, pos.y, this.size * pulse * opacity, 0, Math.PI * 2);
+      ctx.fillStyle = `hsla(${hue}, 90%, 70%, ${this.alpha * opacity})`;
+      ctx.shadowColor = `hsla(${hue}, 90%, 70%, ${0.5 * opacity})`;
+      ctx.shadowBlur = this.size * 6;
+      ctx.fill(); ctx.shadowBlur = 0;
+    }
+  }
+
+  // ── Draw helpers ──
+  function drawGlow(cx, cy, r, color, time, speed, baseA, opacity) {
+    if (opacity < 0.01) return;
+    const sc = s();
+    const grad = ctx.createRadialGradient(cx, cy, 0, cx, cy, r * sc);
+    const pulse = baseA * (1 + 0.3 * Math.sin(time * speed));
+    grad.addColorStop(0, `rgba(${color},${pulse * opacity})`);
+    grad.addColorStop(0.6, `rgba(${color},${pulse * 0.4 * opacity})`);
+    grad.addColorStop(1, `rgba(${color},0)`);
+    ctx.fillStyle = grad;
+    ctx.beginPath(); ctx.arc(cx, cy, r * sc, 0, Math.PI * 2); ctx.fill();
+  }
+
+  function drawCloud(cx, cy, time, opacity) {
+    if (opacity < 0.01) return;
+    const sc = s();
+    const r = 32 * sc;
+    ctx.save();
+    ctx.translate(cx, cy);
+    const a = 0.2 * opacity;
+    ctx.fillStyle = `rgba(239,68,68,${a * 0.15})`;
+    ctx.strokeStyle = `rgba(239,68,68,${a * 0.4})`;
+    ctx.lineWidth = 1.5;
+    ctx.beginPath(); ctx.arc(0, r * 0.1, r * 0.6, 0, Math.PI * 2); ctx.fill(); ctx.stroke();
+    ctx.beginPath(); ctx.arc(-r * 0.45, -r * 0.25, r * 0.35, 0, Math.PI * 2); ctx.fill(); ctx.stroke();
+    ctx.beginPath(); ctx.arc(0, -r * 0.35, r * 0.45, 0, Math.PI * 2); ctx.fill(); ctx.stroke();
+    ctx.beginPath(); ctx.arc(r * 0.45, -r * 0.25, r * 0.35, 0, Math.PI * 2); ctx.fill(); ctx.stroke();
+    ctx.fillStyle = 'rgba(7,7,13,1)';
+    ctx.fillRect(-r * 0.65, r * 0.1 - 1, r * 1.3, r * 0.3);
+    ctx.strokeStyle = `rgba(239,68,68,${a * 0.3})`;
+    ctx.lineWidth = 1;
+    ctx.beginPath(); ctx.moveTo(-r * 0.6, r * 0.1); ctx.lineTo(r * 0.6, r * 0.1); ctx.stroke();
+    ctx.strokeStyle = `rgba(239,68,68,${a * 0.25})`;
+    ctx.lineWidth = 0.5;
+    ctx.setLineDash([3 * sc, 5 * sc]);
+    ctx.beginPath(); ctx.moveTo(-r * 0.65, r * 0.15); ctx.lineTo(r * 0.65, r * 0.15); ctx.stroke();
+    ctx.setLineDash([]);
+    ctx.restore();
+  }
+
+  const lfPx = () => Math.round(Math.max(12, Math.min(Math.min(window.innerWidth, window.innerHeight) * 0.018, 21)));
+
+  function drawBeforeArrows(time, opacity, p) {
+    if (opacity < 0.01) return;
+    const cx = p.client.x, cy = p.client.y;
+    const dx = p.cloud.x - cx, dy = p.cloud.y - cy;
+    const dist = Math.sqrt(dx * dx + dy * dy);
+    const nx = dx / dist, ny = dy / dist;
+    const progress = (time * 0.0004) % 1;
+    const sc = s();
+    for (let i = 0; i < 6; i++) {
+      const pp = ((progress + i * 0.12) % 1);
+      const x = cx + nx * lerp(30, dist - 30, pp) + Math.sin(pp * Math.PI * 6 + i) * 6;
+      const y = cy + ny * lerp(30, dist - 30, pp) + Math.cos(pp * Math.PI * 5 + i) * 4;
+      const dotA = 0.3 * (1 - Math.abs(pp - 0.5) * 2) * opacity;
+      ctx.beginPath(); ctx.arc(x, y, 3 * sc, 0, Math.PI * 2);
+      ctx.fillStyle = `rgba(239,68,68,${dotA})`;
+      ctx.fill();
+    }
+    const lfs = lfPx();
+    ctx.fillStyle = `rgba(239,68,68,${0.3 * opacity})`;
+    ctx.font = `600 ${lfs}px -apple-system, sans-serif`;
+    ctx.textAlign = 'center';
+    ctx.fillText('⚠ data leaves your machine', (cx + W()) / 2, p.client.y - 50 * sc);
+  }
+
+  function drawAfterLabels(time, opacity, p) {
+    if (opacity < 0.01) return;
+    const sc = s();
+    const lfs = lfPx();
+    const a = 0.15 * opacity;
+    ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+
+    const cx = (p.client.x + p.proxy.x) / 2, cy = p.client.y;
+    const rx = (p.proxy.x + p.llm.x) / 2, ry = p.proxy.y;
+
+    ctx.font = `600 ${lfs}px -apple-system, sans-serif`;
+    ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+
+    // Left side: deliver (response) above, request below
+    ctx.fillStyle = `rgba(34,211,238,${0.2 * opacity})`;
+    ctx.fillText('← deliver', cx, cy - 54 * sc);
+
+    ctx.fillStyle = `rgba(148,163,184,${a})`;
+    ctx.fillText('request', cx, cy - 38 * sc);
+
+    // KB vertical
+    ctx.fillText('search', p.proxy.x, (p.proxy.y + p.kb.y) / 2 - 8 * sc);
+    ctx.fillText('results', p.kb.x + 52 * sc, (p.kb.y + p.proxy.y) / 2 + 8 * sc);
+
+    // Right side: streaming response (reply) above, forward below
+    ctx.fillStyle = `rgba(34,211,238,${0.2 * opacity})`;
+    ctx.fillText('← streaming response', rx, ry - 54 * sc);
+
+    ctx.fillStyle = `rgba(148,163,184,${a})`;
+    ctx.fillText('forward + context', rx, ry - 38 * sc);
+  }
+
+  function drawConnectors(phase, opacity, p) {
+    ctx.lineWidth = 0.5;
+    if (phase === 'before') {
+      ctx.strokeStyle = `rgba(239,68,68,${0.08 * opacity})`;
+      ctx.beginPath(); ctx.moveTo(p.client.x, p.client.y - 20); ctx.lineTo(p.cloud.x, p.cloud.y - 20); ctx.stroke();
+    } else {
+      ctx.strokeStyle = `rgba(34,211,238,${0.08 * opacity})`;
+      ctx.beginPath(); ctx.moveTo(p.client.x, p.client.y - 20); ctx.lineTo(p.proxy.x, p.proxy.y - 20); ctx.stroke();
+      ctx.strokeStyle = `rgba(245,158,11,${0.08 * opacity})`;
+      ctx.beginPath(); ctx.moveTo(p.proxy.x, p.proxy.y - 20); ctx.lineTo(p.llm.x, p.llm.y - 20); ctx.stroke();
+      ctx.strokeStyle = `rgba(99,102,241,${0.08 * opacity})`;
+      ctx.beginPath(); ctx.moveTo(p.proxy.x, p.proxy.y); ctx.lineTo(p.kb.x, p.kb.y); ctx.stroke();
+    }
+  }
+
+  function drawProxyRing(cx, cy, time, opacity) {
+    if (opacity < 0.01) return;
+    const sc = s();
+    for (let i = 0; i < 3; i++) {
+      const angle = time * 0.0003 + (i * Math.PI * 2 / 3);
+      const r = 38 * sc;
+      const x = cx + Math.cos(angle) * r;
+      const y = cy + Math.sin(angle) * r;
+      ctx.beginPath(); ctx.arc(x, y, 3 * sc, 0, Math.PI * 2);
+      ctx.fillStyle = `hsla(${260 + i * 20}, 90%, 70%, ${(0.4 + 0.3 * Math.sin(time * 0.002 + i)) * opacity})`;
+      ctx.shadowColor = `hsla(${260 + i * 20}, 90%, 70%, ${0.4 * opacity})`;
+      ctx.shadowBlur = 12 * sc;
+      ctx.fill(); ctx.shadowBlur = 0;
+    }
+    for (let i = 0; i < 3; i++) {
+      const ph = ((time * 0.001 + i * 1.2) % 2.5);
+      const r = ph * 40 * sc;
+      const a = Math.max(0, 0.06 * (1 - ph / 2.5)) * opacity;
+      ctx.strokeStyle = `rgba(168,85,247,${a})`;
+      ctx.lineWidth = 1;
+      ctx.beginPath(); ctx.arc(cx, cy, r, 0, Math.PI * 2); ctx.stroke();
+    }
+  }
+
+  // ── Init ──
+  resize();
+  const docs = Array.from({ length: 20 }, () => new DocNode());
+  const particles = Array.from({ length: 16 }, () => new Particle());
+  let startTime = performance.now();
+
+  function anim(now) {
+    const elapsed = (now - startTime) / 1000;
+    const t = elapsed % 10;
+    const phase = getPhase(t);
+    const p = P();
+    const ops = nodeOpacity(phase, t);
+
+    // Update DOM labels
+    const el = id => document.getElementById(id);
+    el('hv-cloud').style.opacity = ops.cloudVis;
+    el('hv-dot-cloud').style.opacity = ops.cloudVis;
+    el('hv-proxy').style.opacity = ops.proxyVis;
+    el('hv-dot-proxy').style.opacity = ops.proxyVis;
+    el('hv-kb').style.opacity = ops.kbVis;
+    el('hv-dot-kb').style.opacity = ops.kbVis;
+    el('hv-llm').style.opacity = ops.llmVis;
+    el('hv-dot-llm').style.opacity = ops.llmVis;
+    el('hv-local').style.opacity = ops.localVis;
+    el('hv-badge-before').style.opacity = phase === 'before' ? 1 : phase === 'transition' ? clamp(1 - (t - 3) / 1, 0, 1) : 0;
+    el('hv-badge-after').style.opacity = phase === 'after' ? 1 : 0;
+
+    // Clear
+    ctx.fillStyle = 'rgba(7,7,13,0.6)';
+    ctx.fillRect(0, 0, W(), H());
+
+    // Glows
+    drawGlow(p.client.x, p.client.y, 40, '34,211,238', now, 0.0006, 0.05, 1);
+    drawGlow(p.proxy.x, p.proxy.y, 60, '168,85,247', now, 0.0005, 0.08, ops.proxyVis);
+    drawGlow(p.kb.x, p.kb.y, 120, '99,102,241', now, 0.0004, 0.06, ops.kbVis);
+    drawGlow(p.llm.x, p.llm.y, 40, '245,158,11', now, 0.0007, 0.05, ops.llmVis);
+    drawGlow(p.cloud.x, p.cloud.y, 40, '239,68,68', now, 0.0006, 0.05, ops.cloudVis);
+    drawCloud(p.cloud.x, p.cloud.y, now, ops.cloudVis);
+
+    drawConnectors(phase, 1, p);
+    drawProxyRing(p.proxy.x, p.proxy.y, now, ops.proxyVis);
+
+    const beforeOpacity = phase === 'before' ? 1 : phase === 'transition' ? clamp(1 - (t - 3) / 1.5, 0, 1) : 0;
+    drawBeforeArrows(now, beforeOpacity, p);
+
+    const afterOpacity = phase === 'after' ? 1 : 0;
+    drawAfterLabels(now, afterOpacity, p);
+
+    docs.forEach(d => { d.update(); d.draw(now, ops.kbVis, p); });
+    particles.forEach(part => part.update(phase, p));
+    particles.forEach(part => {
+      const op = ['client-cloud','cloud-client'].includes(part.pathType) ? beforeOpacity : afterOpacity;
+      part.draw(op, p);
+    });
+
+    requestAnimationFrame(anim);
+  }
+
+  resize();
+  anim(performance.now());
+})();
+</script>
+
+</body>
 </html>

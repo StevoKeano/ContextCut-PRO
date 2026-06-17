@@ -7,6 +7,7 @@ INSTALL_DIR="$HOME/contextcut"
 LOG_DIR="$HOME/.contextcut/logs"
 PLIST_PROXY="$HOME/Library/LaunchAgents/ai.contextcut.proxy.plist"
 PLIST_INGEST="$HOME/Library/LaunchAgents/ai.contextcut.ingest.plist"
+PLIST_MCP="$HOME/Library/LaunchAgents/ai.contextcut.mcp.plist"
 IS_MAC=false
 [ "$(uname)" = "Darwin" ] && IS_MAC=true
 
@@ -41,6 +42,7 @@ if [ -n "$CONTEXTCUT_LICENSE_KEY" ]; then
     KB_DIR="${KB_DIR:-$INSTALL_DIR/knowledge}"
     PROXY_PORT="${PROXY_PORT:-18788}"
     DASH_PORT="${DASH_PORT:-18787}"
+    MCP_PORT="${MCP_PORT:-8910}"
     CTX_LIMIT="${CTX_LIMIT:-32768}"
     MIN_SCORE="${MIN_SCORE:-0.50}"
   else
@@ -92,6 +94,9 @@ if ! $NONINTERACTIVE; then
     read -p "  Dashboard port [18787]: " DASH_PORT
     DASH_PORT="${DASH_PORT:-18787}"
 
+    read -p "  MCP knowledge server port [8910]: " MCP_PORT
+    MCP_PORT="${MCP_PORT:-8910}"
+
     read -p "  Model context limit [32768]: " CTX_LIMIT
     CTX_LIMIT="${CTX_LIMIT:-32768}"
 
@@ -107,6 +112,7 @@ if ! $NONINTERACTIVE; then
     echo "  KB dir      : $KB_DIR"
     echo "  Proxy       : http://localhost:$PROXY_PORT"
     echo "  Dashboard   : http://localhost:$DASH_PORT"
+    echo "  MCP server  : http://localhost:$MCP_PORT"
     echo "  CTX limit   : $CTX_LIMIT"
     echo "  Min score   : $MIN_SCORE"
     echo ""
@@ -340,6 +346,7 @@ curl -sf "$REPO/datasette.yml"          -o "$INSTALL_DIR/datasette.yml"
 curl -sf "$REPO/run_datasette.sh"       -o "$INSTALL_DIR/run_datasette.sh"
 curl -sf "$REPO/uninstall.sh"           -o "$INSTALL_DIR/uninstall.sh"
 curl -sf "$REPO/agent_handler.py"       -o "$INSTALL_DIR/agent_handler.py"
+curl -sf "$REPO/mcp_knowledge_server.py" -o "$INSTALL_DIR/mcp_knowledge_server.py"
 chmod +x "$INSTALL_DIR/uninstall.sh"
 chmod +x "$INSTALL_DIR/run_datasette.sh"
 
@@ -396,6 +403,7 @@ CONTEXTCUT_QDRANT_PORT=$QDRANT_PORT
 CONTEXTCUT_KB_DIR=$KB_DIR
 CONTEXTCUT_PROXY_PORT=$PROXY_PORT
 CONTEXTCUT_DASHBOARD_PORT=$DASH_PORT
+CONTEXTCUT_MCP_PORT=$MCP_PORT
 CONTEXTCUT_CTX_LIMIT=$CTX_LIMIT
 CONTEXTCUT_MIN_SCORE=$MIN_SCORE
 CONTEXTCUT_COLLECTION=contextcut
@@ -504,6 +512,44 @@ EOF
 </dict>
 </plist>
 EOF
+
+  cat > "$PLIST_MCP" << EOF
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>Label</key><string>ai.contextcut.mcp</string>
+  <key>Comment</key><string>ContextCut MCP Knowledge Server</string>
+  <key>RunAtLoad</key><true/>
+  <key>KeepAlive</key><true/>
+  <key>ThrottleInterval</key><integer>30</integer>
+  <key>ProgramArguments</key>
+  <array>
+    <string>$INSTALL_DIR/venv/bin/python</string>
+    <string>$INSTALL_DIR/mcp_knowledge_server.py</string>
+    <string>--transport</string>
+    <string>http</string>
+    <string>--port</string>
+    <string>$MCP_PORT</string>
+  </array>
+  <key>StandardOutPath</key><string>$LOG_DIR/mcp.log</string>
+  <key>StandardErrorPath</key><string>$LOG_DIR/mcp.err.log</string>
+  <key>WorkingDirectory</key><string>$INSTALL_DIR</string>
+  <key>EnvironmentVariables</key>
+  <dict>
+    <key>HOME</key><string>$HOME</string>
+    <key>PATH</key><string>$INSTALL_DIR/venv/bin:/usr/local/bin:/usr/bin:/bin</string>
+    <key>VOYAGE_API_KEY</key><string>$VOYAGE_KEY</string>
+    <key>CONTEXTCUT_QDRANT_HOST</key><string>$QDRANT_HOST</string>
+    <key>CONTEXTCUT_QDRANT_PORT</key><string>$QDRANT_PORT</string>
+    <key>CONTEXTCUT_KB_DIR</key><string>$KB_DIR</string>
+    <key>CONTEXTCUT_COLLECTION</key><string>contextcut</string>
+  </dict>
+</dict>
+</plist>
+EOF
+
+  plutil -lint "$PLIST_PROXY"  > /dev/null && echo "  Proxy plist OK"
 
   plutil -lint "$PLIST_PROXY"  > /dev/null && echo "  Proxy plist OK"
   plutil -lint "$PLIST_INGEST" > /dev/null && echo "  Ingest plist OK"
@@ -692,6 +738,7 @@ echo "  ContextCut installed successfully!"
 echo ""
 echo "  Dashboard:  http://localhost:$DASH_PORT"
 echo "  Proxy:      http://localhost:$PROXY_PORT"
+echo "  MCP server: http://localhost:$MCP_PORT"
 echo "  KB dir:     $KB_DIR"
 echo "  Logs:       $LOG_DIR"
 echo ""

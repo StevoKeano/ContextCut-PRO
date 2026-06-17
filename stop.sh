@@ -29,6 +29,18 @@ if [ -f "$ENV_FILE" ] && [ -f "$SECRET_FILE" ]; then
   fi
 fi
 
+# Stop MCP knowledge server
+MCP_PIDFILE="$INST/.mcp.pid"
+if [ -f "$MCP_PIDFILE" ]; then
+  PID=$(cat "$MCP_PIDFILE")
+  if kill -0 "$PID" 2>/dev/null; then
+    echo "Stopping MCP server (PID $PID)..."
+    kill "$PID"
+    echo "MCP server stopped."
+  fi
+  rm -f "$MCP_PIDFILE"
+fi
+
 # Stop proxy
 PROXY_PIDFILE="$INST/.proxy.pid"
 if [ -f "$PROXY_PIDFILE" ]; then

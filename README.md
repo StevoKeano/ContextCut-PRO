@@ -55,6 +55,7 @@ flowchart LR
 | Live context bar | ✅ Visual CTX% usage with real-time updates |
 | Model selector | ✅ Quick-switch between Ollama / cloud models |
 | Multi-provider | ✅ Ollama, OpenAI, OpenRouter, Custom |
+| MCP Knowledge Server | ✅ Expose KB via Model Context Protocol |
 | Embedding backend | ✅ Local (Ollama) or cloud (Voyage AI) |
 | One-liner install | ✅ macOS launchd / Linux systemd + start.sh |
 | Qdrant auto-install | ✅ Installed by installer if not found |
@@ -166,6 +167,89 @@ python ingest.py --query "your typical query"
 Start at `0.30` and adjust for your domain.
 
 ---
+
+---
+
+## MCP Knowledge Server
+
+Expose your knowledge base via the [Model Context Protocol](https://modelcontextprotocol.io) — usable from Claude Desktop, Cursor, VS Code, and any MCP client.
+
+### Start
+
+```bash
+python mcp_knowledge_server.py                        # stdio transport
+python mcp_knowledge_server.py --transport http        # Streamable HTTP (default: port 8910)
+python mcp_knowledge_server.py --transport http --port 8910
+```
+
+The `start.sh` script starts the MCP server automatically with `--transport http --port ${CONTEXTCUT_MCP_PORT:-8910}`.
+
+### Client Configuration
+
+**Claude Desktop** (`~/Library/Application Support/Claude/claude_desktop_config.json`):
+
+```json
+{
+  "mcpServers": {
+    "contextcut": {
+      "command": "python",
+      "args": ["/home/user/contextcut/mcp_knowledge_server.py"],
+      "env": {
+        "CONTEXTCUT_QDRANT_HOST": "localhost",
+        "CONTEXTCUT_QDRANT_PORT": "6333",
+        "CONTEXTCUT_COLLECTION": "contextcut",
+        "CONTEXTCUT_KB_DIR": "/home/user/contextcut/knowledge"
+      }
+    }
+  }
+}
+```
+
+**Cursor** → Settings → MCP → Add server:
+
+| Field | Value |
+|---|---|
+| Name | `contextcut` |
+| Type | `command` |
+| Command | `python /home/user/contextcut/mcp_knowledge_server.py` |
+
+**VS Code** (via [Claude Dev](https://marketplace.visualstudio.com/items?itemName=saoudrizwan.claude-dev) or similar MCP extensions):
+
+```json
+{
+  "mcpServers": {
+    "contextcut": {
+      "command": "python",
+      "args": ["/home/user/contextcut/mcp_knowledge_server.py"]
+    }
+  }
+}
+```
+
+**Any HTTP client** (when running with `--transport http`):
+
+```bash
+# List files in knowledge base
+curl http://localhost:8910/knowledge://files
+
+# Search knowledge base
+curl "http://localhost:8910/knowledge://search/your%20query"
+
+# Get stats
+curl http://localhost:8910/knowledge://stats
+```
+
+### Tools Available
+
+| Tool | Description |
+|---|---|
+| `knowledge_search` | Search KB with a query string, returns ranked chunks |
+| `knowledge_search_structured` | Search with JSON schema (top_k, min_score, collection) |
+| `knowledge_list_files` | List all indexed source files |
+| `knowledge_stats` | Get KB stats (total chunks, collections, files) |
+| `ingest_file` | Ingest a single file into the KB |
+| `ingest_all` | Re-ingest all files from the KB directory |
+| `ingest_status` | Check if the watcher is currently ingesting |
 
 ---
 

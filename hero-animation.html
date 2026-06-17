@@ -1,0 +1,495 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>ContextCut PRO — Before / After Animation</title>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body {
+    background: #07070d;
+    display: flex; align-items: center; justify-content: center;
+    min-height: 100vh; overflow: hidden;
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Inter, sans-serif;
+  }
+  canvas { display: block; width: 100%; height: 100vh; }
+
+  .label {
+    position: fixed; pointer-events: none; transition: opacity 0.6s;
+    font-size: clamp(0.55rem, 1.4vmin, 1rem); font-weight: 500;
+    text-transform: uppercase;
+    letter-spacing: 0.15em;
+  }
+  .node-dot {
+    position: fixed; border-radius: 50%; pointer-events: none;
+    transition: opacity 0.6s;
+    width: clamp(6px, 1.2vmin, 14px); height: clamp(6px, 1.2vmin, 14px);
+  }
+  #label-client  { bottom: 10%; left: 8%; color: rgba(255,255,255,0.5); }
+  #label-proxy   { bottom: 10%; left: 38%; color: rgba(196,132,252,0.7); }
+  #label-llm     { bottom: 10%; right: 8%; color: rgba(245,158,11,0.7); }
+  #label-cloud   { bottom: 10%; right: 8%; color: rgba(239,68,68,0.6); }
+  #label-kb      { top: 14%; left: 50%; transform: translateX(-50%); color: rgba(129,140,248,0.7); }
+  #label-local   { top: 6%; left: 50%; transform: translateX(-50%); color: rgba(34,211,238,0.35); font-size: clamp(0.45rem, 1vmin, 0.8rem); }
+
+  #dot-client { bottom: calc(10% + 2.6vmin); left: 8%; transform: translateX(-50%); background: #22d3ee; box-shadow: 0 0 20px rgba(34,211,238,0.4); }
+  #dot-proxy  { bottom: calc(10% + 2.6vmin); left: 38%; transform: translateX(-50%); background: #a855f7; box-shadow: 0 0 20px rgba(168,85,247,0.5); }
+  #dot-llm    { bottom: calc(10% + 2.6vmin); right: 8%; transform: translateX(50%); background: #f59e0b; box-shadow: 0 0 20px rgba(245,158,11,0.4); }
+  #dot-cloud  { bottom: calc(10% + 2.6vmin); right: 8%; transform: translateX(50%); background: #ef4444; box-shadow: 0 0 20px rgba(239,68,68,0.4); }
+  #dot-kb     { top: calc(14% + 2.6vmin); left: 50%; transform: translateX(-50%); background: #818cf8; box-shadow: 0 0 30px rgba(129,140,248,0.4); }
+
+  #badge-before, #badge-after {
+    position: fixed; top: 10%; left: 50%; transform: translateX(-50%);
+    font-size: clamp(1.2rem, 4vmin, 3rem); font-weight: 800; letter-spacing: -0.03em;
+    pointer-events: none; transition: opacity 0.8s;
+  }
+  #badge-before { color: rgba(239,68,68,0.15); }
+  #badge-after  { color: rgba(34,211,238,0.15); }
+</style>
+</head>
+<body>
+
+<canvas id="c"></canvas>
+
+<div class="label" id="label-client">Your AI App</div>
+<div class="node-dot" id="dot-client"></div>
+
+<div class="label" id="label-proxy">ContextCut PRO</div>
+<div class="node-dot" id="dot-proxy"></div>
+
+<div class="label" id="label-llm">Your Local LLM</div>
+<div class="node-dot" id="dot-llm"></div>
+
+<div class="label" id="label-cloud">☁️ Cloud LLM</div>
+<div class="node-dot" id="dot-cloud"></div>
+
+<div class="label" id="label-kb">Knowledge Base</div>
+<div class="node-dot" id="dot-kb"></div>
+
+<div class="label" id="label-local">⏺ 100% LOCAL — NO DATA LEAVES YOUR MACHINE</div>
+
+<div id="badge-before">☁️ BEFORE</div>
+<div id="badge-after">⏺ AFTER WITH CONTEXTCUT-PRO</div>
+
+<script>
+const canvas = document.getElementById('c');
+const ctx = canvas.getContext('2d');
+
+let W, H, s;
+
+function resize() {
+  W = canvas.width = window.innerWidth;
+  H = canvas.height = window.innerHeight;
+  s = Math.min(W, H) / 1000;
+}
+window.addEventListener('resize', resize);
+resize();
+
+// ── Node positions ──
+const P = {
+  client: { x: 0, y: 0 },
+  proxy:  { x: 0, y: 0 },
+  llm:    { x: 0, y: 0 },
+  cloud:  { x: 0, y: 0 },
+  kb:     { x: 0, y: 0 },
+};
+
+function updatePositions() {
+  P.client.x = W * 0.08;  P.client.y = H * 0.85;
+  P.proxy.x  = W * 0.38;  P.proxy.y  = H * 0.85;
+  P.llm.x    = W * 0.82;  P.llm.y    = H * 0.85;
+  P.cloud.x  = W * 0.82;  P.cloud.y  = H * 0.85;
+  P.kb.x     = W * 0.38;  P.kb.y     = H * 0.30;
+}
+
+// ── Phase timeline (seconds) ──
+// 0–3: BEFORE — client ↔ cloud, no local
+// 3–6: TRANSITION — cloud fades, local fades in
+// 6+: AFTER — full ContextCut PRO flow
+
+// ── Phase helpers ──
+function getPhase(t) {
+  if (t < 3) return 'before';
+  if (t < 6) return 'transition';
+  return 'after';
+}
+
+function lerp(a, b, t) { return a + (b - a) * t; }
+function clamp(v, mn, mx) { return Math.max(mn, Math.min(mx, v)); }
+
+// ── Opacity for nodes per phase ──
+function nodeOpacity(phase, t) {
+  const cloudVis  = phase === 'before' ? 1 : phase === 'transition' ? clamp(1 - (t - 3) / 2, 0, 1) : 0;
+  const proxyVis  = phase === 'before' ? 0 : phase === 'transition' ? clamp((t - 3) / 1.5, 0, 1) : 1;
+  const kbVis     = phase === 'before' ? 0 : phase === 'transition' ? clamp((t - 3.5) / 1.5, 0, 1) : 1;
+  const llmVis    = phase === 'before' ? 0 : phase === 'transition' ? clamp((t - 4) / 1.5, 0, 1) : 1;
+  const localVis  = phase === 'after' ? 1 : phase === 'transition' && t > 4.5 ? clamp((t - 4.5) / 1, 0, 1) : 0;
+  return { cloudVis, proxyVis, kbVis, llmVis, localVis };
+}
+
+// ── KB orbiting documents ──
+class DocNode {
+  constructor() {
+    this.angle = Math.random() * Math.PI * 2;
+    this.radius = 55 + Math.random() * 20;
+    this.speed = (0.003 + Math.random() * 0.004) * (Math.random() > 0.5 ? 1 : -1);
+    this.hue = 220 + Math.random() * 50;
+    this.size = 3 + Math.random() * 3;
+    this.alpha = 0.2 + Math.random() * 0.3;
+    this.phase = Math.random() * Math.PI * 2;
+  }
+  draw(time, kbOpacity) {
+    if (kbOpacity < 0.01) return;
+    const x = P.kb.x + Math.cos(this.angle) * this.radius;
+    const y = P.kb.y + Math.sin(this.angle) * this.radius;
+    const sz = this.size * (1 + 0.2 * Math.sin(time * 0.002 + this.phase));
+    const a = this.alpha * (0.8 + 0.2 * Math.sin(time * 0.002 + this.phase)) * kbOpacity;
+    ctx.beginPath();
+    ctx.arc(x, y, sz, 0, Math.PI * 2);
+    ctx.fillStyle = `hsla(${this.hue}, 60%, 65%, ${a})`;
+    ctx.shadowColor = `hsla(${this.hue}, 60%, 65%, ${a * 0.4})`;
+    ctx.shadowBlur = sz * 4;
+    ctx.fill(); ctx.shadowBlur = 0;
+  }
+  update() { this.angle += this.speed; }
+}
+
+// ── Particles ──
+class Particle {
+  constructor() {
+    this.reset('before');
+  }
+  reset(phase) {
+    this.progress = Math.random();
+    this.speed = 0.003 + Math.random() * 0.005;
+    this.size = 3 + Math.random() * 3;
+    this.alpha = 0.5 + Math.random() * 0.4;
+    this.phase = Math.random() * Math.PI * 2;
+    this.trail = [];
+    this.pathType = this.pickPath(phase);
+  }
+  pickPath(phase) {
+    if (phase === 'before') {
+      // Client ↔ Cloud
+      return Math.random() > 0.5 ? 'client-cloud' : 'cloud-client';
+    }
+    // After — full ContextCut flow with 6 path types
+    const paths = ['client-proxy', 'proxy-kb', 'kb-proxy', 'proxy-llm', 'llm-proxy', 'proxy-client'];
+    return paths[Math.floor(Math.random() * paths.length)];
+  }
+  getWaypoints() {
+    const paths = {
+      'client-cloud':  { a: P.client, c: { x: (P.client.x + W) / 2, y: P.client.y - 40 }, b: P.cloud, hue: 0 },
+      'cloud-client':  { a: P.cloud, c: { x: (W + P.client.x) / 2, y: P.cloud.y - 40 },   b: P.client, hue: 0 },
+      'client-proxy':  { a: P.client, c: { x: (P.client.x + P.proxy.x) / 2, y: P.client.y - 30 }, b: P.proxy, hue: 190 },
+      'proxy-kb':      { a: P.proxy,  c: { x: P.proxy.x, y: (P.proxy.y + P.kb.y) / 2 },          b: P.kb,    hue: 210 },
+      'kb-proxy':      { a: P.kb,     c: { x: P.kb.x, y: (P.kb.y + P.proxy.y) / 2 },              b: P.proxy, hue: 260 },
+      'proxy-llm':     { a: P.proxy,  c: { x: (P.proxy.x + P.llm.x) / 2, y: P.proxy.y - 30 },     b: P.llm,   hue: 35 },
+      'llm-proxy':     { a: P.llm,    c: { x: (P.llm.x + P.proxy.x) / 2, y: P.llm.y - 30 },       b: P.proxy, hue: 170 },
+      'proxy-client':  { a: P.proxy,  c: { x: (P.proxy.x + P.client.x) / 2, y: P.client.y - 30 },  b: P.client, hue: 180 },
+    };
+    return paths[this.pathType] || paths['client-proxy'];
+  }
+  getPos() {
+    const wp = this.getWaypoints();
+    const t = this.progress;
+    const mt = 1 - t;
+    const x = mt * mt * wp.a.x + 2 * mt * t * wp.c.x + t * t * wp.b.x;
+    const y = mt * mt * wp.a.y + 2 * mt * t * wp.c.y + t * t * wp.b.y;
+    return { x, y };
+  }
+  update(phase) {
+    // If phase changed and path doesn't match, reset with new path
+    if (phase === 'before' && !['client-cloud','cloud-client'].includes(this.pathType)) {
+      this.pathType = this.pickPath(phase);
+      this.progress = 0;
+    } else if (phase === 'after' && ['client-cloud','cloud-client'].includes(this.pathType)) {
+      this.pathType = this.pickPath(phase);
+      this.progress = 0;
+    }
+    this.progress += this.speed;
+    if (this.progress > 1) { this.progress = 0; }
+    const pos = this.getPos();
+    this.trail.push(pos);
+    if (this.trail.length > 12) this.trail.shift();
+  }
+  draw(opacity) {
+    if (opacity < 0.01) return;
+    const wp = this.getWaypoints();
+    const hue = wp.hue;
+    // Trail
+    for (let i = 0; i < this.trail.length; i++) {
+      const a = (i / this.trail.length) * this.alpha * 0.2 * opacity;
+      const sz = (i / this.trail.length) * this.size * 0.4 * opacity;
+      ctx.beginPath();
+      ctx.arc(this.trail[i].x, this.trail[i].y, sz, 0, Math.PI * 2);
+      ctx.fillStyle = `hsla(${hue}, 80%, 65%, ${a})`;
+      ctx.fill();
+    }
+    // Head
+    const pos = this.getPos();
+    const pulse = 1 + 0.15 * Math.sin(this.progress * Math.PI * 4 + this.phase);
+    ctx.beginPath();
+    ctx.arc(pos.x, pos.y, this.size * pulse * opacity, 0, Math.PI * 2);
+    ctx.fillStyle = `hsla(${hue}, 90%, 70%, ${this.alpha * opacity})`;
+    ctx.shadowColor = `hsla(${hue}, 90%, 70%, ${0.5 * opacity})`;
+    ctx.shadowBlur = this.size * 6;
+    ctx.fill(); ctx.shadowBlur = 0;
+  }
+}
+
+// ── Glow draws ──
+function drawGlow(cx, cy, r, color, time, speed, baseA, opacity) {
+  if (opacity < 0.01) return;
+  const grad = ctx.createRadialGradient(cx, cy, 0, cx, cy, r * s);
+  const pulse = baseA * (1 + 0.3 * Math.sin(time * speed));
+  grad.addColorStop(0, `rgba(${color},${pulse * opacity})`);
+  grad.addColorStop(0.6, `rgba(${color},${pulse * 0.4 * opacity})`);
+  grad.addColorStop(1, `rgba(${color},0)`);
+  ctx.fillStyle = grad;
+  ctx.beginPath(); ctx.arc(cx, cy, r * s, 0, Math.PI * 2); ctx.fill();
+}
+
+function drawProxyRing(cx, cy, time, opacity) {
+  if (opacity < 0.01) return;
+  for (let i = 0; i < 3; i++) {
+    const angle = time * 0.0003 + (i * Math.PI * 2 / 3);
+    const r = 45 * s;
+    const x = cx + Math.cos(angle) * r;
+    const y = cy + Math.sin(angle) * r;
+    ctx.beginPath(); ctx.arc(x, y, 3 * s, 0, Math.PI * 2);
+    ctx.fillStyle = `hsla(${260 + i * 20}, 90%, 70%, ${(0.4 + 0.3 * Math.sin(time * 0.002 + i)) * opacity})`;
+    ctx.shadowColor = `hsla(${260 + i * 20}, 90%, 70%, ${0.4 * opacity})`;
+    ctx.shadowBlur = 15 * s;
+    ctx.fill(); ctx.shadowBlur = 0;
+  }
+  // Pulse rings
+  for (let i = 0; i < 3; i++) {
+    const ph = ((time * 0.001 + i * 1.2) % 2.5);
+    const r = ph * 45 * s;
+    const a = Math.max(0, 0.06 * (1 - ph / 2.5)) * opacity;
+    ctx.strokeStyle = `rgba(168,85,247,${a})`;
+    ctx.lineWidth = 1;
+    ctx.beginPath(); ctx.arc(cx, cy, r, 0, Math.PI * 2); ctx.stroke();
+  }
+}
+
+// ── Cloud shape around Cloud LLM ──
+function drawCloud(cx, cy, time, opacity) {
+  if (opacity < 0.01) return;
+  const r = 38 * s;
+  ctx.save();
+  ctx.translate(cx, cy);
+  const a = 0.2 * opacity;
+
+  // Cloud body — overlapping circles
+  ctx.fillStyle = `rgba(239,68,68,${a * 0.15})`;
+  ctx.strokeStyle = `rgba(239,68,68,${a * 0.4})`;
+  ctx.lineWidth = 1.5;
+
+  ctx.beginPath();
+  // Main body (bottom)
+  ctx.arc(0, r * 0.1, r * 0.6, 0, Math.PI * 2); ctx.fill(); ctx.stroke();
+  // Left bump
+  ctx.beginPath();
+  ctx.arc(-r * 0.45, -r * 0.25, r * 0.35, 0, Math.PI * 2); ctx.fill(); ctx.stroke();
+  // Center bump
+  ctx.beginPath();
+  ctx.arc(0, -r * 0.35, r * 0.45, 0, Math.PI * 2); ctx.fill(); ctx.stroke();
+  // Right bump
+  ctx.beginPath();
+  ctx.arc(r * 0.45, -r * 0.25, r * 0.35, 0, Math.PI * 2); ctx.fill(); ctx.stroke();
+
+  // Flat bottom line overlay (to hide overlapping circle bottoms)
+  ctx.fillStyle = 'rgba(7,7,13,1)';
+  ctx.fillRect(-r * 0.65, r * 0.1 - 1, r * 1.3, r * 0.3);
+
+  // Re-stroke the bottom visible edge
+  ctx.strokeStyle = `rgba(239,68,68,${a * 0.3})`;
+  ctx.lineWidth = 1;
+  ctx.beginPath();
+  ctx.moveTo(-r * 0.6, r * 0.1);
+  ctx.lineTo(r * 0.6, r * 0.1);
+  ctx.stroke();
+
+  // Cloud line drawing (full outline for crispness)
+  ctx.strokeStyle = `rgba(239,68,68,${a * 0.25})`;
+  ctx.lineWidth = 0.5;
+  ctx.setLineDash([3 * s, 5 * s]);
+  ctx.beginPath();
+  ctx.moveTo(-r * 0.65, r * 0.15);
+  ctx.lineTo(r * 0.65, r * 0.15);
+  ctx.stroke();
+  ctx.setLineDash([]);
+
+  ctx.restore();
+}
+
+// ── Before-state "data leaving" arrows ──
+function drawBeforeArrows(time, opacity) {
+  if (opacity < 0.01) return;
+  const cx = P.client.x, cy = P.client.y;
+  const dx = P.cloud.x - cx;
+  const dy = P.cloud.y - cy;
+  const dist = Math.sqrt(dx * dx + dy * dy);
+  const nx = dx / dist, ny = dy / dist;
+
+  // Arrow along Client → Cloud path
+  const progress = (time * 0.0004) % 1;
+  const along = lerp(30, dist - 30, progress);
+  const ax = cx + nx * along + Math.sin(progress * Math.PI * 6) * 6;
+  const ay = cy + ny * along + Math.cos(progress * Math.PI * 5) * 4;
+
+  const a = 0.4 * opacity;
+  ctx.fillStyle = `rgba(239,68,68,${a})`;
+  ctx.font = `${12 * s}px -apple-system, sans-serif`;
+  ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+
+  // Red dots flowing
+  for (let i = 0; i < 6; i++) {
+    const p = ((progress + i * 0.12) % 1);
+    const x = cx + nx * lerp(30, dist - 30, p) + Math.sin(p * Math.PI * 6 + i) * 6;
+    const y = cy + ny * lerp(30, dist - 30, p) + Math.cos(p * Math.PI * 5 + i) * 4;
+    const dotA = 0.3 * (1 - Math.abs(p - 0.5) * 2) * opacity;
+    ctx.beginPath();
+    ctx.arc(x, y, 3 * s, 0, Math.PI * 2);
+    ctx.fillStyle = `rgba(239,68,68,${dotA})`;
+    ctx.fill();
+  }
+
+  // Warning text
+  ctx.fillStyle = `rgba(239,68,68,${0.3 * opacity})`;
+  ctx.font = `${13 * s}px -apple-system, sans-serif`;
+  ctx.textAlign = 'center';
+  ctx.fillText('⚠ data leaves your machine', (cx + W) / 2, P.client.y - 58 * s);
+}
+
+// ── After-state path labels ──
+function drawAfterLabels(time, opacity) {
+  if (opacity < 0.01) return;
+  const a = 0.15 * opacity;
+  ctx.fillStyle = `rgba(148,163,184,${a})`;
+  ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+
+  const labelFont = `${13 * s}px -apple-system, sans-serif`;
+  const l = (str, x, y, font, color) => {
+    ctx.font = font || labelFont;
+    if (color) ctx.fillStyle = color;
+    ctx.fillText(str, x, y);
+  };
+
+  l('request', (P.client.x + P.proxy.x) / 2, P.client.y - 52 * s);
+  l('search', P.proxy.x, (P.proxy.y + P.kb.y) / 2 - 10 * s);
+  l('results', P.kb.x + 58 * s, (P.kb.y + P.proxy.y) / 2 + 10 * s);
+  l('forward + context', (P.proxy.x + P.llm.x) / 2, P.proxy.y - 52 * s);
+
+  // Response label — slightly larger
+  ctx.fillStyle = `rgba(34,211,238,${0.2 * opacity})`;
+  l('← streaming response', (P.llm.x + P.proxy.x) / 2, P.llm.y - 68 * s,
+    `${15 * s}px -apple-system, sans-serif`);
+
+  ctx.fillStyle = `rgba(148,163,184,${a})`;
+  l('← deliver', (P.proxy.x + P.client.x) / 2, P.client.y - 52 * s);
+}
+
+// ── Connector lines ──
+function drawConnectors(phase, opacity) {
+  ctx.lineWidth = 0.5;
+  if (phase === 'before') {
+    // Client → Cloud (red)
+    ctx.strokeStyle = `rgba(239,68,68,${0.08 * opacity})`;
+    ctx.beginPath();
+    ctx.moveTo(P.client.x, P.client.y - 20);
+    ctx.lineTo(P.cloud.x, P.cloud.y - 20);
+    ctx.stroke();
+  } else {
+    // Client → Proxy
+    ctx.strokeStyle = `rgba(34,211,238,${0.08 * opacity})`;
+    ctx.beginPath(); ctx.moveTo(P.client.x, P.client.y - 20); ctx.lineTo(P.proxy.x, P.proxy.y - 20); ctx.stroke();
+    // Proxy → LLM
+    ctx.strokeStyle = `rgba(245,158,11,${0.08 * opacity})`;
+    ctx.beginPath(); ctx.moveTo(P.proxy.x, P.proxy.y - 20); ctx.lineTo(P.llm.x, P.llm.y - 20); ctx.stroke();
+    // Proxy ↔ KB
+    ctx.strokeStyle = `rgba(99,102,241,${0.08 * opacity})`;
+    ctx.beginPath(); ctx.moveTo(P.proxy.x, P.proxy.y); ctx.lineTo(P.kb.x, P.kb.y); ctx.stroke();
+  }
+}
+
+// ── Init ──
+updatePositions();
+const docs = Array.from({ length: 25 }, () => new DocNode());
+const particles = Array.from({ length: 20 }, () => new Particle());
+
+// ── Cursor ──
+let mouseX = -9999, mouseY = -9999;
+window.addEventListener('mousemove', e => { mouseX = e.clientX; mouseY = e.clientY; });
+window.addEventListener('mouseleave', () => { mouseX = -9999; mouseY = -9999; });
+
+// ── Anim loop ──
+let startTime = performance.now();
+
+function anim(now) {
+  const elapsed = (now - startTime) / 1000;
+  const t = elapsed % 10;  // loop every 10 seconds
+  updatePositions();
+
+  const phase = getPhase(t);
+  const ops = nodeOpacity(phase, t);
+
+  // Update DOM labels
+  document.getElementById('label-cloud').style.opacity = ops.cloudVis;
+  document.getElementById('dot-cloud').style.opacity = ops.cloudVis;
+  document.getElementById('label-proxy').style.opacity = ops.proxyVis;
+  document.getElementById('dot-proxy').style.opacity = ops.proxyVis;
+  document.getElementById('label-kb').style.opacity = ops.kbVis;
+  document.getElementById('dot-kb').style.opacity = ops.kbVis;
+  document.getElementById('label-llm').style.opacity = ops.llmVis;
+  document.getElementById('dot-llm').style.opacity = ops.llmVis;
+  document.getElementById('label-local').style.opacity = ops.localVis;
+  document.getElementById('badge-before').style.opacity = phase === 'before' ? 1 : phase === 'transition' ? clamp(1 - (t - 3) / 1, 0, 1) : 0;
+  document.getElementById('badge-after').style.opacity = phase === 'after' ? 1 : 0;
+
+  // Clear
+  ctx.fillStyle = 'rgba(7,7,13,0.6)';
+  ctx.fillRect(0, 0, W, H);
+
+  // Background glows
+  drawGlow(P.client.x, P.client.y, 50, '34,211,238', now, 0.0006, 0.05, 1);
+  drawGlow(P.proxy.x, P.proxy.y, 70, '168,85,247', now, 0.0005, 0.08, ops.proxyVis);
+  drawGlow(P.kb.x, P.kb.y, 140, '99,102,241', now, 0.0004, 0.06, ops.kbVis);
+  drawGlow(P.llm.x, P.llm.y, 50, '245,158,11', now, 0.0007, 0.05, ops.llmVis);
+  drawGlow(P.cloud.x, P.cloud.y, 50, '239,68,68', now, 0.0006, 0.05, ops.cloudVis);
+  drawCloud(P.cloud.x, P.cloud.y, now, ops.cloudVis);
+
+  drawConnectors(phase, 1);
+  drawProxyRing(P.proxy.x, P.proxy.y, now, ops.proxyVis);
+
+  // Before-horror: red data-leaving arrows
+  drawBeforeArrows(now, phase === 'before' ? 1 : phase === 'transition' ? clamp(1 - (t - 3) / 1.5, 0, 1) : 0);
+
+  // After path labels
+  drawAfterLabels(now, phase === 'after' ? 1 : 0);
+
+  // KB docs
+  docs.forEach(d => { d.update(); d.draw(now, ops.kbVis); });
+
+  // Particles
+  particles.forEach(p => p.update(phase));
+  // Sort: draw proxy→LLM and LLM→proxy on top
+  const afterOpacity = phase === 'before' ? 0 : phase === 'transition' ? ops.llmVis : 1;
+  const beforeOpacity = phase === 'before' ? 1 : phase === 'transition' ? clamp(1 - (t - 3) / 1.5, 0, 1) : 0;
+  particles.forEach(p => {
+    if (['client-cloud','cloud-client'].includes(p.pathType)) {
+      p.draw(beforeOpacity);
+    } else {
+      p.draw(afterOpacity);
+    }
+  });
+
+  requestAnimationFrame(anim);
+}
+
+anim(0);
+</script>
+</body>
+</html>
