@@ -141,6 +141,7 @@ open http://localhost:18787
 | `CONTEXTCUT_TOP_K` | `5` | Max chunks to retrieve |
 | `CONTEXTCUT_MIN_SCORE` | `0.50` | Minimum relevance threshold |
 | `CONTEXTCUT_MODEL` | `qwen3:14b-q8_0` | Default model in dashboard |
+| `CONTEXTCUT_SCAN_MODEL` | *(unset)* | Separate model for backend confidence scan. Must differ from agent model. E.g. `qwen3:4b` |
 
 ---
 
@@ -272,6 +273,61 @@ Yes, it's fully dynamic. Three tools enable runtime code generation:
 So the agent isn't limited to a fixed tool list. The LLM can generate Python at runtime to solve problems — data analysis, scripting, API calls, whatever it needs.
 
 In short: ContextCut-PRO is the proxy + RAG layer you put in front of any model (Hermes, Qwen, Llama, etc.). The "free tool credits" thing is a separate cloud billing model that doesn't apply here.
+
+---
+
+## Agent Mode & Confidence Scan
+
+The dashboard chat has two toggle buttons that control agent behavior and response verification:
+
+| Toggle | What it does | Self-corrects? | UI highlighting? |
+|--------|-------------|:---:|:---:|
+| **🤖 Agent OFF/ON** | Enables the LangChain agent with tool calls (shell, python, web search, file ops, RAG, etc.) | ✅ Backend confidence scan runs inside the agent flow | ❌ |
+| **🧪 Scan OFF/ON** | After the agent responds, the frontend calls `/api/agent/confidence-scan` and highlights suspect passages | ❌ Just visual feedback | ✅ Passages with factual errors or uncertainties are highlighted with ⚠️ / ⚡ icons |
+| **Both ON** | Agent responds → backend auto-scans for LOW confidence and optionally self-corrects → frontend highlights any remaining issues | ✅ | ✅ |
+| **Both OFF** | Plain chat — no agent, no scan, no correction | ❌ | ❌ |
+
+### How to use
+
+1. **Toggle 🤖 Agent ON** to enable tool-using agent mode (required for self-correction)
+2. **Toggle 🧪 Scan ON** to see visual feedback on response accuracy
+3. **Click 🔬 Test** (next to Scan toggle) for a live demo — sends hardcoded false claims and highlights them
+
+### Backend self-correction (automatic)
+
+When `CONTEXTCUT_SCAN_MODEL` is configured in `.env`, every agent response is automatically scanned for factual errors. If LOW-confidence passages are found, the agent receives a correction prompt and one retry attempt. This runs regardless of the frontend Scan toggle.
+
+```bash
+# .env — set a separate, smaller model for scanning (avoids self-evaluation)
+CONTEXTCUT_SCAN_MODEL=qwen3:4b
+```
+
+The scan model must differ from the agent model (`CONTEXTCUT_MODEL`). Recommended: `qwen3:4b` (2.5 GB VRAM) or `llama3.2:1b-instruct-q4_K_M` (0.8 GB VRAM).
+
+### Frontend highlighting
+
+The **🧪 Scan** toggle calls `/api/agent/confidence-scan` after the agent responds. It uses the agent model itself to identify suspect passages. Results are rendered inline:
+
+- ⚠️ **incorrect** — passage highlighted with orange background and warning icon
+- ⚡ **uncertain** — passage highlighted with lightning icon
+
+### Two scan modes (detailed vs simple)
+
+| | Frontend (🧪 Scan) | Backend (self-correction) |
+|---|---|---|
+| **Model** | Agent model (`qwen3:14b-q8_0`) | `CONTEXTCUT_SCAN_MODEL` (`qwen3:4b`) |
+| **Prompt** | Detailed — returns passages with `"text"`, `"factual"`, `"reason"` | Simple — single-word rating: HIGH/MEDIUM/LOW |
+| **Purpose** | Visual highlighting for the user | Automated correction loop |
+| **Trigger** | Frontend calls `/api/agent/confidence-scan` | Runs inside `_run_agent_stream` / `_run_agent` |
+
+---
+
+### Configuration reference
+
+| Variable | Default | Description |
+|---|---|---|
+| `CONTEXTCUT_MODEL` | `qwen3:14b-q8_0` | Agent model (chat + tool use) |
+| `CONTEXTCUT_SCAN_MODEL` | *(unset = disabled)* | Separate model for backend confidence scan. Must differ from agent model. E.g. `qwen3:4b` or `llama3.2:1b-instruct-q4_K_M` |
 
 ---
 

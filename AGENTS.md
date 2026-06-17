@@ -17,7 +17,7 @@
 - `CONTEXTCUT_CTX_LIMIT` — context window (default 32768, now 16384)
 - `CONTEXTCUT_SCAN_MODEL` — separate model for confidence scan (default: unset = disabled).
   Must be different from the agent model to avoid self-evaluation.
-  E.g. `qwen3:0.5b` or `llama3.2:1b`
+  E.g. `qwen3:4b` or `llama3.2:1b-instruct-q4_K_M`
 
 ## Fullscreen Behavior
 - When shell_exec permission is requested (Allow/Deny), the code auto-exits fullscreen mode and scrolls to show the buttons.
