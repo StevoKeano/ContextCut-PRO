@@ -278,7 +278,7 @@ def _confidence_scan(
     text: str, upstream: str = None, api_key: str = None,
     detailed: bool = False, model: str = None
 ) -> list[dict] | None:
-    if not upstream or not text or len(text) < 80:
+    if not upstream or not text or len(text.strip()) < (10 if detailed else 80):
         return None
     if detailed:
         scan_model = model or os.environ.get("CONTEXTCUT_MODEL", "").strip() or "qwen3:14b-q8_0"
@@ -293,10 +293,13 @@ def _confidence_scan(
         temperature=0.0,
     )
     if detailed:
-        prompt = f"""Identify any passages in the following text that might be factual inaccuracies or hallucinations. For each passage, return "text" (the exact passage), "confidence" (HIGH/MEDIUM/LOW), and "reason".
+        prompt = f"""Check the text below for factual errors. For any passage that contains an error, return it with factual="incorrect". For correct passages, factual="correct". For uncertain ones, factual="uncertain".
 
-Return ONLY a JSON array. Example:
-[{{"text":"Paris is in Germany.","confidence":"LOW","reason":"Paris is in France."}}]
+Return ONLY a JSON array. Each object: "text", "factual" ("correct"/"incorrect"/"uncertain"), "reason".
+
+Examples:
+Input: "Paris is in France. The sky is green."
+Output: [{{"text":"Paris is in France.","factual":"correct","reason":"Paris is the capital of France."}},{{"text":"The sky is green.","factual":"incorrect","reason":"The sky is blue, not green."}}]
 
 Text:
 {text}"""

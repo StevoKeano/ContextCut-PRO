@@ -2839,10 +2839,10 @@ async function sendMessage() {{
               if (sd.passages && sd.passages.length > 0) {{
                 let highlighted = fullText;
                 for (const p of sd.passages) {{
-                  if ((p.confidence === 'LOW' || p.confidence === 'MEDIUM') && p.text && p.text.length > 5) {{
+                  if ((p.factual === 'incorrect' || p.factual === 'uncertain') && p.text && p.text.length > 5) {{
                     const escaped = p.text.replace(/[.*+?^${{}}()|[\\]\\\\]/g, '\\\\$&');
-                    const icon = p.confidence === 'LOW' ? '\\u26a0\\ufe0f ' : '\\u26a1 ';
-                    const title = esc(p.confidence + ': ' + (p.reason || ''));
+                    const icon = p.factual === 'incorrect' ? '\\u26a0\\ufe0f ' : '\\u26a1 ';
+                    const title = esc('factual=' + p.factual + ': ' + (p.reason || ''));
                     try {{
                       const re = new RegExp(escaped.replace(/\\n/g, '\\\\n'), 'gi');
                       highlighted = highlighted.replace(re, (match) =>
