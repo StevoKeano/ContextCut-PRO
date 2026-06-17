@@ -4998,17 +4998,18 @@ class DashboardHandler(_SuppressBrokenPipe, BaseHTTPRequestHandler):
                                     api_key=get_current_api_key(),
                                 ),
                             )
-                            if not isinstance(scan_result, list):
+                            import sys
+                            if scan_result is None:
+                                print(f"[{datetime.now().strftime('%H:%M:%S')}] [Agent] \U0001f50d Confidence scan disabled (set CONTEXTCUT_SCAN_MODEL)", flush=True)
                                 scan_result = []
                             low_passages = [
-                                p for p in scan_result
+                                p for p in (scan_result or [])
                                 if isinstance(p, dict) and p.get("confidence") == "LOW"
                             ]
-                            import sys
-                            if scan_result and low_passages:
+                            if scan_result and not low_passages:
+                                print(f"[{datetime.now().strftime('%H:%M:%S')}] [Agent] \U0001f50d Confidence scan: all HIGH/MEDIUM", flush=True)
+                            elif low_passages:
                                 print(f"[{datetime.now().strftime('%H:%M:%S')}] [Agent] \U0001f50d Confidence scan: {len(low_passages)} LOW passages", flush=True)
-                            elif not scan_result:
-                                print(f"[{datetime.now().strftime('%H:%M:%S')}] [Agent] \U0001f50d Confidence scan disabled (set CONTEXTCUT_SCAN_MODEL)", flush=True)
                             correction_retries = 0
                             max_corrections = 1
                             while low_passages and correction_retries < max_corrections:

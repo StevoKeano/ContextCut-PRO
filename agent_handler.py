@@ -276,13 +276,14 @@ _SCAN_MODEL = os.environ.get("CONTEXTCUT_SCAN_MODEL", "").strip()
 
 def _confidence_scan(
     text: str, upstream: str = None, api_key: str = None
-) -> list[dict]:
-    if not _SCAN_MODEL:
-        return []
+) -> list[dict] | None:
+    model = _SCAN_MODEL or os.environ.get("CONTEXTCUT_SCAN_MODEL", "").strip()
+    if not model:
+        return None
     if not upstream or not text or len(text) < 80:
-        return []
+        return None
     llm = ChatOpenAI(
-        model=_SCAN_MODEL,
+        model=model,
         openai_api_base=upstream + "/v1",
         openai_api_key=api_key or "not-needed",
         temperature=0.0,
