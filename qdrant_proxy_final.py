@@ -2687,15 +2687,17 @@ async function sendMessage() {{
   input.value = '';
   sendBtn.disabled = true;
   abortController = new AbortController();
-  setSendStop();
-  appendMsg('user', text, '');
-  conversationHistory.push({{role:'user', content:text}});
-  showTyping();
-
   let assistantDiv = null;
   let bubble = null;
   let fullText = '';
   let usage = {{}};
+  let agentTimeout = setTimeout(() => {{
+    abortController.abort();
+  }}, 310000);
+  setSendStop();
+  appendMsg('user', text, '');
+  conversationHistory.push({{role:'user', content:text}});
+  showTyping();
 
   function ensureBubble() {{
     if (assistantDiv) return;
@@ -5073,12 +5075,18 @@ class DashboardHandler(_SuppressBrokenPipe, BaseHTTPRequestHandler):
                     self.send_response(200)
                     self.send_header("Content-Type", "text/event-stream")
                     self.send_header("Cache-Control", "no-cache")
-                    self.send_header("Connection", "keep-alive")
+                    self.send_header("Connection", "close")
                     self.end_headers()
 
                     full_output = asyncio.run(_run_agent_stream(
                         lambda data: self.wfile.write(f"event: {data.pop('type', 'message')}\ndata: {json.dumps(data)}\n\n".encode()) or self.wfile.flush()
                     ))
+
+                    try:
+                        self.wfile.write(b"data: [DONE]\n\n")
+                        self.wfile.flush()
+                    except BrokenPipeError:
+                        pass
 
                     add_to_history(sid, "assistant", full_output)
                     tok = count_tokens(message) + count_tokens(full_output)
