@@ -275,43 +275,64 @@ _SCAN_MODEL = os.environ.get("CONTEXTCUT_SCAN_MODEL", "").strip()
 
 
 def _confidence_scan(
-    text: str, upstream: str = None, api_key: str = None
+    text: str, upstream: str = None, api_key: str = None,
+    detailed: bool = False, model: str = None
 ) -> list[dict] | None:
-    model = _SCAN_MODEL or os.environ.get("CONTEXTCUT_SCAN_MODEL", "").strip()
-    if not model:
-        return None
     if not upstream or not text or len(text) < 80:
         return None
+    if detailed:
+        scan_model = model or os.environ.get("CONTEXTCUT_MODEL", "").strip() or "qwen3:14b-q8_0"
+    else:
+        scan_model = _SCAN_MODEL or os.environ.get("CONTEXTCUT_SCAN_MODEL", "").strip()
+        if not scan_model:
+            return None
     llm = ChatOpenAI(
-        model=model,
+        model=scan_model,
         openai_api_base=upstream + "/v1",
         openai_api_key=api_key or "not-needed",
         temperature=0.0,
     )
-    prompt = f"""Does the following text contain any factual errors or hallucinations? Reply with ONLY a JSON array. Each object must have exactly "confidence" (HIGH, MEDIUM, or LOW) and "reason".
+    if detailed:
+        prompt = f"""Identify any passages in the following text that might be factual inaccuracies or hallucinations. For each passage, return "text" (the exact passage), "confidence" (HIGH/MEDIUM/LOW), and "reason".
 
-Examples:
-Input: "Paris is in France."
-Output: [{{"confidence": "HIGH", "reason": "Paris is the capital of France"}}]
+Return ONLY a JSON array. Example:
+[{{"text":"Paris is in Germany.","confidence":"LOW","reason":"Paris is in France."}}]
 
-Input: "Paris is in Germany."
-Output: [{{"confidence": "LOW", "reason": "Paris is in France, not Germany"}}]
+Text:
+{text}"""
+        try:
+            resp = llm.invoke([HumanMessage(content=prompt)])
+            content = resp.content.strip()
+            idx = content.find("[")
+            if idx >= 0:
+                content = content[idx:]
+            end = content.rfind("]")
+            if end >= 0:
+                content = content[: end + 1]
+            content = content.strip()
+            results = json.loads(content)
+            return results if isinstance(results, list) else []
+        except Exception as e:
+            return [{"text": text, "confidence": "HIGH", "reason": f"Scan error: {e}"}]
+    else:
+        prompt = f"""Does the following text contain factual errors or hallucinations? Reply ONLY with one word: HIGH, MEDIUM, or LOW.
 
-Text: {text}"""
-    try:
-        resp = llm.invoke([HumanMessage(content=prompt)])
-        content = resp.content.strip()
-        idx = content.find("[")
-        if idx >= 0:
-            content = content[idx:]
-        end = content.rfind("]")
-        if end >= 0:
-            content = content[: end + 1]
-        content = content.strip()
-        results = json.loads(content)
-        return results if isinstance(results, list) else []
-    except Exception as e:
-        return [{"text": text, "confidence": "HIGH", "reason": f"Scan error: {e}"}]
+HIGH = all statements are factually correct
+MEDIUM = some statements are plausible but unverifiable
+LOW = contains clear factual errors or hallucinations
+
+Text: {text}
+
+Your single-word answer (HIGH/MEDIUM/LOW):"""
+        try:
+            resp = llm.invoke([HumanMessage(content=prompt)])
+            content = resp.content.strip().upper()
+            word = content.split()[0] if content.split() else "HIGH"
+            if word not in ("HIGH", "MEDIUM", "LOW"):
+                word = "HIGH"
+            return [{"text": text, "confidence": word, "reason": f"Scan rated {word}"}]
+        except Exception as e:
+            return [{"text": text, "confidence": "HIGH", "reason": f"Scan error: {e}"}]
 
 
 # ── Tool definitions ──────────────────────────────────────────────────────────

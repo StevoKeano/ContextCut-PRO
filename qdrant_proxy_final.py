@@ -4781,6 +4781,8 @@ class DashboardHandler(_SuppressBrokenPipe, BaseHTTPRequestHandler):
                     text,
                     upstream=get_current_upstream(),
                     api_key=get_current_api_key(),
+                    detailed=True,
+                    model=DEFAULT_MODEL,
                 )
                 body_resp = json.dumps({"passages": result}).encode()
                 self.send_response(200)
@@ -5067,7 +5069,9 @@ class DashboardHandler(_SuppressBrokenPipe, BaseHTTPRequestHandler):
                     output = asyncio.run(_run_agent())
                     if output and len(output) > 80:
                         try:
-                            from agent_handler import _confidence_scan
+                            from agent_handler import _confidence_scan, _SCAN_MODEL
+                            import sys
+                            print(f"[{datetime.now().strftime('%H:%M:%S')}] [Agent] \U0001f50d Running confidence scan (model={_SCAN_MODEL!r})", flush=True)
                             scan_result = _confidence_scan(
                                 output,
                                 upstream=get_current_upstream(),
@@ -5076,11 +5080,13 @@ class DashboardHandler(_SuppressBrokenPipe, BaseHTTPRequestHandler):
                             low = [p for p in (scan_result or [])
                                    if isinstance(p, dict) and p.get("confidence") == "LOW"]
                             if scan_result is None:
-                                pass
+                                print(f"[{datetime.now().strftime('%H:%M:%S')}] [Agent] \U0001f50d Confidence scan disabled (set CONTEXTCUT_SCAN_MODEL)", flush=True)
                             elif low:
                                 print(f"[{datetime.now().strftime('%H:%M:%S')}] [Agent] \U0001f50d Non-streaming confidence: {len(low)} LOW passages", flush=True)
-                        except Exception:
-                            pass
+                            else:
+                                print(f"[{datetime.now().strftime('%H:%M:%S')}] [Agent] \U0001f50d Non-streaming confidence: all HIGH/MEDIUM", flush=True)
+                        except Exception as e:
+                            print(f"[{datetime.now().strftime('%H:%M:%S')}] [Agent] \U0001f50d Confidence scan error: {e}", flush=True)
                     add_to_history(sid, "assistant", output)
                     tok = count_tokens(message) + count_tokens(output)
                     record(
