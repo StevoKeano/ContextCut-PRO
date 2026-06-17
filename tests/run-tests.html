@@ -2,48 +2,212 @@
 <html lang="en">
 <head>
 <meta charset="UTF-8">
-<title>ContextCut-PRO — Run Tests</title>
+<title>ContextCut-PRO — Run Tests &amp; MCP Server Guide</title>
 <style>
-  body { font: 14px/1.5 monospace; max-width: 720px; margin: 40px auto; padding: 0 20px; background: #0d1117; color: #c9d1d9; }
+  body { font: 14px/1.5 monospace; max-width: 820px; margin: 40px auto; padding: 0 20px; background: #0d1117; color: #c9d1d9; }
   h1 { color: #58a6ff; }
-  h2 { color: #f0883e; margin-top: 2em; }
+  h2 { color: #f0883e; margin-top: 2em; border-bottom: 1px solid #30363d; padding-bottom: 4px; }
+  h3 { color: #d2a8ff; margin-top: 1.5em; }
   pre { background: #161b22; padding: 12px 16px; border-radius: 8px; overflow-x: auto; color: #7ee787; }
   code { background: #161b22; padding: 2px 6px; border-radius: 4px; }
   .note { background: #1c2128; border-left: 4px solid #d29922; padding: 8px 12px; border-radius: 4px; margin: 1em 0; }
+  .info { background: #1c2128; border-left: 4px solid #58a6ff; padding: 8px 12px; border-radius: 4px; margin: 1em 0; }
+  table { border-collapse: collapse; width: 100%; margin: 1em 0; }
+  th, td { border: 1px solid #30363d; padding: 6px 10px; text-align: left; }
+  th { background: #161b22; color: #58a6ff; }
   a { color: #58a6ff; }
+  hr { border: none; border-top: 1px solid #30363d; margin: 2em 0; }
 </style>
 </head>
 <body>
 
-<h1>🧪 ContextCut-PRO — Test Suite</h1>
-<p>131 unit tests + 5 optional live integration tests.</p>
+<h1>🧪 ContextCut-PRO — Run Tests &amp; MCP Server Guide</h1>
+<p><strong>161 unit tests</strong> + 5 optional live integration tests + 1 live MCP test.</p>
 
-<h2>Quick run (no server needed)</h2>
-<pre>python -m pytest tests/ -v --tb=short</pre>
+<!-- ================================================================== -->
+<h2>Quick commands</h2>
 
-<h2>Live integration tests</h2>
-<p>Requires a running proxy reachable on <code>192.168.137.252</code>, or override with env vars.</p>
-<pre>python -m pytest tests/test_integration.py -v --live --tb=short</pre>
+<table>
+<tr><th>Command</th><th>What it does</th></tr>
+<tr><td><code>python -m pytest tests/ -v --tb=short</code></td><td>All 161 tests (no server needed)</td></tr>
+<tr><td><code>python -m pytest tests/test_mcp_server.py -v --tb=short</code></td><td>MCP server tests only (30 tests)</td></tr>
+<tr><td><code>python -m pytest tests/test_integration.py -v --live --tb=short</code></td><td>Live integration tests (needs proxy)</td></tr>
+<tr><td><code>python -m pytest tests/ -v -k "health or memory" --tb=short</code></td><td>Run by keyword</td></tr>
+<tr><td><code>python -m pytest tests/ -v --tb=short -W ignore::pytest.PytestUnknownMarkWarning</code></td><td>Full suite, suppress warnings</td></tr>
+</table>
 
 <div class="note">
-  <strong>Override addresses:</strong><br>
+  <strong>Live test addresses</strong> (configurable via env vars):<br>
   <code>CONTEXTCUT_DASHBOARD_URL=http://localhost:18787</code><br>
   <code>CONTEXTCUT_PROXY_URL=http://localhost:18788</code>
 </div>
 
-<h2>Run a single test file</h2>
-<pre>python -m pytest tests/test_ingest.py -v --tb=short</pre>
+<!-- ================================================================== -->
+<h2>Test file index</h2>
 
-<h2>Run by keyword</h2>
-<pre>python -m pytest tests/ -v -k "health or memory" --tb=short</pre>
+<table>
+<tr><th>File</th><th>Tests</th><th>What it covers</th></tr>
+<tr><td>test_agent_builder.py</td><td>5</td><td>build_agent(), model/upstream/api_key params</td></tr>
+<tr><td>test_cache.py</td><td>7</td><td>Cache key generation, dedup, expiration</td></tr>
+<tr><td>test_count_tokens.py</td><td>8</td><td>tiktoken + fallback token counting</td></tr>
+<tr><td>test_dashboard.py</td><td>19</td><td>DashboardHandler routes, API endpoints, render</td></tr>
+<tr><td>test_ingest.py</td><td>4</td><td>Ingestion pipeline, chunking, embedding</td></tr>
+<tr><td>test_integration.py</td><td>5 (live)</td><td>Live proxy health, dashboard, agent, sessions</td></tr>
+<tr><td>test_knowledge.py</td><td>10</td><td>knowledge_search, list/delete knowledge tools</td></tr>
+<tr><td>test_mcp_server.py</td><td>30</td><td>MCP tools: search, ingest, stats, resources, helpers</td></tr>
+<tr><td>test_memory.py</td><td>6</td><td>Memory read/write, recall, persist</td></tr>
+<tr><td>test_misc_tools.py</td><td>7</td><td>count_tokens, get_weather, fetch_url, read_file tools</td></tr>
+<tr><td>test_proxy.py</td><td>12</td><td>ProxyHandler forward, streaming, error handling</td></tr>
+<tr><td>test_safety.py</td><td>18</td><td>Shell command allow/block lists, safe/unsafe patterns</td></tr>
+<tr><td>test_sessions.py</td><td>6</td><td>Session CRUD, increment_msg_count</td></tr>
+<tr><td>test_tool_usage.py</td><td>9</td><td>check_tool_usage detection heuristics</td></tr>
+<tr><td>test_vector_search.py</td><td>5</td><td>vector_search tool with Qdrant mock</td></tr>
+</table>
 
-<h2>Full suite with warnings</h2>
-<pre>python -m pytest tests/ -v --tb=short -W ignore::pytest.PytestUnknownMarkWarning</pre>
+<!-- ================================================================== -->
+<h2>📡 MCP Knowledge Server</h2>
 
+<p>
+<code>mcp_knowledge_server.py</code> exposes ContextCut-PRO's knowledge base and file
+ingestion pipeline via the <strong>Model Context Protocol</strong> — usable by
+Claude Desktop, Cursor, VS Code Copilot, ChatGPT, Gemini, and any MCP client.
+</p>
+
+<h3>Run the server</h3>
+
+<pre># stdio transport (for local agents like Claude Desktop)
+python mcp_knowledge_server.py
+
+# HTTP transport (for remote agents)
+python mcp_knowledge_server.py --transport http --port 8910</pre>
+
+<h3>Available tools</h3>
+
+<table>
+<tr><th>Tool</th><th>Parameters</th><th>Returns</th></tr>
+<tr>
+  <td><code>knowledge_search</code></td>
+  <td><code>query: str, top_k: int = 5</code></td>
+  <td>Formatted text with sources and scores</td>
+</tr>
+<tr>
+  <td><code>knowledge_search_structured</code></td>
+  <td><code>query: str, top_k: int = 5</code></td>
+  <td><code>list[{source, score, text}]</code></td>
+</tr>
+<tr>
+  <td><code>knowledge_list_files</code></td>
+  <td><em>none</em></td>
+  <td><code>list[{name, path, size, modified}]</code></td>
+</tr>
+<tr>
+  <td><code>knowledge_stats</code></td>
+  <td><em>none</em></td>
+  <td><code>{total_chunks, total_files, embed_mode, proxy_requests, ...}</code></td>
+</tr>
+<tr>
+  <td><code>ingest_file</code></td>
+  <td><code>filename: str</code></td>
+  <td>Status string ("Ingested doc.md: 5 chunk(s)")</td>
+</tr>
+<tr>
+  <td><code>ingest_all</code></td>
+  <td><em>none</em></td>
+  <td>Multi-line status</td>
+</tr>
+<tr>
+  <td><code>ingest_status</code></td>
+  <td><em>none</em></td>
+  <td><code>list[{name, current}]</code></td>
+</tr>
+</table>
+
+<h3>Resources (read-only data)</h3>
+
+<table>
+<tr><th>URI</th><th>Returns</th></tr>
+<tr><td><code>knowledge://files</code></td><td>JSON list of files</td></tr>
+<tr><td><code>knowledge://stats</code></td><td>JSON stats dict</td></tr>
+<tr><td><code>knowledge://search/{query}</code></td><td>JSON structured search results</td></tr>
+</table>
+
+<!-- ================================================================== -->
+<h3>Client configuration</h3>
+
+<div class="info"><strong>Claude Desktop</strong> — <code>claude_desktop_config.json</code>:</div>
+<pre>{
+  "mcpServers": {
+    "contextcut-knowledge": {
+      "command": "python",
+      "args": ["/path/to/mcp_knowledge_server.py"],
+      "env": {
+        "CONTEXTCUT_QDRANT_HOST": "localhost",
+        "CONTEXTCUT_QDRANT_PORT": "6333",
+        "CONTEXTCUT_COLLECTION": "contextcut",
+        "CONTEXTCUT_KB_DIR": "/home/user/contextcut/knowledge",
+        "CONTEXTCUT_EMBED_MODE": "ollama",
+        "CONTEXTCUT_EMBED_MODEL": "nomic-embed-text",
+        "CONTEXTCUT_UPSTREAM": "http://localhost:11434"
+      }
+    }
+  }
+}</pre>
+
+<div class="info"><strong>Cursor</strong> — Settings → MCP Servers → Add → same JSON (omit <code>mcpServers</code> wrapper).</div>
+<div class="info"><strong>VS Code Copilot</strong> — <code>.vscode/mcp.json</code> → same format.</div>
+
+<h3>Test the MCP server</h3>
+
+<pre># Unit tests (mocked)
+python -m pytest tests/test_mcp_server.py -v --tb=short
+
+# Quick smoke test against real Qdrant
+python mcp_knowledge_server.py  # starts on stdio, Ctrl+C to stop
+
+# With HTTP transport
+python mcp_knowledge_server.py --transport http --port 8910 &
+curl -X POST http://localhost:8910/mcp \
+  -H "Content-Type: application/json" \
+  -d '{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"knowledge_search","arguments":{"query":"test"}}}'</pre>
+
+<!-- ================================================================== -->
+<h2>Architecture</h2>
+
+<pre>
+ MCP Client                          ContextCut-PRO MCP Server
+ (Claude/Cursor/                      mcp_knowledge_server.py
+  ChatGPT/etc.)                             │
+        │                                    ├── knowledge_search ──► qdrant_context()
+        │                                    ├── ingest_file ──────► _batch_embed() + QdrantClient
+        │                                    ├── knowledge_stats ──► make_stats_json() + QdrantClient
+        │                                    ├── knowledge://* ────► resource endpoints
+        │                                    │
+        │                                    ├── depends on qdrant_proxy_final (lazy clients)
+        │                                    └── embeds via Voyage AI or Ollama
+        │
+        ┌────────────────────────────────────┴───────────────────────┐
+        │               Qdrant (vector DB)                          │
+        │               Ollama / Voyage (embedding)                │
+        └────────────────────────────────────────────────────────────┘
+</pre>
+
+
+<!-- ================================================================== -->
 <h2>Environment</h2>
-<p>Python 3.12+ &middot; pytest 8.3.4 &middot; pytest-mock 3.14.0</p>
 
-<p style="margin-top: 3em; color: #8b949e; font-size: 0.9em;">Last updated June 2026.</p>
+<table>
+<tr><th>Package</th><th>Version</th><th>Required for</th></tr>
+<tr><td>Python</td><td>3.12+</td><td></td></tr>
+<tr><td>pytest</td><td>8.3.4</td><td>Test runner</td></tr>
+<tr><td>pytest-mock</td><td>3.14.0</td><td>Mocking in tests</td></tr>
+<tr><td>fastmcp</td><td>3.4.2</td><td>MCP server framework</td></tr>
+<tr><td>qdrant-client</td><td>1.18.0</td><td>Vector DB client</td></tr>
+<tr><td>tiktoken</td><td>0.13.0</td><td>Token counting + chunking</td></tr>
+<tr><td>voyageai</td><td>—</td><td>Voyage AI embeddings (optional)</td></tr>
+<tr><td>langchain</td><td>1.3.9</td><td>Agent framework</td></tr>
+</table>
+
+<p style="margin-top: 3em; color: #8b949e; font-size: 0.9em;">Last updated June 2026 &middot; 161 tests &middot; MCP Knowledge Server v1</p>
 
 </body>
 </html>
