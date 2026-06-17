@@ -288,23 +288,25 @@ def _confidence_scan(
         openai_api_key=api_key or "not-needed",
         temperature=0.0,
     )
-    prompt = f"""Analyze the following text and identify any passages that might be factual inaccuracies or hallucinations. For each passage, rate confidence as HIGH (well-supported), MEDIUM (plausible but unverifiable), or LOW (likely fabricated).
+    prompt = f"""Does the following text contain any factual errors or hallucinations? Reply with ONLY a JSON array. Each object must have exactly "confidence" (HIGH, MEDIUM, or LOW) and "reason".
 
-Return a JSON array of objects with keys: "text" (the passage), "confidence" (HIGH/MEDIUM/LOW), "reason" (brief explanation).
+Examples:
+Input: "Paris is in France."
+Output: [{{"confidence": "HIGH", "reason": "Paris is the capital of France"}}]
 
-Text:
-{text}
+Input: "Paris is in Germany."
+Output: [{{"confidence": "LOW", "reason": "Paris is in France, not Germany"}}]
 
-Respond ONLY with the JSON array, no other text."""
+Text: {text}"""
     try:
         resp = llm.invoke([HumanMessage(content=prompt)])
         content = resp.content.strip()
-        if content.startswith("```json"):
-            content = content[7:]
-        if content.startswith("```"):
-            content = content[3:]
-        if content.endswith("```"):
-            content = content[:-3]
+        idx = content.find("[")
+        if idx >= 0:
+            content = content[idx:]
+        end = content.rfind("]")
+        if end >= 0:
+            content = content[: end + 1]
         content = content.strip()
         results = json.loads(content)
         return results if isinstance(results, list) else []

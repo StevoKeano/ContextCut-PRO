@@ -5065,6 +5065,22 @@ class DashboardHandler(_SuppressBrokenPipe, BaseHTTPRequestHandler):
                 print(f"[{datetime.now().strftime('%H:%M:%S')}] [Agent] 🤖 Agent session started for model '{model_name}'", flush=True)
                 if not is_stream:
                     output = asyncio.run(_run_agent())
+                    if output and len(output) > 80:
+                        try:
+                            from agent_handler import _confidence_scan
+                            scan_result = _confidence_scan(
+                                output,
+                                upstream=get_current_upstream(),
+                                api_key=get_current_api_key(),
+                            )
+                            low = [p for p in (scan_result or [])
+                                   if isinstance(p, dict) and p.get("confidence") == "LOW"]
+                            if scan_result is None:
+                                pass
+                            elif low:
+                                print(f"[{datetime.now().strftime('%H:%M:%S')}] [Agent] \U0001f50d Non-streaming confidence: {len(low)} LOW passages", flush=True)
+                        except Exception:
+                            pass
                     add_to_history(sid, "assistant", output)
                     tok = count_tokens(message) + count_tokens(output)
                     record(
