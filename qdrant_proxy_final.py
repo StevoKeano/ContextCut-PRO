@@ -4820,6 +4820,7 @@ class DashboardHandler(_SuppressBrokenPipe, BaseHTTPRequestHandler):
                     build_agent,
                     build_messages_from_history,
                     _check_tool_usage,
+                    _shell_is_safe,
                 )
                 from langchain_core.messages import HumanMessage
 
@@ -4855,7 +4856,7 @@ class DashboardHandler(_SuppressBrokenPipe, BaseHTTPRequestHandler):
 
                 import asyncio
 
-                AGENT_TIMEOUT = 120
+                AGENT_TIMEOUT = 300
 
                 async def _run_agent() -> str:
                     result = await asyncio.wait_for(
@@ -4887,56 +4888,58 @@ class DashboardHandler(_SuppressBrokenPipe, BaseHTTPRequestHandler):
                             stream_agent = agent.with_config(
                                 {"recursion_limit": 15}
                             )
-                            async for event in asyncio.wait_for(
-                                stream_agent.astream_events(
-                                    {"messages": msgs},
-                                    version="v2",
-                                ),
-                                timeout=AGENT_TIMEOUT,
-                            ):
-                                kind = event.get("event", "")
-                                if kind == "on_chat_model_stream":
-                                    chunk = event.get("data", {}).get("chunk", None)
-                                    if (
-                                        chunk
-                                        and hasattr(chunk, "content")
-                                        and chunk.content
+                            async with asyncio.timeout(AGENT_TIMEOUT):
+                                    async for event in stream_agent.astream_events(
+                                        {"messages": msgs},
+                                        version="v2",
                                     ):
-                                        text = chunk.content
-                                        if isinstance(text, str) and text:
-                                            emit({'token': text})
-                                elif kind == "on_tool_start":
-                                    tool_name = event.get("name", "unknown")
-                                    local_tools.add(tool_name)
-                                    tool_input = event.get("data", {}).get("input", {})
-                                    if isinstance(tool_input, dict):
-                                        cmd = tool_input.get(
-                                            "command",
-                                            tool_input.get(
-                                                "path", json.dumps(tool_input)
-                                            ),
-                                        )
-                                    else:
-                                        cmd = str(tool_input)[:200]
-                                    import sys
-                                    print(f"[Agent] \U0001f9e0 {tool_name}({cmd[:120]})", flush=True)
-                                    emit({'name': tool_name, 'input': cmd, 'shell_mode': shell_mode})
-                                    if (
-                                        tool_name == "shell_exec"
-                                        and shell_mode == "reject"
-                                    ):
-                                        emit({'name': tool_name, 'result': 'Rejected by policy.', 'type': 'tool_result'})
-                                elif kind == "on_tool_end":
-                                    tool_name = event.get("name", "unknown")
-                                    output_data = event.get("data", {}).get(
-                                        "output", ""
-                                    )
-                                    output_str = (
-                                        str(output_data)[:2000] if output_data else ""
-                                    )
-                                    import sys
-                                    print(f"[Agent] \u2705 {tool_name} -> {output_str[:80]}", flush=True)
-                                    emit({'name': tool_name, 'result': output_str, 'type': 'tool_result'})
+                                        kind = event.get("event", "")
+                                        if kind == "on_chat_model_stream":
+                                            chunk = event.get("data", {}).get("chunk", None)
+                                            if (
+                                                chunk
+                                                and hasattr(chunk, "content")
+                                                and chunk.content
+                                            ):
+                                                text = chunk.content
+                                                if isinstance(text, str) and text:
+                                                    emit({'token': text})
+                                        elif kind == "on_tool_start":
+                                            tool_name = event.get("name", "unknown")
+                                            local_tools.add(tool_name)
+                                            tool_input = event.get("data", {}).get("input", {})
+                                            if isinstance(tool_input, dict):
+                                                cmd = tool_input.get(
+                                                    "command",
+                                                    tool_input.get(
+                                                        "path", json.dumps(tool_input)
+                                                    ),
+                                                )
+                                            else:
+                                                cmd = str(tool_input)[:200]
+                                            import sys
+                                            print(f"[{datetime.now().strftime('%H:%M:%S')}] [Agent] \U0001f9e0 {tool_name}({cmd[:120]})", flush=True)
+                                            if tool_name == "shell_exec" and not _shell_is_safe(cmd):
+                                                emit({'name': tool_name, 'input': cmd, 'shell_mode': shell_mode})
+                                                emit({'name': tool_name, 'result': 'Blocked by safety policy (dangerous pattern).', 'type': 'tool_result'})
+                                            else:
+                                                emit({'name': tool_name, 'input': cmd, 'shell_mode': shell_mode})
+                                                if (
+                                                    tool_name == "shell_exec"
+                                                    and shell_mode == "reject"
+                                                ):
+                                                    emit({'name': tool_name, 'result': 'Rejected by policy.', 'type': 'tool_result'})
+                                        elif kind == "on_tool_end":
+                                            tool_name = event.get("name", "unknown")
+                                            output_data = event.get("data", {}).get(
+                                                "output", ""
+                                            )
+                                            output_str = (
+                                                str(output_data)[:2000] if output_data else ""
+                                            )
+                                            import sys
+                                            print(f"[{datetime.now().strftime('%H:%M:%S')}] [Agent] \u2705 {tool_name} -> {output_str[:80]}", flush=True)
+                                            emit({'name': tool_name, 'result': output_str, 'type': 'tool_result'})
                             result = await asyncio.wait_for(
                                 stream_agent.ainvoke({"messages": msgs}),
                                 timeout=AGENT_TIMEOUT,
@@ -4946,9 +4949,10 @@ class DashboardHandler(_SuppressBrokenPipe, BaseHTTPRequestHandler):
                         except _AgentAbort:
                             raise
                         except asyncio.TimeoutError:
-                            emit({'error': 'Agent timed out (120s). Try simplifying the prompt.'})
+                            emit({'error': f'Agent timed out ({AGENT_TIMEOUT}s). Try simplifying the prompt.'})
                             import sys
-                            print(f"[Agent] \u23f0 Timeout", flush=True)
+                            print(f"[{datetime.now().strftime('%H:%M:%S')}] [Agent] \u23f0 Timeout", flush=True)
+                            raise _AgentAbort()
                         except Exception as e:
                             emit({'error': str(e)})
                         return local_tools
@@ -5034,7 +5038,7 @@ class DashboardHandler(_SuppressBrokenPipe, BaseHTTPRequestHandler):
 
                     import sys
                     tok_count = len(full_output.split())
-                    print(f"[Agent] \U0001f3af Done ({tok_count} words, {len(called_tools)} tools)", flush=True)
+                    print(f"[{datetime.now().strftime('%H:%M:%S')}] [Agent] \U0001f3af Done ({tok_count} words, {len(called_tools)} tools)", flush=True)
                     try:
                         emit({'response': full_output, 'type': 'done'})
                     except _AgentAbort:
@@ -5042,7 +5046,7 @@ class DashboardHandler(_SuppressBrokenPipe, BaseHTTPRequestHandler):
                     return full_output
 
                 import sys
-                print(f"[Agent] 🤖 Agent session started for model '{model_name}'", flush=True)
+                print(f"[{datetime.now().strftime('%H:%M:%S')}] [Agent] 🤖 Agent session started for model '{model_name}'", flush=True)
                 if not is_stream:
                     output = asyncio.run(_run_agent())
                     add_to_history(sid, "assistant", output)

@@ -32,6 +32,10 @@ BLOCKED_PREFIXES = [
     "shutdown",
     "reboot",
     "halt",
+    "sudo",
+    "apt ",
+    "apt-get ",
+    "dpkg ",
 ]
 
 
@@ -776,6 +780,8 @@ def run_python(code: str, timeout: int = 30) -> str:
     """
     Execute Python code in a subprocess and return stdout + stderr.
     Output is capped at 64 KB. Useful for data analysis, testing, or scripting.
+    WARNING: NOT for long-running processes (servers, listeners, loops).
+    Use shell_exec to write a .py file and background it instead.
     """
     try:
         result = _run_subprocess(
@@ -1120,7 +1126,7 @@ TOOL_DESCRIPTIONS = {
     "ingest_file": "Re-ingest a knowledge file into Qdrant",
     "list_knowledge": "List all files in KB with chunk counts",
     "delete_knowledge": "Delete vectors for a file from Qdrant",
-    "run_python": "Execute Python code in a subprocess",
+    "run_python": "Execute Python code in a subprocess (NOT for long-running processes)",
     "run_sql": "Run a SELECT query on the session database",
     "plan": "Create a structured multi-step plan for complex tasks",
     "remember": "Store a fact in persistent memory (key-value across sessions)",
@@ -1145,7 +1151,7 @@ You have access to:
 - ingest_file: Re-ingest a knowledge file into Qdrant
 - list_knowledge: List all files in KB with chunk counts from Qdrant
 - delete_knowledge: Delete vectors for a file from Qdrant
-- run_python: Execute Python code in a subprocess
+- run_python: Execute Python code in a subprocess (NOT for long-running processes; use shell_exec instead)
 - run_sql: Run a SELECT query on the session database
 - plan: Create a structured multi-step plan for complex tasks
 - remember / recall / forget: Persistent key-value memory across sessions
@@ -1160,7 +1166,11 @@ Rules:
 6. Always explain what you plan to do before doing it.
 7. For complex tasks, call plan() first to create a structured approach, then execute each step.
 8. At the start of a conversation, call recall() to load persistent memories relevant to the user's request.
-9. Use remember() to store important facts about the user (name, preferences, project details) so they persist across sessions."""
+9. Use remember() to store important facts about the user (name, preferences, project details) so they persist across sessions.
+10. Prefer system_info over installing packages or writing custom scripts for CPU/RAM/disk/GPU data.
+11. Use write_file or a heredoc (cat << 'EOF' > file) to write multi-line files. Do NOT use echo with escaped \\n.
+12. run_python is for short scripts only. For servers/background processes, use shell_exec to write the file then background it (& or nohup).
+13. Avoid chaining commands with && when a preceding command might fail (e.g., kill -9 ... && ...). Use ; or separate steps instead."""
 
 
 def build_agent(model_name: str = None, upstream: str = None, api_key: str = None):
