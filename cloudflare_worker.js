@@ -187,7 +187,7 @@ async function handleInstallLink(request, env, licenseKey) {
 
   const installUrl = `https://api.contextcut-pro.com/install/${licenseKey}`;
 
-      const params = new URL(url).searchParams;
+  const params = new URL(request.url).searchParams;
   const voyageKey = params.get("voyage") || "";
   const embedModel = params.get("model") || "nomic-embed-text";
   const ollamaHost = params.get("ohost") || "localhost";
@@ -542,12 +542,10 @@ function generate(){
   var score=document.getElementById('f-score').value||'0.50';
   var cats=[].map.call(document.querySelectorAll('.starter-chk:checked'),function(cb){return cb.value}).join(',');
   var qs='?voyage='+encodeURIComponent(voyage)+'&model='+encodeURIComponent(model)+'&ohost='+encodeURIComponent(ohost)+'&oport='+encodeURIComponent(oport)+'&qhost='+encodeURIComponent(qhost)+'&qport='+encodeURIComponent(qport)+'&pport='+encodeURIComponent(pport)+'&dport='+encodeURIComponent(dport)+'&mport='+encodeURIComponent(mport)+'&ctx='+encodeURIComponent(ctx)+'&score='+encodeURIComponent(score)+'&cats='+encodeURIComponent(cats);
-  fetch(installUrl+qs).then(function(r){return r.text()}).then(function(script){
-    document.getElementById('termCmd').textContent=script;
-    document.getElementById('termBox').style.display='block';
-    btn.textContent='Generate Install Command';
-    btn.disabled=false;
-  });
+  document.getElementById('termCmd').textContent='curl -fsSL "'+installUrl+qs+'" | bash';
+  document.getElementById('termBox').style.display='block';
+  btn.textContent='Generate Install Command';
+  btn.disabled=false;
 }
 function copyCmd(){
   var txt=document.getElementById('termCmd').textContent;
