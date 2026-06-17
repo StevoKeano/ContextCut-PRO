@@ -1900,6 +1900,8 @@ tr:hover td{{background:var(--surf2)}}
 .agent-toggle.agent-on{{background:var(--accent);color:#000;border-color:var(--accent);font-weight:600}}
 .scan-toggle{{background:transparent;border:1px solid var(--border);color:var(--muted);border-radius:3px;padding:8px 10px;font-size:11px;cursor:pointer;line-height:1;flex-shrink:0;font-family:'JetBrains Mono',monospace}}
 .scan-toggle.scan-on{{background:#f59e0b;color:#000;border-color:#f59e0b;font-weight:600}}
+.scan-test{{background:transparent;border:1px solid var(--border);color:var(--muted);border-radius:3px;padding:8px 10px;font-size:11px;cursor:pointer;line-height:1;flex-shrink:0;font-family:'JetBrains Mono',monospace;margin-left:4px}}
+.scan-test:hover{{background:var(--surf2);color:var(--text)}}
 .suspect{{background:rgba(245,158,11,0.2);border-left:3px solid #f59e0b;padding:2px 6px;border-radius:2px}}
 .tool-call{{background:var(--surf2);border:1px solid var(--border);border-radius:var(--r);padding:8px 12px;margin:6px 0;font-size:12px}}
 .tool-call summary{{cursor:pointer;color:var(--accent);font-weight:600}}
@@ -2063,6 +2065,7 @@ tr.cloud-off td{{background:#0a1a2e!important;color:#22c55e!important;border-top
           placeholder="Type a message… (Enter to send, Shift+Enter for newline). Try: /clear, /help"
           onkeydown="handleKey(event)"></textarea>
         <button class="scan-toggle" id="scanToggle" onclick="toggleScanMode()" title="Scan responses for potential hallucinations">🧪 Scan OFF</button>
+        <button class="scan-test" id="scanTestBtn" onclick="testScan()" title="Run a demo scan on known false claims to test highlighting">🔬 Test</button>
         <button class="agent-toggle" id="agentToggle" onclick="toggleAgentMode()" title="Toggle Agent mode (tool-use)" style="background:transparent;border:1px solid var(--border);color:var(--muted);border-radius:3px;padding:8px 10px;font-size:11px;cursor:pointer;line-height:1;flex-shrink:0;font-family:'JetBrains Mono',monospace">🤖 Agent OFF</button>
         <button class="send-btn" id="sendBtn" onclick="sendMessage()" aria-label="Send message">Send ↑</button>
       </div>
@@ -2104,6 +2107,56 @@ function toggleScanMode() {{
     btn.textContent = scanMode ? '🧪 Scan ON' : '🧪 Scan OFF';
     btn.classList.toggle('scan-on', scanMode);
   }}
+}}
+
+const TEST_SCAN_TEXT = `The Moon is made of green cheese. The capital of Australia is Sydney. The Great Wall of China is visible from space with the naked eye. Humans only use ten percent of their brain. DNA is the same as RNA.`;
+
+async function testScan() {{
+  const btn = document.getElementById('scanTestBtn');
+  if (!btn) return;
+  btn.disabled = true;
+  btn.textContent = '🔬 Scanning…';
+  const msgs = document.getElementById('messages');
+  if (!msgs) {{ btn.disabled = false; btn.textContent = '🔬 Test'; return; }}
+  const userDiv = document.createElement('div');
+  userDiv.className = 'msg user';
+  userDiv.innerHTML = '<div class="bubble"><strong>🧪 Test Scan</strong><br><span style="color:var(--muted);font-size:11px">' + esc(TEST_SCAN_TEXT) + '</span></div>';
+  msgs.appendChild(userDiv);
+  const asstDiv = document.createElement('div');
+  asstDiv.className = 'msg assistant';
+  asstDiv.innerHTML = '<div class="bubble">🔍 Scanning for errors…</div>';
+  msgs.appendChild(asstDiv);
+  asstDiv.scrollIntoView({{behavior:'smooth', block:'start'}});
+  try {{
+    const resp = await fetch('/api/agent/confidence-scan', {{
+      method:'POST', headers:{{'Content-Type':'application/json'}},
+      body: JSON.stringify({{text: TEST_SCAN_TEXT}})
+    }});
+    if (!resp.ok) throw new Error('Scan request failed');
+    const data = await resp.json();
+    let highlighted = TEST_SCAN_TEXT;
+    if (data.passages && data.passages.length > 0) {{
+      for (const p of data.passages) {{
+        if ((p.factual === 'incorrect' || p.factual === 'uncertain') && p.text && p.text.length > 5) {{
+          const escaped = p.text.replace(/[.*+?^${{}}()|[\\]\\\\]/g, '\\\\$&');
+          const icon = p.factual === 'incorrect' ? '\\u26a0\\ufe0f ' : '\\u26a1 ';
+          const title = esc('factual=' + p.factual + ': ' + (p.reason || ''));
+          try {{
+            const re = new RegExp(escaped.replace(/\\n/g, '\\\\n'), 'gi');
+            highlighted = highlighted.replace(re, (match) =>
+              '<span class=\\"suspect\\" title=\\"' + title + '\\">' + icon + esc(match) + '</span>'
+            );
+          }} catch(e) {{}}
+        }}
+      }}
+    }}
+    asstDiv.innerHTML = '<div class="bubble">' + highlighted + '</div>';
+  }} catch(e) {{
+    asstDiv.innerHTML = '<div class="bubble">\\u274c Test scan error: ' + esc(e.message) + '</div>';
+  }}
+  btn.disabled = false;
+  btn.textContent = '🔬 Test';
+  asstDiv.scrollIntoView({{behavior:'smooth', block:'start'}});
 }}
 
 function esc(s) {{
