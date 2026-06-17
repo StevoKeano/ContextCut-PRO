@@ -2821,6 +2821,7 @@ async function sendMessage() {{
         input.focus();
       }}
     }} finally {{
+      clearTimeout(agentTimeout);
       // Always reset the send button, regardless of how the try/catch exits
       if (fullText) {{
         conversationHistory.push({{role:'assistant', content:fullText}});
@@ -4854,23 +4855,44 @@ class DashboardHandler(_SuppressBrokenPipe, BaseHTTPRequestHandler):
 
                 import asyncio
 
+                AGENT_TIMEOUT = 120
+
                 async def _run_agent() -> str:
-                    result = await agent.ainvoke({"messages": input_messages})
-                    msgs = result.get("messages", [])
+                    result = await asyncio.wait_for(
+                        agent.with_config({"recursion_limit": 15}).ainvoke(
+                            {"messages": input_messages}
+                        ),
+                        timeout=AGENT_TIMEOUT,
+                    )
                     return msgs[-1].content if msgs else ""
 
-                async def _run_agent_stream():
-                    sse_events = []
+                class _AgentAbort(Exception):
+                    pass
+
+                async def _run_agent_stream(write):
                     called_tools = set()
                     full_output = ""
+
+                    def emit(data):
+                        try:
+                            write(data)
+                            import sys; sys.stdout.flush()
+                        except Exception:
+                            raise _AgentAbort()
 
                     async def _invoke_and_stream(msgs, is_retry=False):
                         nonlocal full_output
                         local_tools = set()
                         try:
-                            async for event in agent.astream_events(
-                                {"messages": msgs},
-                                version="v2",
+                            stream_agent = agent.with_config(
+                                {"recursion_limit": 15}
+                            )
+                            async for event in asyncio.wait_for(
+                                stream_agent.astream_events(
+                                    {"messages": msgs},
+                                    version="v2",
+                                ),
+                                timeout=AGENT_TIMEOUT,
                             ):
                                 kind = event.get("event", "")
                                 if kind == "on_chat_model_stream":
@@ -4882,9 +4904,7 @@ class DashboardHandler(_SuppressBrokenPipe, BaseHTTPRequestHandler):
                                     ):
                                         text = chunk.content
                                         if isinstance(text, str) and text:
-                                            sse_events.append(
-                                                f"event: token\ndata: {json.dumps({'token': text})}\n\n"
-                                            )
+                                            emit({'token': text})
                                 elif kind == "on_tool_start":
                                     tool_name = event.get("name", "unknown")
                                     local_tools.add(tool_name)
@@ -4898,16 +4918,14 @@ class DashboardHandler(_SuppressBrokenPipe, BaseHTTPRequestHandler):
                                         )
                                     else:
                                         cmd = str(tool_input)[:200]
-                                    sse_events.append(
-                                        f"event: tool_call\ndata: {json.dumps({'name': tool_name, 'input': cmd, 'shell_mode': shell_mode})}\n\n"
-                                    )
+                                    import sys
+                                    print(f"[Agent] \U0001f9e0 {tool_name}({cmd[:120]})", flush=True)
+                                    emit({'name': tool_name, 'input': cmd, 'shell_mode': shell_mode})
                                     if (
                                         tool_name == "shell_exec"
                                         and shell_mode == "reject"
                                     ):
-                                        sse_events.append(
-                                            f"event: tool_result\ndata: {json.dumps({'name': tool_name, 'result': 'Rejected by policy.'})}\n\n"
-                                        )
+                                        emit({'name': tool_name, 'result': 'Rejected by policy.', 'type': 'tool_result'})
                                 elif kind == "on_tool_end":
                                     tool_name = event.get("name", "unknown")
                                     output_data = event.get("data", {}).get(
@@ -4916,37 +4934,48 @@ class DashboardHandler(_SuppressBrokenPipe, BaseHTTPRequestHandler):
                                     output_str = (
                                         str(output_data)[:2000] if output_data else ""
                                     )
-                                    sse_events.append(
-                                        f"event: tool_result\ndata: {json.dumps({'name': tool_name, 'result': output_str})}\n\n"
-                                    )
-                            result = await agent.ainvoke({"messages": msgs})
+                                    import sys
+                                    print(f"[Agent] \u2705 {tool_name} -> {output_str[:80]}", flush=True)
+                                    emit({'name': tool_name, 'result': output_str, 'type': 'tool_result'})
+                            result = await asyncio.wait_for(
+                                stream_agent.ainvoke({"messages": msgs}),
+                                timeout=AGENT_TIMEOUT,
+                            )
                             final_msgs = result.get("messages", [])
                             full_output = final_msgs[-1].content if final_msgs else ""
+                        except _AgentAbort:
+                            raise
+                        except asyncio.TimeoutError:
+                            emit({'error': 'Agent timed out (120s). Try simplifying the prompt.'})
+                            import sys
+                            print(f"[Agent] \u23f0 Timeout", flush=True)
                         except Exception as e:
-                            sse_events.append(
-                                f"event: error\ndata: {json.dumps({'error': str(e)})}\n\n"
-                            )
+                            emit({'error': str(e)})
                         return local_tools
 
                     # First pass: stream + track tools
-                    called_tools = await _invoke_and_stream(input_messages)
+                    try:
+                        called_tools = await _invoke_and_stream(input_messages)
+                    except _AgentAbort:
+                        return full_output
 
                     # Layer 1: Check tool usage and re-run if needed
-                    blocked, reason = _check_tool_usage(message, called_tools)
-                    max_retries = 2
-                    retry_count = 0
-                    while blocked and retry_count < max_retries:
-                        sse_events.append(
-                            f"event: enforcer\ndata: {json.dumps({'blocked': True, 'reason': reason})}\n\n"
-                        )
-                        retry_msgs = input_messages + [
-                            HumanMessage(content=f"IMPORTANT: {reason}")
-                        ]
-                        retry_tools = await _invoke_and_stream(retry_msgs)
-                        blocked, reason = _check_tool_usage(message, retry_tools)
-                        retry_count += 1
+                    try:
+                        blocked, reason = _check_tool_usage(message, called_tools)
+                        max_retries = 2
+                        retry_count = 0
+                        while blocked and retry_count < max_retries:
+                            emit({'blocked': True, 'reason': reason, 'type': 'enforcer'})
+                            retry_msgs = input_messages + [
+                                HumanMessage(content=f"IMPORTANT: {reason}")
+                            ]
+                            retry_tools = await _invoke_and_stream(retry_msgs)
+                            blocked, reason = _check_tool_usage(message, retry_tools)
+                            retry_count += 1
+                    except _AgentAbort:
+                        return full_output
 
-                    # Layer 2: Self-correction loop — auto-retry on LOW confidence
+                    # Layer 2: Self-correction loop
                     if full_output:
                         try:
                             from agent_handler import _confidence_scan
@@ -4970,9 +4999,7 @@ class DashboardHandler(_SuppressBrokenPipe, BaseHTTPRequestHandler):
                                 reasons = "; ".join(
                                     p.get("reason", "") for p in low_passages
                                 )
-                                sse_events.append(
-                                    f"event: correction\ndata: {json.dumps({'confidence': 'LOW', 'reasons': reasons})}\n\n"
-                                )
+                                emit({'confidence': 'LOW', 'reasons': reasons, 'type': 'correction'})
                                 correction_msg = (
                                     f"Your previous response contained passages with LOW factual confidence. "
                                     f"Reasons: {reasons}. "
@@ -4984,7 +5011,6 @@ class DashboardHandler(_SuppressBrokenPipe, BaseHTTPRequestHandler):
                                 ]
                                 await _invoke_and_stream(retry_msgs)
                                 correction_retries += 1
-                                # Re-scan the new output
                                 if full_output:
                                     scan_result = await loop.run_in_executor(
                                         None,
@@ -4999,18 +5025,24 @@ class DashboardHandler(_SuppressBrokenPipe, BaseHTTPRequestHandler):
                                         p for p in scan_result
                                         if p.get("confidence") == "LOW"
                                     ]
+                        except _AgentAbort:
+                            return full_output
                         except ImportError:
                             pass
                         except Exception as scan_e:
-                            sse_events.append(
-                                f"event: correction\ndata: {json.dumps({'error': str(scan_e)})}\n\n"
-                            )
+                            emit({'error': str(scan_e), 'type': 'correction'})
 
-                    sse_events.append(
-                        f"event: done\ndata: {json.dumps({'response': full_output})}\n\n"
-                    )
-                    return sse_events, full_output
+                    import sys
+                    tok_count = len(full_output.split())
+                    print(f"[Agent] \U0001f3af Done ({tok_count} words, {len(called_tools)} tools)", flush=True)
+                    try:
+                        emit({'response': full_output, 'type': 'done'})
+                    except _AgentAbort:
+                        pass
+                    return full_output
 
+                import sys
+                print(f"[Agent] 🤖 Agent session started for model '{model_name}'", flush=True)
                 if not is_stream:
                     output = asyncio.run(_run_agent())
                     add_to_history(sid, "assistant", output)
@@ -5040,13 +5072,9 @@ class DashboardHandler(_SuppressBrokenPipe, BaseHTTPRequestHandler):
                     self.send_header("Connection", "keep-alive")
                     self.end_headers()
 
-                    sse_events, full_output = asyncio.run(_run_agent_stream())
-                    for sse in sse_events:
-                        try:
-                            self.wfile.write(sse.encode())
-                            self.wfile.flush()
-                        except Exception:
-                            break
+                    full_output = asyncio.run(_run_agent_stream(
+                        lambda data: self.wfile.write(f"event: {data.pop('type', 'message')}\ndata: {json.dumps(data)}\n\n".encode()) or self.wfile.flush()
+                    ))
 
                     add_to_history(sid, "assistant", full_output)
                     tok = count_tokens(message) + count_tokens(full_output)
