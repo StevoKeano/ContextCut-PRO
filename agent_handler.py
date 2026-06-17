@@ -75,13 +75,11 @@ def _run_subprocess(args, timeout=None, **kwargs):
 
 _TOOL_KEYWORDS = {
     "shell_exec": [
-        "run",
-        "execute",
-        "command",
+        "execute command",
         "terminal",
         "bash",
-        "shell",
-        "script",
+        "shell command",
+        "system command",
         "install",
         "compile",
         "build",
@@ -89,6 +87,10 @@ _TOOL_KEYWORDS = {
         "git ",
         "npm ",
         "pip ",
+        "apt ",
+        "docker",
+        "background process",
+        "nohup",
     ],
     "read_file": [
         "read file",
@@ -157,11 +159,12 @@ _TOOL_KEYWORDS = {
     ],
     "list_knowledge": [
         "list knowledge",
-        "list files",
-        "what files",
         "knowledge base",
         "what's ingested",
         "show knowledge",
+        "ingested files",
+        "qdrant files",
+        "knowledge files",
     ],
     "delete_knowledge": [
         "delete knowledge",
@@ -306,6 +309,9 @@ Respond ONLY with the JSON array, no other text."""
 def shell_exec(command: str) -> str:
     """
     Execute a bash shell command and return stdout + stderr.
+    ONLY for system operations: git, apt, compilation, background processes, ffmpeg, docker.
+    Do NOT use for Python scripts (use run_python), file reads (use read_file),
+    file writes (use write_file), or system info (use system_info).
     Dangerous patterns (rm -rf /, mkfs, etc.) are blocked outright.
     The caller must check shell_confirm_mode before executing.
     """
@@ -778,8 +784,10 @@ def delete_knowledge(filename: str) -> str:
 @tool
 def run_python(code: str, timeout: int = 30) -> str:
     """
-    Execute Python code in a subprocess and return stdout + stderr.
-    Output is capped at 64 KB. Useful for data analysis, testing, or scripting.
+    Execute Python code inline and return stdout + stderr.
+    PREFERRED for: calculations, data analysis, text processing, quick scripts,
+    simple web servers (use http.server), file parsing, and any Python work.
+    Output is capped at 64 KB.
     WARNING: NOT for long-running processes (servers, listeners, loops).
     Use shell_exec to write a .py file and background it instead.
     """
@@ -1111,28 +1119,28 @@ ALL_TOOLS = [
 ]
 
 TOOL_DESCRIPTIONS = {
-    "shell_exec": "Run bash commands",
-    "read_file": "Read any local file",
-    "write_file": "Write / overwrite a local file (auto-backup)",
-    "append_file": "Append to a file",
-    "diff_files": "Unified diff between two files",
-    "list_dir": "Directory tree listing",
-    "web_search": "DuckDuckGo web search",
-    "fetch_url": "Fetch a URL as plain text",
-    "vector_search": "Query Qdrant RAG via ContextCut-PRO",
-    "system_info": "CPU / RAM / GPU / disk snapshot",
-    "get_context_logs": "Retrieve conversation history for a session",
-    "get_session_stats": "Token counts and context usage for a session",
-    "ingest_file": "Re-ingest a knowledge file into Qdrant",
-    "list_knowledge": "List all files in KB with chunk counts",
-    "delete_knowledge": "Delete vectors for a file from Qdrant",
-    "run_python": "Execute Python code in a subprocess (NOT for long-running processes)",
-    "run_sql": "Run a SELECT query on the session database",
-    "plan": "Create a structured multi-step plan for complex tasks",
-    "remember": "Store a fact in persistent memory (key-value across sessions)",
-    "recall": "Retrieve facts from persistent memory (optionally by key)",
-    "forget": "Delete a fact from persistent memory by key",
-    "compose_tool": "Create a new compound tool that chains multiple primitive tools",
+    "shell_exec": "Run bash commands (system ops: git, apt, compile, background processes). NOT for Python scripts — use run_python instead.",
+    "read_file": "Read any local file (text or binary). Use instead of shell_exec cat.",
+    "write_file": "Write / overwrite a local file (auto-backup). Use instead of shell_exec echo/heredoc.",
+    "append_file": "Append content to a file.",
+    "diff_files": "Unified diff between two files.",
+    "list_dir": "Directory tree listing. Use instead of shell_exec ls.",
+    "web_search": "DuckDuckGo web search for up-to-date information.",
+    "fetch_url": "Fetch a URL as plain text.",
+    "vector_search": "Query the local knowledge base (Qdrant RAG). Use for questions about the codebase or ingested docs.",
+    "system_info": "CPU / RAM / GPU / disk snapshot. Use instead of shell_exec free/df/nvidia-smi.",
+    "get_context_logs": "Retrieve conversation history for a session.",
+    "get_session_stats": "Token counts and context usage for a session.",
+    "ingest_file": "Re-ingest a knowledge file into Qdrant.",
+    "list_knowledge": "List all files in KB with chunk counts from Qdrant.",
+    "delete_knowledge": "Delete vectors for a file from Qdrant (not the file itself).",
+    "run_python": "Execute Python code inline (calculations, data analysis, text processing, quick scripts). PREFER this over shell_exec for Python work. NOT for long-running processes.",
+    "run_sql": "Run a SELECT query on the session database.",
+    "plan": "Create a structured multi-step plan for complex tasks that need multiple tool calls.",
+    "remember": "Store a fact in persistent memory (key-value across sessions).",
+    "recall": "Retrieve facts from persistent memory (optionally by key). Call at conversation start.",
+    "forget": "Delete a fact from persistent memory by key.",
+    "compose_tool": "Create a new compound tool that chains multiple primitive tools.",
 }
 
 # ── Agent builder ─────────────────────────────────────────────────────────────
@@ -1157,6 +1165,15 @@ You have access to:
 - remember / recall / forget: Persistent key-value memory across sessions
 - compose_tool: Create new compound tools that chain primitive tools
 
+CRITICAL — NEVER overcomplicate:
+- NEVER create Python virtual environments for simple tasks.
+- NEVER install pip packages (flask, fastapi, requests) for trivial scripts or hello-world demos.
+- Use Python's built-in `http.server` for simple web servers, not Flask.
+- For calculations, data formatting, string manipulation, or quick scripts: use **run_python** with inline code, NOT shell_exec.
+- For file reads/writes: use **read_file** / **write_file** tools, NOT shell_exec with cat/echo.
+- For system info (CPU, RAM, disk, GPU): use **system_info** tool, NOT shell_exec with free/df/nvidia-smi.
+- Only use shell_exec when you truly need a system operation (git, compilation, background process, package install via apt).
+
 Rules:
 1. For shell_exec, inform the user what command you want to run and why.
 2. Use vector_search proactively when the question relates to the knowledge base.
@@ -1168,7 +1185,7 @@ Rules:
 8. At the start of a conversation, call recall() to load persistent memories relevant to the user's request.
 9. Use remember() to store important facts about the user (name, preferences, project details) so they persist across sessions.
 10. Prefer system_info over installing packages or writing custom scripts for CPU/RAM/disk/GPU data.
-11. Use write_file or a heredoc (cat << 'EOF' > file) to write multi-line files. Do NOT use echo with escaped \\n.
+11. Use write_file to write multi-line files. Do NOT use echo with escaped \\n.
 12. run_python is for short scripts only. For servers/background processes, use shell_exec to write the file then background it (& or nohup).
 13. Avoid chaining commands with && when a preceding command might fail (e.g., kill -9 ... && ...). Use ; or separate steps instead."""
 
@@ -1176,7 +1193,7 @@ Rules:
 def build_agent(model_name: str = None, upstream: str = None, api_key: str = None):
 
     llm = ChatOpenAI(
-        model=model_name or "gpt-4o",
+        model=model_name or "qwen3:14b-q8_0",
         openai_api_base=upstream + "/v1",
         openai_api_key=api_key or "not-needed",
         temperature=0.3,

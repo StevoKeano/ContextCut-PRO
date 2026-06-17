@@ -4867,7 +4867,8 @@ class DashboardHandler(_SuppressBrokenPipe, BaseHTTPRequestHandler):
                         ),
                         timeout=AGENT_TIMEOUT,
                     )
-                    return msgs[-1].content if msgs else ""
+                    final_msgs = result.get("messages", [])
+                    return final_msgs[-1].content if final_msgs else ""
 
                 class _AgentAbort(Exception):
                     pass
