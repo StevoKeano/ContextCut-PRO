@@ -268,15 +268,24 @@ def _check_tool_usage(user_message: str, called_tools: set) -> tuple[bool, str]:
 
 # ── Layer 2: Confidence scan ──────────────────────────────────────────────────
 
+# Independent scan model — MUST differ from the agent model to avoid self-evaluation.
+# Set CONTEXTCUT_SCAN_MODEL to a separate model (e.g. a smaller/cheaper one).
+# If unset, the confidence scan is disabled.
+_SCAN_MODEL = os.environ.get("CONTEXTCUT_SCAN_MODEL", "").strip()
+
 
 def _confidence_scan(
-    text: str, model_name: str = None, upstream: str = None, api_key: str = None
+    text: str, upstream: str = None, api_key: str = None
 ) -> list[dict]:
+    if not _SCAN_MODEL:
+        return []
+    if not upstream or not text or len(text) < 80:
+        return []
     llm = ChatOpenAI(
-        model=model_name or "qwen3:14b-q8_0",
+        model=_SCAN_MODEL,
         openai_api_base=upstream + "/v1",
         openai_api_key=api_key or "not-needed",
-        temperature=0.1,
+        temperature=0.0,
     )
     prompt = f"""Analyze the following text and identify any passages that might be factual inaccuracies or hallucinations. For each passage, rate confidence as HIGH (well-supported), MEDIUM (plausible but unverifiable), or LOW (likely fabricated).
 

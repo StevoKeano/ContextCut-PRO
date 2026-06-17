@@ -15,6 +15,9 @@
 - `.env` overrides defaults in `qdrant_proxy_final.py`
 - `CONTEXTCUT_MODEL` — chat model (default `qwen3:14b-q8_0`)
 - `CONTEXTCUT_CTX_LIMIT` — context window (default 32768, now 16384)
+- `CONTEXTCUT_SCAN_MODEL` — separate model for confidence scan (default: unset = disabled).
+  Must be different from the agent model to avoid self-evaluation.
+  E.g. `qwen3:0.5b` or `llama3.2:1b`
 
 ## Fullscreen Behavior
 - When shell_exec permission is requested (Allow/Deny), the code auto-exits fullscreen mode and scrolls to show the buttons.

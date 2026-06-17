@@ -4767,7 +4767,6 @@ class DashboardHandler(_SuppressBrokenPipe, BaseHTTPRequestHandler):
             try:
                 body = json.loads(raw_body)
                 text = body.get("text", "")
-                model_name = body.get("model", DEFAULT_MODEL or "qwen3:14b-q8_0")
                 if not text.strip():
                     resp = json.dumps({"error": "text is required"}).encode()
                     self.send_response(400)
@@ -4780,7 +4779,6 @@ class DashboardHandler(_SuppressBrokenPipe, BaseHTTPRequestHandler):
 
                 result = _confidence_scan(
                     text,
-                    model_name,
                     upstream=get_current_upstream(),
                     api_key=get_current_api_key(),
                 )
@@ -4996,7 +4994,6 @@ class DashboardHandler(_SuppressBrokenPipe, BaseHTTPRequestHandler):
                                 None,
                                 lambda: _confidence_scan(
                                     full_output,
-                                    model_name,
                                     upstream=get_current_upstream(),
                                     api_key=get_current_api_key(),
                                 ),
@@ -5008,8 +5005,10 @@ class DashboardHandler(_SuppressBrokenPipe, BaseHTTPRequestHandler):
                                 if isinstance(p, dict) and p.get("confidence") == "LOW"
                             ]
                             import sys
-                            if low_passages:
+                            if scan_result and low_passages:
                                 print(f"[{datetime.now().strftime('%H:%M:%S')}] [Agent] \U0001f50d Confidence scan: {len(low_passages)} LOW passages", flush=True)
+                            elif not scan_result:
+                                print(f"[{datetime.now().strftime('%H:%M:%S')}] [Agent] \U0001f50d Confidence scan disabled (set CONTEXTCUT_SCAN_MODEL)", flush=True)
                             correction_retries = 0
                             max_corrections = 1
                             while low_passages and correction_retries < max_corrections:
@@ -5035,7 +5034,6 @@ class DashboardHandler(_SuppressBrokenPipe, BaseHTTPRequestHandler):
                                         None,
                                         lambda: _confidence_scan(
                                             full_output,
-                                            model_name,
                                             upstream=get_current_upstream(),
                                             api_key=get_current_api_key(),
                                         ),
