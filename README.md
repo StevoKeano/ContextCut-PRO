@@ -253,36 +253,6 @@ curl http://localhost:8910/knowledge://stats
 
 ---
 
-## Agent Tools
-
-ContextCut-PRO includes a LangChain-powered agent system (`agent_handler.py`) with local tools that run entirely on your machine — no per-call fees, no credits, no metering.
-
-| Tool | Description |
-|---|---|
-| `vector_search` | Semantic search across your knowledge base |
-| `web_search` | Live web results via DuckDuckGo |
-| `read_file` / `write_file` | Read/write knowledge base files |
-| `append_file` | Append to an existing file |
-| `list_dir` / `list_knowledge` | List directory contents or all indexed files |
-| `fetch_url` | Fetch and extract text from a URL |
-| `ingest_file` | Ingest a document into the Qdrant knowledge base |
-| `delete_knowledge` | Remove a file from the vector index |
-| `diff_files` | Show diff between two files |
-| `shell_exec` | Execute shell commands (requires approval) |
-| `run_python` | Execute Python code in an isolated subprocess |
-| `run_sql` | Query the session history database |
-| `system_info` | Report OS, CPU, memory, and disk usage |
-| `remember` / `recall` / `forget` | Persistent key-value memory across sessions |
-| `plan` | Multi-step task decomposition and execution |
-| `compose_tool` | Compose two existing tools into a new combined tool |
-| `get_context_logs` / `get_session_stats` | Dashboard analytics queries |
-
-**Contrast with cloud agent services** (e.g., hosted Hermes, OpenAI functions, Anthropic tool use): those charge per tool call or per token — typically a few dollars of free credits to start, then usage-based pricing. ContextCut-PRO's agent tools are part of the one-time license. Every tool call runs locally on your hardware. No API fees, no metering, no surprises.
-
-You can also use ContextCut-PRO purely as a RAG proxy (injecting context, no agent orchestration) — the agent system is optional. Or combine both: point the proxy at a local Hermes model via Ollama to get RAG context injection **and** model-native tool calling in the same request, with ContextCut-PRO's agent tools available as a fallback orchestration layer.
-
----
-
 ## ContextCut-Free
 
 **One file, no Docker, no license, no API keys.** A lightweight version of ContextCut for local-only use.
