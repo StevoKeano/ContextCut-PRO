@@ -4957,7 +4957,12 @@ class DashboardHandler(_SuppressBrokenPipe, BaseHTTPRequestHandler):
                             print(f"[{datetime.now().strftime('%H:%M:%S')}] [Agent] \u23f0 Timeout", flush=True)
                             raise _AgentAbort()
                         except Exception as e:
-                            emit({'error': str(e)})
+                            err_msg = f"Agent error: {e}"
+                            emit({'error': err_msg})
+                            full_output = err_msg
+                            import sys
+                            print(f"[{datetime.now().strftime('%H:%M:%S')}] [Agent] \u274c {err_msg[:200]}", flush=True)
+                            raise _AgentAbort()
                         return local_tools
 
                     # First pass: stream + track tools
