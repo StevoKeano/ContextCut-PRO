@@ -705,9 +705,10 @@ def ingest_file(filename: str) -> str:
     Ingest a knowledge file into Qdrant by filename (relative to the KB dir).
     Re-embeds a single .md / .pdf / .docx / .xlsx file.
     """
+    import subprocess
     try:
-        from qdrant_proxy_final import KB_DIR, QDRANT_HOST, QDRANT_PORT, COLLECTION, _VK, _EMBED_MODE, _EMBED_MODEL, UPSTREAM
-        import subprocess, sys, json
+        from qdrant_proxy_final import KB_DIR, QDRANT_HOST, QDRANT_PORT, COLLECTION, _VK, _EMBED_MODE, _LOCAL_EMBED as _EMBED_MODEL, UPSTREAM
+        import sys, json
         from pathlib import Path
 
         fpath = (Path(KB_DIR) / filename).resolve()

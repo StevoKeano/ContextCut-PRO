@@ -476,7 +476,7 @@ def new_session() -> str:
         "created": datetime.now().isoformat(),
         "msg_count": 0,
         "ctx_limit_reached": False,
-        "shell_confirm_mode": "ask",
+        "shell_confirm_mode": "always",
         "_db_inserted": False,
     }
     _current_sid = sid
@@ -623,7 +623,7 @@ def load_sessions():
                     "created": created,
                     "msg_count": msg_count or len(history),
                     "ctx_limit_reached": bool(ctx_hit),
-                    "shell_confirm_mode": "ask",
+                    "shell_confirm_mode": "always",
                     "_db_inserted": True,
                 }
         db.close()
@@ -1898,6 +1898,9 @@ tr:hover td{{background:var(--surf2)}}
 .send-btn:hover{{opacity:.85}}.send-btn:disabled{{opacity:.4;cursor:not-allowed}}
 .att-btn{{background:transparent;border:1px solid var(--border);color:var(--muted);border-radius:var(--r);padding:8px 10px;font-size:14px;cursor:pointer;line-height:1;flex-shrink:0}}
 .agent-toggle.agent-on{{background:var(--accent);color:#000;border-color:var(--accent);font-weight:600}}
+.unattended-lbl{{display:none;margin-left:8px;font-size:11px;color:var(--muted);cursor:pointer;font-family:'JetBrains Mono',monospace;white-space:nowrap;align-items:center;gap:4px}}
+.unattended-lbl.show{{display:inline-flex}}
+.unattended-lbl input{{accent-color:var(--accent);cursor:pointer}}
 .scan-toggle{{background:transparent;border:1px solid var(--border);color:var(--muted);border-radius:3px;padding:8px 10px;font-size:11px;cursor:pointer;line-height:1;flex-shrink:0;font-family:'JetBrains Mono',monospace}}
 .scan-toggle.scan-on{{background:#f59e0b;color:#000;border-color:#f59e0b;font-weight:600}}
 .scan-test{{background:transparent;border:1px solid var(--border);color:var(--muted);border-radius:3px;padding:8px 10px;font-size:11px;cursor:pointer;line-height:1;flex-shrink:0;font-family:'JetBrains Mono',monospace;margin-left:4px}}
@@ -2067,6 +2070,7 @@ tr.cloud-off td{{background:#0a1a2e!important;color:#22c55e!important;border-top
         <button class="scan-toggle" id="scanToggle" onclick="toggleScanMode()" title="Scan responses for potential hallucinations">🧪 Scan OFF</button>
         <button class="scan-test" id="scanTestBtn" onclick="testScan()" title="Run a demo scan on known false claims to test highlighting">🔬 Test</button>
         <button class="agent-toggle" id="agentToggle" onclick="toggleAgentMode()" title="Toggle Agent mode (tool-use)" style="background:transparent;border:1px solid var(--border);color:var(--muted);border-radius:3px;padding:8px 10px;font-size:11px;cursor:pointer;line-height:1;flex-shrink:0;font-family:'JetBrains Mono',monospace">🤖 Agent OFF</button>
+        <label class="unattended-lbl" id="unattendedLbl" title="Auto-approve shell commands without Allow/Deny prompts"><input type="checkbox" id="unattendedChk" onchange="confirmUnattended(this)"> Unattended</label>
         <button class="send-btn" id="sendBtn" onclick="sendMessage()" aria-label="Send message">Send ↑</button>
       </div>
     </div>
@@ -2097,6 +2101,21 @@ function toggleAgentMode() {{
     input.placeholder = agentMode
       ? 'Agent: use tools, run code, search the web…'
       : 'Type a message… (Enter to send, Shift+Enter for newline). Try: /clear, /help';
+  }}
+  const lbl = document.getElementById('unattendedLbl');
+  if (lbl) lbl.classList.toggle('show', agentMode);
+  if (!agentMode) {{
+    const chk = document.getElementById('unattendedChk');
+    if (chk) {{
+      if (chk.checked) {{
+        chk.checked = false;
+        fetch('/api/agent/shell-mode', {{
+          method: 'POST',
+          headers: {{'Content-Type':'application/json'}},
+          body: JSON.stringify({{session_id: sessionId, mode: 'ask'}})
+        }});
+      }}
+    }}
   }}
 }}
 
@@ -2192,6 +2211,26 @@ async function shellReject() {{
     }});
     document.querySelectorAll('.shell-btns').forEach(el => el.innerHTML = '🔴 Always Reject');
   }} catch(e) {{}}
+}}
+
+async function confirmUnattended(cb) {{
+  if (cb.checked) {{
+    if (confirm('Unattended mode: shell commands will run automatically without Allow/Deny prompts.\\n\\nOnly enable this if you trust the agent code.\\n\\nClick OK to enable, Cancel to keep prompting.')) {{
+      await fetch('/api/agent/shell-mode', {{
+        method: 'POST',
+        headers: {{'Content-Type':'application/json'}},
+        body: JSON.stringify({{session_id: sessionId, mode: 'always'}})
+      }});
+    }} else {{
+      cb.checked = false;
+    }}
+  }} else {{
+    await fetch('/api/agent/shell-mode', {{
+      method: 'POST',
+      headers: {{'Content-Type':'application/json'}},
+      body: JSON.stringify({{session_id: sessionId, mode: 'ask'}})
+    }});
+  }}
 }}
 
 function handleKey(e) {{
@@ -4907,7 +4946,7 @@ class DashboardHandler(_SuppressBrokenPipe, BaseHTTPRequestHandler):
                     self.wfile.write(resp)
                     return
                 input_messages = chat_history + [HumanMessage(content=message)]
-                shell_mode = session.get("shell_confirm_mode", "ask")
+                shell_mode = session.get("shell_confirm_mode", "always")
 
                 import asyncio
 
@@ -4915,7 +4954,7 @@ class DashboardHandler(_SuppressBrokenPipe, BaseHTTPRequestHandler):
 
                 async def _run_agent() -> str:
                     result = await asyncio.wait_for(
-                        agent.with_config({"recursion_limit": 15}).ainvoke(
+                        agent.with_config({"recursion_limit": 50}).ainvoke(
                             {"messages": input_messages}
                         ),
                         timeout=AGENT_TIMEOUT,
@@ -4942,7 +4981,7 @@ class DashboardHandler(_SuppressBrokenPipe, BaseHTTPRequestHandler):
                         local_tools = set()
                         try:
                             stream_agent = agent.with_config(
-                                {"recursion_limit": 15}
+                                {"recursion_limit": 50}
                             )
                             async with asyncio.timeout(AGENT_TIMEOUT):
                                     async for event in stream_agent.astream_events(

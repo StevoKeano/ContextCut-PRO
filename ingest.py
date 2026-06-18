@@ -460,6 +460,7 @@ if __name__ == "__main__":
     parser.add_argument("--watch", action="store_true", help="Watch KB_DIR for changes")
     parser.add_argument("--query", type=str,            help="Test semantic search")
     parser.add_argument("--clear", action="store_true", help="Wipe Qdrant collection")
+    parser.add_argument("--file",  type=str,            help="Ingest a single file (basename relative to KB_DIR)")
     args = parser.parse_args()
 
     if args.clear:
@@ -471,6 +472,13 @@ if __name__ == "__main__":
             print("  Set VOYAGE_API_KEY or CONTEXTCUT_EMBED_MODEL")
             sys.exit(1)
         query(args.query)
+        sys.exit(0)
+    if args.file:
+        fpath = Path(KB_DIR) / args.file
+        if not fpath.exists():
+            print(f"File not found: {fpath}", flush=True)
+            sys.exit(1)
+        ingest_file(fpath)
         sys.exit(0)
 
     # watch or ingest_all need embed backend
