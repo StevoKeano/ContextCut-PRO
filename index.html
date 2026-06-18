@@ -139,7 +139,7 @@
   #hv-llm     { bottom: 14%; right: 8%; }
   #hv-cloud   { bottom: 14%; right: 8%; }
   #hv-kb      { top: 24%; right: calc(50% + 12px); transform: translateY(-50%); }
-  #hv-local   { top: 4%; left: 50%; transform: translateX(-50%); font-size: clamp(0.4rem, 0.8vmin, 0.65rem); color: rgba(34,211,238,0.35); }
+  #hv-local   { top: 4%; left: 50%; transform: translateX(-50%); font-size: clamp(0.4rem, 0.8vmin, 0.65rem); color: rgba(103,232,249,0.9); }
 
   #hv-dot-client { bottom: calc(14% + 2.2vmin); left: 8%; transform: translateX(-50%); background: #22d3ee; box-shadow: 0 0 12px rgba(34,211,238,0.4); }
   #hv-dot-proxy  { bottom: calc(14% + 2.2vmin); left: 38%; transform: translateX(-50%); background: #a855f7; box-shadow: 0 0 12px rgba(168,85,247,0.5); }
@@ -147,17 +147,17 @@
   #hv-dot-cloud  { bottom: calc(14% + 2.2vmin); right: 8%; transform: translateX(50%); background: #ef4444; box-shadow: 0 0 12px rgba(239,68,68,0.4); }
   #hv-dot-kb     { top: 24%; left: 35%; transform: translate(-50%, -50%); background: #818cf8; box-shadow: 0 0 20px rgba(129,140,248,0.4); width: clamp(6px, 1.4vmin, 14px); height: clamp(6px, 1.4vmin, 14px); }
 
-  .hl-client, .hl-proxy, .hl-llm { color: rgba(255,255,255,0.45); }
-  .hl-cloud { color: rgba(239,68,68,0.55); }
-  .hl-kb { color: rgba(129,140,248,0.65); }
+  .hl-client, .hl-proxy, .hl-llm { color: rgba(255,255,255,0.95); }
+  .hl-cloud { color: rgba(252,165,165,0.95); }
+  .hl-kb { color: rgba(165,180,252,1); }
 
   #hv-badge-before, #hv-badge-after {
     position: absolute; top: 10%;
     font-size: clamp(1rem, 3vmin, 2rem); font-weight: 800;
     letter-spacing: -0.03em; pointer-events: none; transition: opacity 0.8s;
   }
-  #hv-badge-before { left: 50%; transform: translateX(-50%); color: rgba(239,68,68,0.12); }
-  #hv-badge-after  { left: 50%; color: rgba(34,211,238,0.12); }
+  #hv-badge-before { left: 50%; transform: translateX(-50%); color: rgba(252,165,165,0.6); }
+  #hv-badge-after  { left: 50%; color: rgba(103,232,249,0.6); }
 
   /* ── Rest of page ── */
   .install { padding: 80px 0; }
@@ -745,7 +745,7 @@ document.querySelectorAll('.os-tab').forEach(tab => {
       ctx.fill();
     }
     const lfs = lfPx();
-    ctx.fillStyle = `rgba(239,68,68,${0.3 * opacity})`;
+    ctx.fillStyle = `rgba(239,68,68,${0.85 * opacity})`;
     ctx.font = `600 ${lfs}px -apple-system, sans-serif`;
     ctx.textAlign = 'center';
     ctx.fillText('⚠ data leaves your machine', (cx + W()) / 2, p.client.y - 50 * sc);
@@ -755,7 +755,7 @@ document.querySelectorAll('.os-tab').forEach(tab => {
     if (opacity < 0.01) return;
     const sc = s();
     const lfs = lfPx();
-    const a = 0.15 * opacity;
+    const a = 0.75 * opacity;
     ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
 
     const cx = (p.client.x + p.proxy.x) / 2, cy = p.client.y;
@@ -765,7 +765,7 @@ document.querySelectorAll('.os-tab').forEach(tab => {
     ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
 
     // Left side: deliver (response) above, request below
-    ctx.fillStyle = `rgba(34,211,238,${0.2 * opacity})`;
+    ctx.fillStyle = `rgba(34,211,238,${0.9 * opacity})`;
     ctx.fillText('← deliver', cx, cy - 54 * sc);
 
     ctx.fillStyle = `rgba(148,163,184,${a})`;
@@ -776,7 +776,7 @@ document.querySelectorAll('.os-tab').forEach(tab => {
     ctx.fillText('results', p.kb.x + 52 * sc, (p.kb.y + p.proxy.y) / 2 + 8 * sc);
 
     // Right side: streaming response (reply) above, forward below
-    ctx.fillStyle = `rgba(34,211,238,${0.2 * opacity})`;
+    ctx.fillStyle = `rgba(34,211,238,${0.9 * opacity})`;
     ctx.fillText('← streaming response', rx, ry - 54 * sc);
 
     ctx.fillStyle = `rgba(148,163,184,${a})`;
