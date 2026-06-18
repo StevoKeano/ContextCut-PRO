@@ -1260,139 +1260,161 @@ class ProxyHandler(_SuppressBrokenPipe, BaseHTTPRequestHandler):
             self.wfile.write(str(e).encode())
 
     def do_GET(self):
-        self._forward("GET", b"")
+        try:
+            self._forward("GET", b"")
+        except Exception:
+            import traceback
+            traceback.print_exc()
+            try:
+                self.send_response(502)
+                self.send_header("Content-Type", "text/plain; charset=utf-8")
+                self.end_headers()
+                self.wfile.write(traceback.format_exc().encode("utf-8"))
+            except Exception:
+                pass
 
     def do_POST(self):
-        length = int(self.headers.get("Content-Length", 0))
-        raw_body = self.rfile.read(length)
         try:
-            body = json.loads(raw_body)
-        except Exception:
-            body = None
+            length = int(self.headers.get("Content-Length", 0))
+            raw_body = self.rfile.read(length)
+            try:
+                body = json.loads(raw_body)
+            except Exception:
+                body = None
 
-        query = ""
-        hits_meta = []
-        tok_before = tok_after = 0
+            query = ""
+            hits_meta = []
+            tok_before = tok_after = 0
 
-        if body and "messages" in body:
-            session_id = body.pop("session_id", None)
-            use_history = body.pop("use_history", True)
+            if body and "messages" in body:
+                session_id = body.pop("session_id", None)
+                use_history = body.pop("use_history", True)
 
-            if use_history:
-                if not session_id or session_id not in _sessions:
-                    session_id = new_session()
-                body["session_id"] = session_id
+                if use_history:
+                    if not session_id or session_id not in _sessions:
+                        session_id = new_session()
+                    body["session_id"] = session_id
 
-                new_user_content = (
-                    body["messages"][-1].get("content", "") if body["messages"] else ""
-                )
-                action = detect_dynamic_action(new_user_content)
+                    new_user_content = (
+                        body["messages"][-1].get("content", "") if body["messages"] else ""
+                    )
+                    action = detect_dynamic_action(new_user_content)
 
-                if action == "revise":
-                    session = _sessions.get(session_id)
-                    if session and session["history"]:
-                        last_user = ""
-                        last_assistant = ""
-                        for msg in reversed(session["history"]):
-                            if msg["role"] == "assistant" and not last_assistant:
-                                last_assistant = msg["content"]
-                            elif msg["role"] == "user" and not last_user:
-                                last_user = msg["content"]
-                                break
-                        if last_assistant:
-                            body["messages"] = build_revision_prompt(
-                                last_user, last_assistant, new_user_content
+                    if action == "revise":
+                        session = _sessions.get(session_id)
+                        if session and session["history"]:
+                            last_user = ""
+                            last_assistant = ""
+                            for msg in reversed(session["history"]):
+                                if msg["role"] == "assistant" and not last_assistant:
+                                    last_assistant = msg["content"]
+                                elif msg["role"] == "user" and not last_user:
+                                    last_user = msg["content"]
+                                    break
+                            if last_assistant:
+                                body["messages"] = build_revision_prompt(
+                                    last_user, last_assistant, new_user_content
+                                )
+
+                    elif action == "continue":
+                        session = _sessions.get(session_id)
+                        if session and session["history"]:
+                            body["messages"] = list(session["history"])
+                            body["messages"].append(
+                                {
+                                    "role": "user",
+                                    "content": "Please continue your previous response.",
+                                }
                             )
 
-                elif action == "continue":
-                    session = _sessions.get(session_id)
-                    if session and session["history"]:
-                        body["messages"] = list(session["history"])
-                        body["messages"].append(
-                            {
-                                "role": "user",
-                                "content": "Please continue your previous response.",
-                            }
-                        )
+                    elif action != "stop":
+                        if len(body["messages"]) == 1:
+                            body["messages"] = build_messages_with_history(
+                                session_id, new_user_content
+                            )
 
-                elif action != "stop":
-                    if len(body["messages"]) == 1:
-                        body["messages"] = build_messages_with_history(
-                            session_id, new_user_content
-                        )
+                    add_to_history(session_id, "user", new_user_content)
 
-                add_to_history(session_id, "user", new_user_content)
-
-            for msg in reversed(body["messages"]):
-                if msg.get("role") == "user":
-                    c = msg.get("content", "")
-                    query = c if isinstance(c, str) else str(c)
-                    break
-            tok_before = count_body_tokens(body)
-            if query:
-                ctx, hits_meta = qdrant_context(query)
-                body = inject_context(body, ctx)
-                tok_after = count_body_tokens(body)
-                if tok_after > CTX_LIMIT:
-                    pruned = 0
-                    for msg in body.get("messages", []):
-                        if msg.get("role") == "system" and msg["content"].startswith(
-                            "## Relevant context"
-                        ):
-                            parts = msg["content"].split("\n\n---\n\n")
-                            while (
-                                len(parts) > 2 and count_body_tokens(body) > CTX_LIMIT
+                for msg in reversed(body["messages"]):
+                    if msg.get("role") == "user":
+                        c = msg.get("content", "")
+                        query = c if isinstance(c, str) else str(c)
+                        break
+                tok_before = count_body_tokens(body)
+                if query:
+                    ctx, hits_meta = qdrant_context(query)
+                    body = inject_context(body, ctx)
+                    tok_after = count_body_tokens(body)
+                    if tok_after > CTX_LIMIT:
+                        pruned = 0
+                        for msg in body.get("messages", []):
+                            if msg.get("role") == "system" and msg["content"].startswith(
+                                "## Relevant context"
                             ):
-                                removed = parts.pop(-2)
-                                msg["content"] = "\n\n---\n\n".join(parts)
-                                pruned += 1
-                                tok_after = count_body_tokens(body)
-                            if pruned:
-                                print(
-                                    f"[contextcut] context truncated: removed {pruned} chunk(s) to fit {CTX_LIMIT}"
-                                )
-                                if session_id and session_id in _sessions:
-                                    _sessions[session_id]["ctx_limit_reached"] = True
-                            break
-                raw_body = json.dumps(body).encode()
-            tok_after = count_body_tokens(body)
-            pct = round(tok_after / CTX_LIMIT * 100, 1)
-            ts = datetime.now().strftime("%H:%M:%S")
-            model_name = body.get("model", "?")
-            print(
-                f"[contextcut] {ts} | model={model_name} | {tok_before}→{tok_after}/{CTX_LIMIT} ({pct}%) | hits:{len(hits_meta)} | {query[:60]}"
-            )
-            record(
-                {
-                    "ts": ts,
-                    "query": query[:120],
-                    "tokens_before": tok_before,
-                    "tokens_after": tok_after,
-                    "ctx_limit": CTX_LIMIT,
-                    "pct": pct,
-                    "hits": hits_meta,
-                }
-            )
+                                parts = msg["content"].split("\n\n---\n\n")
+                                while (
+                                    len(parts) > 2 and count_body_tokens(body) > CTX_LIMIT
+                                ):
+                                    removed = parts.pop(-2)
+                                    msg["content"] = "\n\n---\n\n".join(parts)
+                                    pruned += 1
+                                    tok_after = count_body_tokens(body)
+                                if pruned:
+                                    print(
+                                        f"[contextcut] context truncated: removed {pruned} chunk(s) to fit {CTX_LIMIT}"
+                                    )
+                                    if session_id and session_id in _sessions:
+                                        _sessions[session_id]["ctx_limit_reached"] = True
+                                break
+                    raw_body = json.dumps(body).encode()
+                tok_after = count_body_tokens(body)
+                pct = round(tok_after / CTX_LIMIT * 100, 1)
+                ts = datetime.now().strftime("%H:%M:%S")
+                model_name = body.get("model", "?")
+                print(
+                    f"[contextcut] {ts} | model={model_name} | {tok_before}→{tok_after}/{CTX_LIMIT} ({pct}%) | hits:{len(hits_meta)} | {query[:60]}"
+                )
+                record(
+                    {
+                        "ts": ts,
+                        "query": query[:120],
+                        "tokens_before": tok_before,
+                        "tokens_after": tok_after,
+                        "ctx_limit": CTX_LIMIT,
+                        "pct": pct,
+                        "hits": hits_meta,
+                    }
+                )
 
-        is_streaming = isinstance(body, dict) and body.get("stream", False)
-        if self.path in (
-            "/api/pull",
-            "/api/push",
-            "/api/delete",
-            "/api/copy",
-            "/api/create",
-        ):
-            self.send_response(403)
-            self.send_header("Content-Type", "application/json")
-            self.end_headers()
-            self.wfile.write(json.dumps({"error": "Blocked by proxy"}).encode())
-            return
-        self._forward(
-            "POST",
-            raw_body,
-            streaming=is_streaming,
-            session_id=body.get("session_id") if body else None,
-        )
+            is_streaming = isinstance(body, dict) and body.get("stream", False)
+            if self.path in (
+                "/api/pull",
+                "/api/push",
+                "/api/delete",
+                "/api/copy",
+                "/api/create",
+            ):
+                self.send_response(403)
+                self.send_header("Content-Type", "application/json")
+                self.end_headers()
+                self.wfile.write(json.dumps({"error": "Blocked by proxy"}).encode())
+                return
+            self._forward(
+                "POST",
+                raw_body,
+                streaming=is_streaming,
+                session_id=body.get("session_id") if body else None,
+            )
+        except Exception:
+            import traceback
+            traceback.print_exc()
+            try:
+                self.send_response(502)
+                self.send_header("Content-Type", "text/plain; charset=utf-8")
+                self.end_headers()
+                self.wfile.write(traceback.format_exc().encode("utf-8"))
+            except Exception:
+                pass
 
     def do_DELETE(self):
         if self.path.startswith("/api/session/"):
