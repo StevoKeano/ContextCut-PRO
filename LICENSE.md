@@ -45,4 +45,4 @@ This license shall be governed by the laws of the State of Texas, without regard
 ## Contact
 
 For licensing inquiries, additional seats, or permissions beyond the scope of this license:
-contextcut@dontrackme.com
+support@contextcut-pro.com
