@@ -1244,6 +1244,7 @@ def build_agent(model_name: str = None, upstream: str = None, api_key: str = Non
         tools=tools,
         system_prompt=SYSTEM_PROMPT,
     )
+    agent.recursion_limit = 50
     return agent
 
 
