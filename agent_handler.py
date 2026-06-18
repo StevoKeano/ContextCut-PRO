@@ -318,11 +318,11 @@ Text:
         except Exception as e:
             return [{"text": text, "confidence": "HIGH", "reason": f"Scan error: {e}"}]
     else:
-        prompt = f"""Does the following text contain factual errors or hallucinations? Reply ONLY with one word: HIGH, MEDIUM, or LOW.
+        prompt = f"""Does the following text contain ANY factual errors or hallucinations? Be aggressive — flag any statement that is even slightly inaccurate or misleading. Reply ONLY with one word: HIGH, MEDIUM, or LOW.
 
-HIGH = all statements are factually correct
-MEDIUM = some statements are plausible but unverifiable
-LOW = contains clear factual errors or hallucinations
+HIGH = every single statement is 100% factually correct, no exceptions
+MEDIUM = contains at least one questionable, imprecise, or unverifiable claim
+LOW = contains at least one clearly wrong or hallucinated statement
 
 Text: {text}
 
