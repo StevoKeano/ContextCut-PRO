@@ -91,6 +91,9 @@ _TOOL_KEYWORDS = {
         "docker",
         "background process",
         "nohup",
+        "run the command",
+        "run command",
+        "command for me",
     ],
     "read_file": [
         "read file",
@@ -177,6 +180,8 @@ _TOOL_KEYWORDS = {
         "execute python",
         "python code",
         "run script",
+        "run python script",
+        "execute the python",
         "calculate",
     ],
     "run_sql": [
