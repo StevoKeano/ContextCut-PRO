@@ -892,9 +892,8 @@ def _ollama_embed(text: str, model: str) -> list[float] | None:
     """Embed using Ollama's /api/embed endpoint."""
     try:
         payload = json.dumps({"model": model, "input": text}).encode()
-        embed_url = _ollama_url if _ollama_url else UPSTREAM
         req = urllib.request.Request(
-            f"{embed_url}/api/embed", data=payload, method="POST"
+            f"{UPSTREAM}/api/embed", data=payload, method="POST"
         )
         req.add_header("Content-Type", "application/json")
         with urllib.request.urlopen(req, timeout=30) as resp:
@@ -1376,7 +1375,7 @@ class ProxyHandler(_SuppressBrokenPipe, BaseHTTPRequestHandler):
                                     pruned += 1
                                     tok_after = count_body_tokens(body)
                                 if pruned:
-                                    print(
+                                    _log(
                                         f"[contextcut] context truncated: removed {pruned} chunk(s) to fit {CTX_LIMIT}"
                                     )
                                     if session_id and session_id in _sessions:
@@ -1387,7 +1386,7 @@ class ProxyHandler(_SuppressBrokenPipe, BaseHTTPRequestHandler):
                 pct = round(tok_after / CTX_LIMIT * 100, 1)
                 ts = datetime.now().strftime("%H:%M:%S")
                 model_name = body.get("model", "?")
-                print(
+                _log(
                     f"[contextcut] {ts} | model={model_name} | {tok_before}→{tok_after}/{CTX_LIMIT} ({pct}%) | hits:{len(hits_meta)} | {query[:60]}"
                 )
                 record(

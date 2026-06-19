@@ -15,7 +15,7 @@ fi
 set -a
 source "$INST/.env"
 set +a
-"$INST/venv/bin/python" "$INST/qdrant_proxy_final.py" &
+"$INST/venv/bin/python" "$INST/qdrant_proxy_final.py" >> "$INST/pro.log" 2>&1 &
 echo $! > "$PROXY_PIDFILE"
 
 # Wait for proxy ready marker (means .env synced + collection fixed)
@@ -32,17 +32,6 @@ done
 set -a
 source "$INST/.env"
 set +a
-
-# ---- Start MCP knowledge server ----
-MCP_PORT="${CONTEXTCUT_MCP_PORT:-8910}"
-MCP_PIDFILE="$INST/.mcp.pid"
-if [ -f "$MCP_PIDFILE" ] && kill -0 $(cat "$MCP_PIDFILE") 2>/dev/null; then
-  echo "MCP server already running (PID $(cat "$MCP_PIDFILE"))."
-else
-  "$INST/venv/bin/python" "$INST/mcp_knowledge_server.py" --transport http --port "$MCP_PORT" &
-  echo $! > "$MCP_PIDFILE"
-  echo "MCP server started (PID $(cat "$MCP_PIDFILE")) on port $MCP_PORT."
-fi
 
 # ââ Start watcher ââ
 WATCHER_PIDFILE="$INST/.ingest.pid"
