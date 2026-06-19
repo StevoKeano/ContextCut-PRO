@@ -1259,17 +1259,26 @@ class ProxyHandler(_SuppressBrokenPipe, BaseHTTPRequestHandler):
             self.end_headers()
             self.wfile.write(str(e).encode())
 
+    def _write_error(self, msg: str):
+        try:
+            err_path = os.path.join(os.path.dirname(__file__), ".proxy_error")
+            with open(err_path, "a") as f:
+                f.write(f"{datetime.now()} | {msg}\n")
+        except Exception:
+            pass
+
     def do_GET(self):
         try:
             self._forward("GET", b"")
         except Exception:
             import traceback
-            traceback.print_exc()
+            tb = traceback.format_exc()
+            self._write_error(f"do_GET crash:\n{tb}")
             try:
                 self.send_response(502)
                 self.send_header("Content-Type", "text/plain; charset=utf-8")
                 self.end_headers()
-                self.wfile.write(traceback.format_exc().encode("utf-8"))
+                self.wfile.write(tb.encode("utf-8"))
             except Exception:
                 pass
 
@@ -1407,12 +1416,13 @@ class ProxyHandler(_SuppressBrokenPipe, BaseHTTPRequestHandler):
             )
         except Exception:
             import traceback
-            traceback.print_exc()
+            tb = traceback.format_exc()
+            self._write_error(f"do_POST crash:\n{tb}")
             try:
                 self.send_response(502)
                 self.send_header("Content-Type", "text/plain; charset=utf-8")
                 self.end_headers()
-                self.wfile.write(traceback.format_exc().encode("utf-8"))
+                self.wfile.write(tb.encode("utf-8"))
             except Exception:
                 pass
 
