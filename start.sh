@@ -43,3 +43,5 @@ else
   echo "Watcher started. PID: $(cat "$WATCHER_PIDFILE")"
 fi
 echo "ContextCut started. Dashboard: http://localhost:${CONTEXTCUT_DASHBOARD_PORT}"
+echo "Tailing proxy log (Ctrl+C to stop watching, proxy keeps running)..."
+tail -f "$INST/pro.log"
