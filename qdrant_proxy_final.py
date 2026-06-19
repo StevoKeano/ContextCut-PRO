@@ -882,12 +882,19 @@ def get_clients():
     return _vc, _qclient
 
 
+def _log(msg: str):
+    try:
+        print(msg, flush=True)
+    except OSError:
+        pass
+
 def _ollama_embed(text: str, model: str) -> list[float] | None:
     """Embed using Ollama's /api/embed endpoint."""
     try:
         payload = json.dumps({"model": model, "input": text}).encode()
+        embed_url = _ollama_url if _ollama_url else UPSTREAM
         req = urllib.request.Request(
-            f"{UPSTREAM}/api/embed", data=payload, method="POST"
+            f"{embed_url}/api/embed", data=payload, method="POST"
         )
         req.add_header("Content-Type", "application/json")
         with urllib.request.urlopen(req, timeout=30) as resp:
@@ -897,7 +904,7 @@ def _ollama_embed(text: str, model: str) -> list[float] | None:
             return embeddings[0]
         return None
     except Exception as e:
-        print(f"[contextcut] Ollama embed error: {e}")
+        _log(f"[contextcut] Ollama embed error: {e}")
         return None
 
 
@@ -921,19 +928,19 @@ def _safe_embed(query: str, input_type: str) -> list[float] | None:
                 err_msg = str(e).lower()
                 if "rate" in err_msg or "429" in err_msg:
                     wait = 60 + random.uniform(5, 15)
-                    print(
+                    _log(
                         f"[contextcut] Voyage rate-limited, backing off {wait:.0f}s (attempt {attempt + 1}/{max_retries})"
                     )
                     time.sleep(wait)
                 else:
-                    print(f"[contextcut] Voyage embed error: {e}")
+                    _log(f"[contextcut] Voyage embed error: {e}")
                     if _LOCAL_EMBED:
-                        print(
+                        _log(
                             f"[contextcut] Falling back to Ollama embed: {_LOCAL_EMBED}"
                         )
                         return _ollama_embed(query, _LOCAL_EMBED)
                     return None
-        print(f"[contextcut] Voyage embed failed after {max_retries} retries")
+        _log(f"[contextcut] Voyage embed failed after {max_retries} retries")
         if _LOCAL_EMBED:
             return _ollama_embed(query, _LOCAL_EMBED)
         return None
@@ -942,7 +949,7 @@ def _safe_embed(query: str, input_type: str) -> list[float] | None:
     if _LOCAL_EMBED:
         return _ollama_embed(query, _LOCAL_EMBED)
 
-    print("[contextcut] WARNING: No embedding backend configured")
+    _log("[contextcut] WARNING: No embedding backend configured")
     return None
 
 
@@ -1031,7 +1038,7 @@ def qdrant_context(query: str) -> tuple[str, list[dict]]:
     try:
         emb = _safe_embed(query, input_type="query")
         if emb is None:
-            print(
+            _log(
                 f"[contextcut] qdrant_context: embed returned None for query={query[:60]!r}"
             )
             return "", []
@@ -1047,7 +1054,7 @@ def qdrant_context(query: str) -> tuple[str, list[dict]]:
         for h in response.points:
             score = round(h.score, 3)
             if score < MIN_SCORE:
-                print(
+                _log(
                     f"[contextcut] skip score={score} < {MIN_SCORE} for {h.payload.get('filename', '?')}"
                 )
                 continue
@@ -1084,21 +1091,21 @@ def qdrant_context(query: str) -> tuple[str, list[dict]]:
                 pass
 
         if meta:
-            print(
+            _log(
                 f"[contextcut] qdrant_context: {len(meta)} hits for query={query[:60]!r}"
             )
         else:
-            print(f"[contextcut] qdrant_context: 0 hits for query={query[:60]!r}")
+            _log(f"[contextcut] qdrant_context: 0 hits for query={query[:60]!r}")
         ctx_str = "\n\n---\n\n".join(chunks)
         if len(ctx_str) > MAX_CTX_CHARS:
-            print(f"[contextcut] truncating context {len(ctx_str)} → {MAX_CTX_CHARS} chars")
+            _log(f"[contextcut] truncating context {len(ctx_str)} → {MAX_CTX_CHARS} chars")
             ctx_str = ctx_str[:MAX_CTX_CHARS] + "\n\n[...truncated...]"
         return ctx_str, meta
     except Exception as e:
-        print(f"[contextcut] Qdrant error: {e}")
+        _log(f"[contextcut] Qdrant error: {e}")
         import traceback
-
-        traceback.print_exc()
+        tb = traceback.format_exc()
+        _log(tb)
         return "", []
 
 
