@@ -882,7 +882,7 @@ def get_clients():
     return _vc, _qclient
 
 
-def _log(msg: str):
+def _slog(msg: str):
     try:
         print(msg, flush=True)
     except OSError:
@@ -903,7 +903,7 @@ def _ollama_embed(text: str, model: str) -> list[float] | None:
             return embeddings[0]
         return None
     except Exception as e:
-        _log(f"[contextcut] Ollama embed error: {e}")
+        _slog(f"[contextcut] Ollama embed error: {e}")
         return None
 
 
@@ -927,19 +927,19 @@ def _safe_embed(query: str, input_type: str) -> list[float] | None:
                 err_msg = str(e).lower()
                 if "rate" in err_msg or "429" in err_msg:
                     wait = 60 + random.uniform(5, 15)
-                    _log(
+                    _slog(
                         f"[contextcut] Voyage rate-limited, backing off {wait:.0f}s (attempt {attempt + 1}/{max_retries})"
                     )
                     time.sleep(wait)
                 else:
-                    _log(f"[contextcut] Voyage embed error: {e}")
+                    _slog(f"[contextcut] Voyage embed error: {e}")
                     if _LOCAL_EMBED:
-                        _log(
+                        _slog(
                             f"[contextcut] Falling back to Ollama embed: {_LOCAL_EMBED}"
                         )
                         return _ollama_embed(query, _LOCAL_EMBED)
                     return None
-        _log(f"[contextcut] Voyage embed failed after {max_retries} retries")
+        _slog(f"[contextcut] Voyage embed failed after {max_retries} retries")
         if _LOCAL_EMBED:
             return _ollama_embed(query, _LOCAL_EMBED)
         return None
@@ -948,7 +948,7 @@ def _safe_embed(query: str, input_type: str) -> list[float] | None:
     if _LOCAL_EMBED:
         return _ollama_embed(query, _LOCAL_EMBED)
 
-    _log("[contextcut] WARNING: No embedding backend configured")
+    _slog("[contextcut] WARNING: No embedding backend configured")
     return None
 
 
@@ -1037,7 +1037,7 @@ def qdrant_context(query: str) -> tuple[str, list[dict]]:
     try:
         emb = _safe_embed(query, input_type="query")
         if emb is None:
-            _log(
+            _slog(
                 f"[contextcut] qdrant_context: embed returned None for query={query[:60]!r}"
             )
             return "", []
@@ -1053,7 +1053,7 @@ def qdrant_context(query: str) -> tuple[str, list[dict]]:
         for h in response.points:
             score = round(h.score, 3)
             if score < MIN_SCORE:
-                _log(
+                _slog(
                     f"[contextcut] skip score={score} < {MIN_SCORE} for {h.payload.get('filename', '?')}"
                 )
                 continue
@@ -1090,21 +1090,21 @@ def qdrant_context(query: str) -> tuple[str, list[dict]]:
                 pass
 
         if meta:
-            _log(
+            _slog(
                 f"[contextcut] qdrant_context: {len(meta)} hits for query={query[:60]!r}"
             )
         else:
-            _log(f"[contextcut] qdrant_context: 0 hits for query={query[:60]!r}")
+            _slog(f"[contextcut] qdrant_context: 0 hits for query={query[:60]!r}")
         ctx_str = "\n\n---\n\n".join(chunks)
         if len(ctx_str) > MAX_CTX_CHARS:
-            _log(f"[contextcut] truncating context {len(ctx_str)} → {MAX_CTX_CHARS} chars")
+            _slog(f"[contextcut] truncating context {len(ctx_str)} → {MAX_CTX_CHARS} chars")
             ctx_str = ctx_str[:MAX_CTX_CHARS] + "\n\n[...truncated...]"
         return ctx_str, meta
     except Exception as e:
-        _log(f"[contextcut] Qdrant error: {e}")
+        _slog(f"[contextcut] Qdrant error: {e}")
         import traceback
         tb = traceback.format_exc()
-        _log(tb)
+        _slog(tb)
         return "", []
 
 
@@ -1375,7 +1375,7 @@ class ProxyHandler(_SuppressBrokenPipe, BaseHTTPRequestHandler):
                                     pruned += 1
                                     tok_after = count_body_tokens(body)
                                 if pruned:
-                                    _log(
+                                    _slog(
                                         f"[contextcut] context truncated: removed {pruned} chunk(s) to fit {CTX_LIMIT}"
                                     )
                                     if session_id and session_id in _sessions:
@@ -1386,7 +1386,7 @@ class ProxyHandler(_SuppressBrokenPipe, BaseHTTPRequestHandler):
                 pct = round(tok_after / CTX_LIMIT * 100, 1)
                 ts = datetime.now().strftime("%H:%M:%S")
                 model_name = body.get("model", "?")
-                _log(
+                _slog(
                     f"[contextcut] {ts} | model={model_name} | {tok_before}→{tok_after}/{CTX_LIMIT} ({pct}%) | hits:{len(hits_meta)} | {query[:60]}"
                 )
                 record(
