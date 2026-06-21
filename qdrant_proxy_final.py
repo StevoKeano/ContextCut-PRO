@@ -2968,13 +2968,10 @@ async function sendMessage() {{
         conversationHistory.push({{role:'assistant', content:fullText}});
         if (scanMode && assistantDiv) {{
           // Show scanning indicator
-          let scanIndicator = null;
-          if (assistantDiv) {{
-            scanIndicator = document.createElement('div');
-            scanIndicator.style.cssText = 'font-size:10px;color:var(--muted);padding:2px 6px;margin-top:2px';
-            scanIndicator.textContent = deepMode ? '🔍 DEEP scanning…' : '🔍 Scanning…';
-            assistantDiv.appendChild(scanIndicator);
-          }}
+          let scanIndicator = document.createElement('div');
+          scanIndicator.style.cssText = 'font-size:10px;color:var(--muted);padding:2px 6px;margin-top:2px';
+          scanIndicator.textContent = deepMode ? '🔍 DEEP scanning…' : '🔍 Scanning…';
+          assistantDiv.appendChild(scanIndicator);
           try {{
             const sr = await fetch('/api/agent/confidence-scan', {{
               method: 'POST',

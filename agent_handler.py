@@ -16,11 +16,15 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any
 
+import concurrent.futures
+
 from langchain.tools import tool
 from langchain_openai import ChatOpenAI
 from langchain.agents import create_agent
 from langchain_core.messages import HumanMessage, AIMessage, SystemMessage
 from qdrant_proxy_final import qdrant_context
+
+_DEEP_POOL = concurrent.futures.ThreadPoolExecutor(max_workers=2)
 
 # ── Blocked shell patterns ────────────────────────────────────────────────────
 BLOCKED_PREFIXES = [
@@ -380,16 +384,10 @@ def _deep_confidence_scan(
         def search_knowledge_base(query: str) -> str:
             """Search the knowledge base for factual evidence to verify claims."""
             try:
-                docs = qdrant_context(query, top_k=10)
-                if not docs:
+                ctx_str, meta = qdrant_context(query)
+                if not meta:
                     return "No relevant documents found in knowledge base."
-                lines = []
-                for d in docs:
-                    title = d.get("title", d.get("file", "unknown"))
-                    content = d.get("text", "")[:250]
-                    score = d.get("score", 0)
-                    lines.append(f"[score={score:.2f}] {title}: {content}")
-                return "\n".join(lines)
+                return ctx_str
             except Exception as e:
                 return f"Knowledge base search error: {e}"
 
@@ -415,18 +413,16 @@ Be aggressive about LOW/incorrect — any claim without clear source support sho
         )
         print(f"[{datetime.now().strftime('%H:%M:%S')}] [DEEP] Verifier agent created, invoking...", flush=True)
 
-        import concurrent.futures
-        with concurrent.futures.ThreadPoolExecutor() as pool:
-            fut = pool.submit(
-                verifier.invoke, {
-                    "messages": [
-                        HumanMessage(
-                            content=f"Verify this text and return a JSON array:\n\n{text}"
-                        )
-                    ]
-                }
-            )
-            result = fut.result(timeout=120)
+        fut = _DEEP_POOL.submit(
+            verifier.invoke, {
+                "messages": [
+                    HumanMessage(
+                        content=f"Verify this text and return a JSON array:\n\n{text}"
+                    )
+                ]
+            }
+        )
+        result = fut.result(timeout=120)
 
         final_msgs = result.get("messages", [])
         content = final_msgs[-1].content if final_msgs else ""
@@ -454,7 +450,7 @@ Be aggressive about LOW/incorrect — any claim without clear source support sho
         return None
     except ImportError as e:
         print(f"[{datetime.now().strftime('%H:%M:%S')}] [DEEP] deepagents not available: {e}", flush=True)
-        pass
+        return [{"text": text, "factual": "uncertain", "reason": "Deep scan requires 'deepagents' package — pip install deepagents"}]
     except concurrent.futures.TimeoutError:
         print(f"[{datetime.now().strftime('%H:%M:%S')}] [DEEP] Timed out after 120s", flush=True)
         return [{"text": text, "factual": "uncertain", "reason": "Deep scan timed out"}]
