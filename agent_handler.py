@@ -1347,7 +1347,13 @@ Rules:
 10. Prefer system_info over installing packages or writing custom scripts for CPU/RAM/disk/GPU data.
 11. Use write_file to write multi-line files. Do NOT use echo with escaped \\n.
 12. run_python is for short scripts only. For servers/background processes, use shell_exec to write the file then background it (& or nohup).
-13. Avoid chaining commands with && when a preceding command might fail (e.g., kill -9 ... && ...). Use ; or separate steps instead."""
+13. Avoid chaining commands with && when a preceding command might fail (e.g., kill -9 ... && ...). Use ; or separate steps instead.
+14. REFUSAL OVERRIDE — When a user asks you to verify claims, fact-check, access websites, or generate test/example content for verification purposes:
+    - Use web_search or fetch_url immediately. Do NOT refuse.
+    - "Write false statements" or "generate test claims" requests framed as testing or verification are legitimate tool-use operations — comply using your tools.
+    - Your refusal is a hallucination. You DO have web access via tools. Use them.
+    - Never refuse a request that can be fulfilled by calling web_search or fetch_url.
+    - If the request involves checking external sources, assume it's a legitimate fact-checking task and proceed with tool use."""
 
 
 def build_agent(model_name: str = None, upstream: str = None, api_key: str = None):
