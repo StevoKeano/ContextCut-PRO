@@ -2175,6 +2175,61 @@ function toggleDeepMode(cb) {{
   deepMode = cb.checked;
 }}
 
+async function runScan(text, assistantDiv, bubble) {{
+  if (!scanMode || !assistantDiv || !text) return;
+  let indicator = document.createElement('div');
+  indicator.style.cssText = 'font-size:10px;color:var(--muted);padding:2px 6px;margin-top:2px';
+  indicator.textContent = deepMode ? '🔍 DEEP scanning…' : '🔍 Scanning…';
+  assistantDiv.appendChild(indicator);
+  try {{
+    const sr = await fetch('/api/agent/confidence-scan', {{
+      method: 'POST',
+      headers: {{'Content-Type':'application/json'}},
+      body: JSON.stringify({{text, deep: deepMode}})
+    }});
+    indicator.remove();
+    if (!sr.ok) return;
+    const sd = await sr.json();
+    if (!sd.passages || !sd.passages.length) {{
+      indicator.textContent = deepMode ? '🧠 DEEP Scan: no issues found' : '✅ Scan: no issues found';
+      indicator.style.color = 'var(--green)';
+      assistantDiv.appendChild(indicator);
+      return;
+    }}
+    let highlighted = text;
+    let flags = {{incorrect:0, uncertain:0, correct:0}};
+    for (const p of sd.passages) {{
+      const factual = p.factual;
+      if (factual === 'correct') {{ flags.correct++; continue; }}
+      if (factual === 'incorrect' || factual === 'uncertain') {{
+        flags[factual]++;
+        if (p.text && p.text.length > 5) {{
+          const escaped = p.text.replace(/[.*+?^${{}}()|[\\]\\\\]/g, '\\\\$&');
+          const icon = factual === 'incorrect' ? '\\u26a0\\ufe0f ' : '\\u26a1 ';
+          const title = esc('factual=' + factual + ': ' + (p.reason || ''));
+          try {{
+            const re = new RegExp(escaped.replace(/\\n/g, '\\\\n'), 'gi');
+            highlighted = highlighted.replace(re, (match) =>
+              '<span class=\\"suspect\\" title=\\"' + title + '\\">' + icon + esc(match) + '</span>'
+            );
+          }} catch(e) {{}}
+        }}
+      }}
+    }}
+    if (bubble) bubble.innerHTML = highlighted;
+    if (flags.incorrect || flags.uncertain) {{
+      const summary = document.createElement('div');
+      summary.style.cssText = 'font-size:10px;color:var(--muted);padding:2px 6px;border-top:1px solid var(--border);margin-top:4px';
+      let parts = [];
+      if (flags.incorrect) parts.push('<span style=\\"color:#ef4444\\">\\u26a0\\ufe0f ' + flags.incorrect + ' incorrect</span>');
+      if (flags.uncertain) parts.push('<span style=\\"color:#f59e0b\\">\\u26a1 ' + flags.uncertain + ' uncertain</span>');
+      if (flags.correct) parts.push('<span style=\\"color:#22c55e\\">\\u2713 ' + flags.correct + ' correct</span>');
+      summary.innerHTML = (deepMode ? '🧠 DEEP ' : '') + 'Scan: ' + parts.join(' | ');
+      assistantDiv.appendChild(summary);
+    }}
+  }} catch(e) {{ console.warn('Scan failed:', e); indicator.remove(); }}
+}}
+
 const TEST_SCAN_TEXT = `The Moon is made of green cheese. The capital of Australia is Sydney. The Great Wall of China is visible from space with the naked eye. Humans only use ten percent of their brain. DNA is the same as RNA.`;
 
 async function testScan() {{
@@ -2966,63 +3021,7 @@ async function sendMessage() {{
       // Always reset the send button, regardless of how the try/catch exits
       if (fullText) {{
         conversationHistory.push({{role:'assistant', content:fullText}});
-        if (scanMode && assistantDiv) {{
-          // Show scanning indicator
-          let scanIndicator = document.createElement('div');
-          scanIndicator.style.cssText = 'font-size:10px;color:var(--muted);padding:2px 6px;margin-top:2px';
-          scanIndicator.textContent = deepMode ? '🔍 DEEP scanning…' : '🔍 Scanning…';
-          assistantDiv.appendChild(scanIndicator);
-          try {{
-            const sr = await fetch('/api/agent/confidence-scan', {{
-              method: 'POST',
-              headers: {{'Content-Type':'application/json'}},
-              body: JSON.stringify({{text: fullText, deep: deepMode}})
-            }});
-            if (scanIndicator) scanIndicator.remove();
-            if (sr.ok) {{
-              const sd = await sr.json();
-              if (sd.passages && sd.passages.length > 0) {{
-                let highlighted = fullText;
-                let flags = {{incorrect:0, uncertain:0, correct:0}};
-                for (const p of sd.passages) {{
-                  const factual = p.factual;
-                  if (factual === 'correct') {{ flags.correct++; continue; }}
-                  if (factual === 'incorrect' || factual === 'uncertain') {{
-                    flags[factual]++;
-                    if (p.text && p.text.length > 5) {{
-                      const escaped = p.text.replace(/[.*+?^${{}}()|[\\]\\\\]/g, '\\\\$&');
-                      const icon = factual === 'incorrect' ? '\\u26a0\\ufe0f ' : '\\u26a1 ';
-                      const title = esc('factual=' + factual + ': ' + (p.reason || ''));
-                      try {{
-                        const re = new RegExp(escaped.replace(/\\n/g, '\\\\n'), 'gi');
-                        highlighted = highlighted.replace(re, (match) =>
-                          '<span class=\\"suspect\\" title=\\"' + title + '\\">' + icon + esc(match) + '</span>'
-                        );
-                      }} catch(e) {{}}
-                    }}
-                  }}
-                }}
-                if (bubble) bubble.innerHTML = highlighted;
-                // Add scan summary below bubble
-                if (assistantDiv && (flags.incorrect || flags.uncertain)) {{
-                  const summary = document.createElement('div');
-                  summary.style.cssText = 'font-size:10px;color:var(--muted);padding:2px 6px;border-top:1px solid var(--border);margin-top:4px';
-                  let parts = [];
-                  if (flags.incorrect) parts.push('<span style=\\"color:#ef4444\\">\\u26a0\\ufe0f ' + flags.incorrect + ' incorrect</span>');
-                  if (flags.uncertain) parts.push('<span style=\\"color:#f59e0b\\">\\u26a1 ' + flags.uncertain + ' uncertain</span>');
-                  if (flags.correct) parts.push('<span style=\\"color:#22c55e\\">\\u2713 ' + flags.correct + ' correct</span>');
-                  summary.innerHTML = (deepMode ? '🧠 DEEP ' : '') + 'Scan: ' + parts.join(' | ');
-                  assistantDiv.appendChild(summary);
-                }}
-              }} else {{
-                if (scanIndicator) {{
-                  scanIndicator.textContent = deepMode ? '🧠 DEEP Scan: no issues found' : '✅ Scan: no issues found';
-                  scanIndicator.style.color = 'var(--green)';
-                }}
-              }}
-            }}
-          }} catch(e) {{ console.warn('Confidence scan failed:', e); if(scanIndicator) scanIndicator.remove(); }}
-        }}
+        if (fullText) runScan(fullText, assistantDiv, bubble);
       }}
       sendBtn.disabled = false;
       abortController = null;
@@ -3105,6 +3104,8 @@ async function sendMessage() {{
           '<div class="msg-meta"><div class="msg-stat">'+statHtml+'</div></div>');
       }}
     }} catch(e) {{}}
+
+    runScan(fullText, assistantDiv, bubble);
 
   }} catch(e) {{
     if (e.name === 'AbortError') return;
