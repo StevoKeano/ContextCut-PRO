@@ -60,9 +60,9 @@ flowchart LR
 | One-liner install | ✅ macOS launchd / Linux systemd + start.sh |
 | Qdrant auto-install | ✅ Installed by installer if not found |
 
-### Confidence Scan & Agent Mode
+### Dashboard Controls
 
-The dashboard has two independent toggles. Any combination works:
+The dashboard has three independent toggles. Any combination of Agent ON and DEEP works:
 
 | Agent ON | DEEP | What happens |
 |---|---|---|
@@ -71,7 +71,9 @@ The dashboard has two independent toggles. Any combination works:
 | OFF | ON | Simple chat, then confidence-scan verifies every claim against the knowledge base |
 | ON | ON | Agent mode, then confidence-scan verifies the response |
 
-**Scan ON** must be enabled for DEEP to run. When DEEP is checked, verification uses LangChain's Deep Agents harness (`create_deep_agent`) with sub-agent parallelism and knowledge base search. When unchecked, verification uses a single LLM call instead.
+- **Scan ON** must be enabled for DEEP to run.
+- **DEEP** uses LangChain's Deep Agents harness (`create_deep_agent`) with sub-agent parallelism and knowledge base search. When unchecked, verification uses a single LLM call instead.
+- **Unattended** auto-approves shell commands the agent wants to run, skipping the Allow/Deny prompt in the dashboard.
 
 ---
 
