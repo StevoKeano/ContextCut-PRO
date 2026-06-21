@@ -395,6 +395,7 @@ def _deep_confidence_scan(
         verifier = create_deep_agent(
             model=llm,
             tools=[search_knowledge_base],
+            interrupt_on=[],
             system_prompt="""You are a precise factual verifier. Your task:
 
 1. Parse the user's text into individual factual claims
