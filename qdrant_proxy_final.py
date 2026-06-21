@@ -4956,6 +4956,7 @@ class DashboardHandler(_SuppressBrokenPipe, BaseHTTPRequestHandler):
                 deep = body.get("deep", False)
                 from agent_handler import _confidence_scan, _SCAN_MODEL
 
+                print(f"[{datetime.now().strftime('%H:%M:%S')}] [Agent] 🔍 Confidence scan (model={_SCAN_MODEL!r}, deep={deep})", flush=True)
                 result = _confidence_scan(
                     text,
                     upstream=get_current_upstream(),
@@ -5174,7 +5175,8 @@ class DashboardHandler(_SuppressBrokenPipe, BaseHTTPRequestHandler):
                     # Layer 2: Self-correction loop (skip for trivial responses)
                     if full_output and len(full_output) > 80:
                         try:
-                            from agent_handler import _confidence_scan
+                            from agent_handler import _confidence_scan, _SCAN_MODEL
+                            print(f"[{datetime.now().strftime('%H:%M:%S')}] [Agent] 🔍 Confidence scan (model={_SCAN_MODEL!r}, deep={deep})", flush=True)
                             loop = asyncio.get_event_loop()
                             scan_result = await loop.run_in_executor(
                                 None,
