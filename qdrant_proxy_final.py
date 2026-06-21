@@ -2175,6 +2175,14 @@ function toggleDeepMode(cb) {{
   deepMode = cb.checked;
 }}
 
+function addSelfEvalWarning(sd, parent) {{
+  if (!sd || !sd.self_eval || !parent) return;
+  const w = document.createElement('div');
+  w.style.cssText = 'font-size:9px;color:#f59e0b;padding:2px 6px;margin-top:1px;border-top:1px solid var(--border)';
+  w.innerHTML = '⚠ Self-evaluating (no separate scan model). Set <code>CONTEXTCUT_SCAN_MODEL</code> to a small model like <code>qwen3:4b</code> then <code>./stop.sh && ./start.sh</code> for independent verification.';
+  parent.appendChild(w);
+}}
+
 async function runScan(text, assistantDiv, bubble) {{
   if (!scanMode || !assistantDiv || !text) return;
   let indicator = document.createElement('div');
@@ -2194,6 +2202,7 @@ async function runScan(text, assistantDiv, bubble) {{
       indicator.textContent = deepMode ? '🧠 DEEP Scan: no issues found' : '✅ Scan: no issues found';
       indicator.style.color = 'var(--green)';
       assistantDiv.appendChild(indicator);
+      addSelfEvalWarning(sd, assistantDiv);
       return;
     }}
     let highlighted = text;
@@ -2227,6 +2236,7 @@ async function runScan(text, assistantDiv, bubble) {{
       summary.innerHTML = (deepMode ? '🧠 DEEP ' : '') + 'Scan: ' + parts.join(' | ');
       assistantDiv.appendChild(summary);
     }}
+    addSelfEvalWarning(sd, assistantDiv);
   }} catch(e) {{ console.warn('Scan failed:', e); indicator.remove(); }}
 }}
 
@@ -4944,7 +4954,7 @@ class DashboardHandler(_SuppressBrokenPipe, BaseHTTPRequestHandler):
                     self.wfile.write(resp)
                     return
                 deep = body.get("deep", False)
-                from agent_handler import _confidence_scan
+                from agent_handler import _confidence_scan, _SCAN_MODEL
 
                 result = _confidence_scan(
                     text,
@@ -4954,7 +4964,10 @@ class DashboardHandler(_SuppressBrokenPipe, BaseHTTPRequestHandler):
                     model=DEFAULT_MODEL,
                     deep=deep,
                 )
-                body_resp = json.dumps({"passages": result}).encode()
+                body_resp = json.dumps({
+                    "passages": result,
+                    "self_eval": not bool(_SCAN_MODEL),
+                }).encode()
                 self.send_response(200)
                 self.send_header("Content-Type", "application/json")
                 self.send_header("Content-Length", str(len(body_resp)))
