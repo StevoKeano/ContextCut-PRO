@@ -62,18 +62,17 @@ flowchart LR
 
 ### Dashboard Controls
 
-The dashboard has three independent toggles. Any combination of Agent ON and DEEP works:
+Five controls affect how the proxy responds:
 
-| Agent ON | DEEP | What happens |
+| Control | Options | Description |
 |---|---|---|
-| OFF | OFF | Simple chat — no tool use, no verification |
-| ON | OFF | Agent mode (tool-use, planning) — no verification |
-| OFF | ON | Simple chat, then confidence-scan verifies every claim against the knowledge base |
-| ON | ON | Agent mode, then confidence-scan verifies the response |
+| **Scan ON/OFF** | Toggle button | Enables confidence scanning of responses |
+| **DEEP** | Checkbox | Uses Deep Agents harness (sub-agents + KB search) instead of a single LLM call for scanning. Requires Scan ON |
+| **Agent ON/OFF** | Toggle button | Enables tool-use mode — agent can run shell commands, read/write files, search the KB |
+| **Unattended** | Checkbox | Auto-approves shell commands the agent wants to run, skipping the Allow/Deny prompt |
+| **Model** | Text input | The model name to use (e.g. `qwen3:14b-q8_0`, `deepseek-v4-pro:cloud`) |
 
-- **Scan ON** must be enabled for DEEP to run.
-- **DEEP** uses LangChain's Deep Agents harness (`create_deep_agent`) with sub-agent parallelism and knowledge base search. When unchecked, verification uses a single LLM call instead.
-- **Unattended** auto-approves shell commands the agent wants to run, skipping the Allow/Deny prompt in the dashboard.
+Agent ON and DEEP are independent — any combination works, from simple chat (both OFF) to verified agent (both ON).
 
 ---
 
