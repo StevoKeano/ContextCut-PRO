@@ -354,20 +354,20 @@ def _deep_confidence_scan(
     text: str, upstream: str = None, api_key: str = None,
     model: str = None
 ) -> list[dict] | None:
-    """Deep scan using LangChain Deep Agents harness with sub-agent verification.
-
-    Parses text into claims, spawns parallel sub-agents to verify each
-    claim against the knowledge base, returns structured results with
-    source tracing.  Falls back to regular scan if deepagents is unavailable.
-    """
+    """Deep scan using LangChain Deep Agents harness with sub-agent verification."""
     if not upstream or not text or len(text.strip()) < 80:
         return None
     scan_model = model or _SCAN_MODEL or os.environ.get("CONTEXTCUT_SCAN_MODEL", "").strip()
     if not scan_model:
         return None
 
+    print(f"[{datetime.now().strftime('%H:%M:%S')}] [DEEP] Starting deep scan (model={scan_model!r})", flush=True)
+    print(f"[{datetime.now().strftime('%H:%M:%S')}] [DEEP] Text length: {len(text)} chars", flush=True)
+
     try:
         from deepagents import create_deep_agent
+
+        print(f"[{datetime.now().strftime('%H:%M:%S')}] [DEEP] deepagents imported successfully", flush=True)
 
         llm = ChatOpenAI(
             model=scan_model,
@@ -393,6 +393,7 @@ def _deep_confidence_scan(
             except Exception as e:
                 return f"Knowledge base search error: {e}"
 
+        print(f"[{datetime.now().strftime('%H:%M:%S')}] [DEEP] Creating verifier agent...", flush=True)
         verifier = create_deep_agent(
             model=llm,
             tools=[search_knowledge_base],
@@ -405,38 +406,63 @@ def _deep_confidence_scan(
 
 Each object in the array:
 - "text": the exact claim text (as written)
-- "confidence": "HIGH", "MEDIUM", or "LOW"
+- "factual": one of "correct", "incorrect", or "uncertain"
 - "reason": what the knowledge base says and whether it supports or contradicts
 - "source_url": the title of the source document, or "unverifiable"
 
-Be aggressive about LOW — any claim without clear source support should be MEDIUM at best.""",
+Map confidence to factual: HIGH -> correct, MEDIUM -> uncertain, LOW -> incorrect.
+Be aggressive about LOW/incorrect — any claim without clear source support should be MEDIUM/uncertain at best.""",
         )
+        print(f"[{datetime.now().strftime('%H:%M:%S')}] [DEEP] Verifier agent created, invoking...", flush=True)
 
-        result = verifier.invoke({
-            "messages": [
-                HumanMessage(
-                    content=f"Verify this text and return a JSON array:\n\n{text}"
-                )
-            ]
-        })
+        import concurrent.futures
+        with concurrent.futures.ThreadPoolExecutor() as pool:
+            fut = pool.submit(
+                verifier.invoke, {
+                    "messages": [
+                        HumanMessage(
+                            content=f"Verify this text and return a JSON array:\n\n{text}"
+                        )
+                    ]
+                }
+            )
+            result = fut.result(timeout=120)
+
         final_msgs = result.get("messages", [])
         content = final_msgs[-1].content if final_msgs else ""
+        print(f"[{datetime.now().strftime('%H:%M:%S')}] [DEEP] Verifier response length: {len(content)} chars", flush=True)
 
         idx = content.find("[")
         if idx >= 0:
             content = content[idx:]
+        else:
+            print(f"[{datetime.now().strftime('%H:%M:%S')}] [DEEP] WARNING: no JSON array found in response", flush=True)
+            print(f"[{datetime.now().strftime('%H:%M:%S')}] [DEEP] Response preview: {content[:300]}", flush=True)
+            return None
         end = content.rfind("]")
         if end >= 0:
             content = content[: end + 1]
 
         results = json.loads(content)
         if isinstance(results, list):
+            print(f"[{datetime.now().strftime('%H:%M:%S')}] [DEEP] Scan complete: {len(results)} passages", flush=True)
+            for p in results:
+                factual = p.get("factual", p.get("confidence", "unknown"))
+                print(f"[{datetime.now().strftime('%H:%M:%S')}] [DEEP]   {factual}: {p.get('text', '')[:80]}", flush=True)
             return results
+        print(f"[{datetime.now().strftime('%H:%M:%S')}] [DEEP] Result is not a list: {type(results)}", flush=True)
         return None
-    except ImportError:
+    except ImportError as e:
+        print(f"[{datetime.now().strftime('%H:%M:%S')}] [DEEP] deepagents not available: {e}", flush=True)
         pass
+    except concurrent.futures.TimeoutError:
+        print(f"[{datetime.now().strftime('%H:%M:%S')}] [DEEP] Timed out after 120s", flush=True)
+        return [{"text": text, "factual": "uncertain", "reason": "Deep scan timed out"}]
     except Exception as e:
-        return [{"text": text, "confidence": "HIGH", "reason": f"Deep scan error: {e}"}]
+        print(f"[{datetime.now().strftime('%H:%M:%S')}] [DEEP] Error: {e}", flush=True)
+        import traceback
+        traceback.print_exc()
+        return [{"text": text, "factual": "uncertain", "reason": f"Deep scan error: {e}"}]
     return None
 
 
