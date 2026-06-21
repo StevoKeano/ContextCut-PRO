@@ -296,9 +296,8 @@ def _confidence_scan(
     if detailed:
         scan_model = model or os.environ.get("CONTEXTCUT_MODEL", "").strip() or "qwen3:14b-q8_0"
     else:
-        scan_model = _SCAN_MODEL or os.environ.get("CONTEXTCUT_SCAN_MODEL", "").strip()
-        if not scan_model:
-            return None
+        scan_model = (_SCAN_MODEL or os.environ.get("CONTEXTCUT_SCAN_MODEL") or
+                      os.environ.get("CONTEXTCUT_MODEL") or "qwen3:14b-q8_0")
     llm = ChatOpenAI(
         model=scan_model,
         openai_api_base=upstream + "/v1",
@@ -361,9 +360,8 @@ def _deep_confidence_scan(
     """Deep scan using LangChain Deep Agents harness with sub-agent verification."""
     if not upstream or not text or len(text.strip()) < 80:
         return None
-    scan_model = model or _SCAN_MODEL or os.environ.get("CONTEXTCUT_SCAN_MODEL", "").strip()
-    if not scan_model:
-        return None
+    scan_model = (model or _SCAN_MODEL or os.environ.get("CONTEXTCUT_SCAN_MODEL") or
+                  os.environ.get("CONTEXTCUT_MODEL") or "qwen3:14b-q8_0")
 
     print(f"[{datetime.now().strftime('%H:%M:%S')}] [DEEP] Starting deep scan (model={scan_model!r})", flush=True)
     print(f"[{datetime.now().strftime('%H:%M:%S')}] [DEEP] Text length: {len(text)} chars", flush=True)
