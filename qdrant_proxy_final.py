@@ -1930,7 +1930,8 @@ tr:hover td{{background:var(--surf2)}}
 .model-select:focus{{border-color:var(--accent)}}
 .model-select option{{background:var(--surf);color:var(--text)}}
 .input-row{{display:flex;gap:8px;align-items:flex-end}}
-.chat-input{{flex:1;background:var(--bg);border:1px solid var(--border);border-radius:var(--r);padding:8px 12px;color:var(--text);font-family:'JetBrains Mono',monospace;font-size:13px;resize:none;outline:none;line-height:1.5;max-height:120px}}
+.chat-input{{flex:1;background:#182233;border:1px solid var(--border);border-radius:var(--r);padding:8px 12px;color:#fff;font-family:'JetBrains Mono',monospace;font-size:13px;resize:none;outline:none;line-height:1.5;max-height:120px}}
+.light .chat-input{{background:var(--bg);color:var(--text)}}
 .chat-input:focus{{border-color:var(--accent)}}
 .send-btn{{background:var(--accent);color:#000;border:none;border-radius:var(--r);padding:8px 16px;font-family:'Syne',sans-serif;font-weight:700;font-size:13px;cursor:pointer;white-space:nowrap;height:38px}}
 .send-btn:hover{{opacity:.85}}.send-btn:disabled{{opacity:.4;cursor:not-allowed}}
