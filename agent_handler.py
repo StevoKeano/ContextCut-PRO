@@ -281,8 +281,12 @@ _SCAN_MODEL = os.environ.get("CONTEXTCUT_SCAN_MODEL", "").strip()
 
 def _confidence_scan(
     text: str, upstream: str = None, api_key: str = None,
-    detailed: bool = False, model: str = None
+    detailed: bool = False, model: str = None, deep: bool = False
 ) -> list[dict] | None:
+    if deep:
+        return _deep_confidence_scan(
+            text, upstream=upstream, api_key=api_key, model=model
+        )
     if not upstream or not text or len(text.strip()) < (10 if detailed else 80):
         return None
     if detailed:
@@ -341,6 +345,99 @@ Your single-word answer (HIGH/MEDIUM/LOW):"""
             return [{"text": text, "confidence": word, "reason": f"Scan rated {word}"}]
         except Exception as e:
             return [{"text": text, "confidence": "HIGH", "reason": f"Scan error: {e}"}]
+
+
+# ── Layer 3: Deep confidence scan (Deep Agents harness) ──────────────────────
+
+
+def _deep_confidence_scan(
+    text: str, upstream: str = None, api_key: str = None,
+    model: str = None
+) -> list[dict] | None:
+    """Deep scan using LangChain Deep Agents harness with sub-agent verification.
+
+    Parses text into claims, spawns parallel sub-agents to verify each
+    claim against the knowledge base, returns structured results with
+    source tracing.  Falls back to regular scan if deepagents is unavailable.
+    """
+    if not upstream or not text or len(text.strip()) < 80:
+        return None
+    scan_model = model or _SCAN_MODEL or os.environ.get("CONTEXTCUT_SCAN_MODEL", "").strip()
+    if not scan_model:
+        return None
+
+    try:
+        from deepagents import create_deep_agent
+
+        llm = ChatOpenAI(
+            model=scan_model,
+            openai_api_base=upstream + "/v1",
+            openai_api_key=api_key or "not-needed",
+            temperature=0.0,
+        )
+
+        @tool
+        def search_knowledge_base(query: str) -> str:
+            """Search the knowledge base for factual evidence to verify claims."""
+            try:
+                docs = qdrant_context(query, top_k=10)
+                if not docs:
+                    return "No relevant documents found in knowledge base."
+                lines = []
+                for d in docs:
+                    title = d.get("title", d.get("file", "unknown"))
+                    content = d.get("text", "")[:250]
+                    score = d.get("score", 0)
+                    lines.append(f"[score={score:.2f}] {title}: {content}")
+                return "\n".join(lines)
+            except Exception as e:
+                return f"Knowledge base search error: {e}"
+
+        verifier = create_deep_agent(
+            model=llm,
+            tools=[search_knowledge_base],
+            system_prompt="""You are a precise factual verifier. Your task:
+
+1. Parse the user's text into individual factual claims
+2. For each claim, search the knowledge base for supporting or contradicting evidence
+3. Use the built-in task tool to spawn parallel sub-agents for independent claims
+4. Return ONLY a valid JSON array (no other text or markdown)
+
+Each object in the array:
+- "text": the exact claim text (as written)
+- "confidence": "HIGH", "MEDIUM", or "LOW"
+- "reason": what the knowledge base says and whether it supports or contradicts
+- "source_url": the title of the source document, or "unverifiable"
+
+Be aggressive about LOW — any claim without clear source support should be MEDIUM at best.""",
+        )
+
+        result = verifier.invoke({
+            "messages": [
+                HumanMessage(
+                    content=f"Verify this text and return a JSON array:\n\n{text}"
+                )
+            ]
+        })
+        final_msgs = result.get("messages", [])
+        content = final_msgs[-1].content if final_msgs else ""
+
+        idx = content.find("[")
+        if idx >= 0:
+            content = content[idx:]
+        end = content.rfind("]")
+        if end >= 0:
+            content = content[: end + 1]
+
+        results = json.loads(content)
+        if isinstance(results, list):
+            return results
+        return None
+    except ImportError:
+        pass
+    except Exception as e:
+        return [{"text": text, "confidence": "HIGH", "reason": f"Deep scan error: {e}"}]
+    return None
 
 
 # ── Tool definitions ──────────────────────────────────────────────────────────

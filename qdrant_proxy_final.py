@@ -1943,6 +1943,9 @@ tr:hover td{{background:var(--surf2)}}
 .scan-toggle.scan-on{{background:#f59e0b;color:#000;border-color:#f59e0b;font-weight:600}}
 .scan-test{{background:transparent;border:1px solid var(--border);color:var(--muted);border-radius:3px;padding:8px 10px;font-size:11px;cursor:pointer;line-height:1;flex-shrink:0;font-family:'JetBrains Mono',monospace;margin-left:4px}}
 .scan-test:hover{{background:var(--surf2);color:var(--text)}}
+.scan-deep-lbl{{display:inline-flex;align-items:center;gap:3px;font-size:10px;color:var(--muted);cursor:pointer;margin-left:4px;padding:4px 6px;border:1px solid var(--border);border-radius:3px;white-space:nowrap;font-family:'JetBrains Mono',monospace}}
+.scan-deep-lbl:hover{{border-color:var(--accent);color:var(--accent)}}
+.scan-deep-lbl input{{accent-color:#8b5cf6;cursor:pointer}}
 .suspect{{background:rgba(245,158,11,0.2);border-left:3px solid #f59e0b;padding:2px 6px;border-radius:2px}}
 .tool-call{{background:var(--surf2);border:1px solid var(--border);border-radius:var(--r);padding:8px 12px;margin:6px 0;font-size:12px}}
 .tool-call summary{{cursor:pointer;color:var(--accent);font-weight:600}}
@@ -2107,6 +2110,7 @@ tr.cloud-off td{{background:#0a1a2e!important;color:#22c55e!important;border-top
           onkeydown="handleKey(event)"></textarea>
         <button class="scan-toggle" id="scanToggle" onclick="toggleScanMode()" title="Scan responses for potential hallucinations">🧪 Scan OFF</button>
         <button class="scan-test" id="scanTestBtn" onclick="testScan()" title="Run a demo scan on known false claims to test highlighting">🔬 Test</button>
+        <label class="scan-deep-lbl" id="deepLbl" title="Use Deep Agents harness with sub-agent verification (requires deepagents)"><input type="checkbox" id="deepChk" onchange="toggleDeepMode(this)"> DEEP</label>
         <button class="agent-toggle" id="agentToggle" onclick="toggleAgentMode()" title="Toggle Agent mode (tool-use)" style="background:transparent;border:1px solid var(--border);color:var(--muted);border-radius:3px;padding:8px 10px;font-size:11px;cursor:pointer;line-height:1;flex-shrink:0;font-family:'JetBrains Mono',monospace">🤖 Agent OFF</button>
         <label class="unattended-lbl" id="unattendedLbl" title="Auto-approve shell commands without Allow/Deny prompts"><input type="checkbox" id="unattendedChk" onchange="confirmUnattended(this)"> Unattended</label>
         <button class="send-btn" id="sendBtn" onclick="sendMessage()" aria-label="Send message">Send ↑</button>
@@ -2124,6 +2128,7 @@ let inputHistoryIdx = -1;
 let agentMode = false;
 let scanMode = false;
 let scanPending = false;
+let deepMode = false;
 let abortController = null;
 let lastEsc = 0;
 
@@ -2166,6 +2171,10 @@ function toggleScanMode() {{
   }}
 }}
 
+function toggleDeepMode(cb) {{
+  deepMode = cb.checked;
+}}
+
 const TEST_SCAN_TEXT = `The Moon is made of green cheese. The capital of Australia is Sydney. The Great Wall of China is visible from space with the naked eye. Humans only use ten percent of their brain. DNA is the same as RNA.`;
 
 async function testScan() {{
@@ -2187,7 +2196,7 @@ async function testScan() {{
   try {{
     const resp = await fetch('/api/agent/confidence-scan', {{
       method:'POST', headers:{{'Content-Type':'application/json'}},
-      body: JSON.stringify({{text: TEST_SCAN_TEXT}})
+      body: JSON.stringify({{text: TEST_SCAN_TEXT, deep: deepMode}})
     }});
     if (!resp.ok) throw new Error('Scan request failed');
     const data = await resp.json();
@@ -2848,7 +2857,7 @@ async function sendMessage() {{
         method: 'POST',
         headers: {{'Content-Type':'application/json'}},
         signal: abortController.signal,
-        body: JSON.stringify({{message: text, session_id: sessionId, model, stream: true}})
+        body: JSON.stringify({{message: text, session_id: sessionId, model, stream: true, deep: deepMode}})
       }});
       if (!resp.ok) {{
         removeTyping();
@@ -2962,7 +2971,7 @@ async function sendMessage() {{
             const sr = await fetch('/api/agent/confidence-scan', {{
               method: 'POST',
               headers: {{'Content-Type':'application/json'}},
-              body: JSON.stringify({{text: fullText}})
+              body: JSON.stringify({{text: fullText, deep: deepMode}})
             }});
             if (sr.ok) {{
               const sd = await sr.json();
@@ -4905,6 +4914,7 @@ class DashboardHandler(_SuppressBrokenPipe, BaseHTTPRequestHandler):
                     self.end_headers()
                     self.wfile.write(resp)
                     return
+                deep = body.get("deep", False)
                 from agent_handler import _confidence_scan
 
                 result = _confidence_scan(
@@ -4913,6 +4923,7 @@ class DashboardHandler(_SuppressBrokenPipe, BaseHTTPRequestHandler):
                     api_key=get_current_api_key(),
                     detailed=True,
                     model=DEFAULT_MODEL,
+                    deep=deep,
                 )
                 body_resp = json.dumps({"passages": result}).encode()
                 self.send_response(200)
@@ -4936,6 +4947,7 @@ class DashboardHandler(_SuppressBrokenPipe, BaseHTTPRequestHandler):
                 sid = body.get("session_id", _current_sid)
                 model_name = body.get("model", DEFAULT_MODEL)
                 is_stream = body.get("stream", True)
+                deep = body.get("deep", False)
 
                 if not sid or sid not in _sessions:
                     sid = new_session()
@@ -5128,6 +5140,7 @@ class DashboardHandler(_SuppressBrokenPipe, BaseHTTPRequestHandler):
                                     full_output,
                                     upstream=get_current_upstream(),
                                     api_key=get_current_api_key(),
+                                    deep=deep,
                                 ),
                             )
                             import sys
@@ -5169,6 +5182,7 @@ class DashboardHandler(_SuppressBrokenPipe, BaseHTTPRequestHandler):
                                             full_output,
                                             upstream=get_current_upstream(),
                                             api_key=get_current_api_key(),
+                                            deep=deep,
                                         ),
                                     )
                                     low_passages = [
@@ -5206,6 +5220,7 @@ class DashboardHandler(_SuppressBrokenPipe, BaseHTTPRequestHandler):
                                 output,
                                 upstream=get_current_upstream(),
                                 api_key=get_current_api_key(),
+                                deep=deep,
                             )
                             low = [p for p in (scan_result or [])
                                    if isinstance(p, dict) and p.get("confidence") == "LOW"]
