@@ -1902,7 +1902,7 @@ tr:hover td{{background:var(--surf2)}}
 .fb-file:hover{{background:var(--hover,#f1f5f9)}}
 .fb-file:active{{background:var(--active,#e2e8f0)}}
 .fb-file.selected{{background:var(--active,#1e293b)}}
-.chat-messages{{flex:1;overflow-y:auto;padding:14px;display:flex;flex-direction:column;gap:10px}}
+.chat-messages{{flex:0 1 auto;overflow-y:auto;padding:14px;display:flex;flex-direction:column;gap:10px;min-height:0}}
 .chat-messages::-webkit-scrollbar{{width:4px}}.chat-messages::-webkit-scrollbar-thumb{{background:var(--border);border-radius:2px}}
 .msg{{max-width:88%}}
 .msg.user{{align-self:flex-end}}.msg.assistant{{align-self:flex-start}}
@@ -1972,7 +1972,7 @@ tr:hover td{{background:var(--surf2)}}
 .settings-panel{{display:none;background:var(--surf);border-top:1px solid var(--border);padding:8px 10px}}
 .settings-panel.open{{display:block}}
 .right.fullscreen{{position:fixed;top:48px;left:0;right:0;bottom:0;z-index:100;background:var(--bg);border-top:1px solid var(--border)}}
-.right.fullscreen .chat-messages{{flex:1;overflow-y:auto;padding:14px;display:flex;flex-direction:column;gap:10px}}
+.right.fullscreen .chat-messages{{flex:0 1 auto;overflow-y:auto;padding:14px;display:flex;flex-direction:column;gap:10px;min-height:0}}
 .right.fullscreen .chat-input-bar{{flex-shrink:0}}
 #tourOv{{position:fixed;top:0;left:0;right:0;bottom:0;z-index:9998;display:none}}
 #tourOv.on{{display:block}}
