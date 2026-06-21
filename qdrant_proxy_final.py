@@ -2876,6 +2876,7 @@ pollLicense();
 pollGpu();
 fetchModels();
 initSession();
+document.querySelector('.right')?.classList.add('fullscreen');
 
 async function sendMessage() {{
   const input   = document.getElementById('chatInput');
