@@ -232,28 +232,33 @@ class TestLiveCheckpointIntegration:
         print(f"  [resume] response={response_text[:150]}...")
 
     def test_04_checkpoint_overhead(self):
-        """Measured checkpoint size < 5% of context window."""
-        import urllib.request
+        """Resume context length < 5% of context window."""
+        from agent_handler import CheckpointManager
 
-        resp = urllib.request.urlopen(
+        ckpt_mgr = CheckpointManager()
+        listing_resp = urllib.request.urlopen(
             f"{self.DASHBOARD}/api/checkpoints", timeout=10
         )
-        listing = json.loads(resp.read().decode())
+        listing = json.loads(listing_resp.read().decode())
         viable = [t for t in listing["tasks"] if t.get("steps", 0) >= 2]
         if not viable:
             pytest.skip("No checkpoint task with ≥2 steps for overhead benchmark")
 
         tid = viable[0]["task_id"]
-        ckpt_dir = self.CHECKPOINT_DIR / tid
-        total_bytes = sum(f.stat().st_size for f in ckpt_dir.glob("*.json"))
-        overhead_pct = total_bytes / self.CTX_LIMIT * 100
+        ctx = ckpt_mgr.build_resume_context(tid)
+        assert ctx is not None, "build_resume_context returned None"
+        ctx_chars = len(ctx)
+        # Rough token estimate: ~4 chars per token
+        ctx_tokens = ctx_chars // 4
+        overhead_pct = ctx_tokens / self.CTX_LIMIT * 100
 
         print(f"\n  [overhead] task_id={tid}")
-        print(f"  [overhead] total_checkpoint_bytes={total_bytes}")
+        print(f"  [overhead] resume_context_chars={ctx_chars}")
+        print(f"  [overhead] resume_context_est_tokens={ctx_tokens}")
         print(f"  [overhead] ctx_limit={self.CTX_LIMIT}")
         print(f"  [overhead] pct={overhead_pct:.2f}%")
 
         assert overhead_pct < 5.0, (
-            f"Checkpoint overhead {overhead_pct:.2f}% exceeds 5% limit "
-            f"({total_bytes}B / {self.CTX_LIMIT} ctx)"
+            f"Resume context overhead {overhead_pct:.2f}% exceeds 5% limit "
+            f"({ctx_tokens} tok / {self.CTX_LIMIT} ctx)"
         )

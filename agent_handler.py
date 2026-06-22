@@ -107,10 +107,10 @@ class CheckpointCallbackHandler(BaseCallbackHandler):
         self._manager = CheckpointManager()
 
     def on_tool_start(
-        self, serialized: dict, inputs: dict, **kwargs
+        self, serialized: dict, input_str: str = "", **kwargs
     ) -> None:
         self._current_tool_name = serialized.get("name", "unknown")
-        self._current_tool_input = inputs
+        self._current_tool_input = kwargs.get("inputs", {}) or {}
 
     def on_tool_end(self, output: Any, **kwargs) -> None:
         self.step_number += 1

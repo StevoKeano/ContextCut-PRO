@@ -200,8 +200,8 @@ class TestCheckpointCallbackHandler:
             task_id="test-task", goal="test goal", model_used="qwen3:4b"
         )
         handler.on_tool_start(
-            {"name": "web_search"},
-            {"query": "test query"},
+            {"name": "web_search"}, "",
+            inputs={"query": "test query"},
         )
         handler.on_tool_end("search results here")
         assert handler.step_number == 1
@@ -217,7 +217,7 @@ class TestCheckpointCallbackHandler:
         handler = CheckpointCallbackHandler(
             task_id="t2", goal="g", model_used="m"
         )
-        handler.on_tool_start({"name": "read_file"}, {"path": "/nonexistent"})
+        handler.on_tool_start({"name": "read_file"}, "", inputs={"path": "/nonexistent"})
         handler.on_tool_end(None)
         assert handler.step_number == 1
         handler._manager.save.assert_called_once()
