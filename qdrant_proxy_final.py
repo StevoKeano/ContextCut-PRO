@@ -4212,6 +4212,60 @@ class DashboardHandler(_SuppressBrokenPipe, BaseHTTPRequestHandler):
             self.end_headers()
             self.wfile.write(body)
             return
+        if self.path.startswith("/api/checkpoints/"):
+            from agent_handler import CheckpointManager
+            ckpt_mgr = CheckpointManager()
+            tid = self.path.split("/api/checkpoints/")[-1]
+            if not tid or not ckpt_mgr.exists(tid):
+                self.send_response(404)
+                self.send_header("Content-Type", "application/json")
+                self.end_headers()
+                self.wfile.write(json.dumps({"error": "task_id not found"}).encode())
+                return
+            checkpoints = ckpt_mgr.list_all(tid)
+            last = checkpoints[-1] if checkpoints else {}
+            estimated_tokens = sum(
+                len(json.dumps(cp.get("tool_input", {})))
+                + len(cp.get("tool_output", ""))
+                for cp in checkpoints
+            )
+            body = json.dumps({
+                "task_id": tid,
+                "steps": checkpoints,
+                "step_count": len(checkpoints),
+                "latest_step": last.get("step_number", 0),
+                "goal": last.get("goal", ""),
+                "model_used": last.get("model_used", ""),
+                "estimated_resume_tokens": estimated_tokens,
+            }).encode()
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+            return
+        if self.path == "/api/checkpoints":
+            from agent_handler import CheckpointManager
+            ckpt_mgr = CheckpointManager()
+            ckpt_dir = Path(ckpt_mgr.base_dir)
+            task_ids = []
+            if ckpt_dir.exists():
+                for d in sorted(ckpt_dir.iterdir()):
+                    if d.is_dir() and ckpt_mgr.exists(d.name):
+                        cp = ckpt_mgr.load(d.name)
+                        task_ids.append({
+                            "task_id": d.name,
+                            "steps": ckpt_mgr.latest_step_number(d.name),
+                            "goal": cp.get("goal", "") if cp else "",
+                            "model_used": cp.get("model_used", "") if cp else "",
+                        })
+            body = json.dumps({"tasks": task_ids}).encode()
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+            return
         if self.path == "/api/ollama-ps":
             upstream = get_current_upstream()
             req = urllib.request.Request(f"{upstream}/api/ps", method="GET")
@@ -4991,6 +5045,7 @@ class DashboardHandler(_SuppressBrokenPipe, BaseHTTPRequestHandler):
                 model_name = body.get("model", DEFAULT_MODEL)
                 is_stream = body.get("stream", True)
                 deep = body.get("deep", False)
+                task_id = body.get("task_id", "").strip()
 
                 if not sid or sid not in _sessions:
                     sid = new_session()
@@ -5008,8 +5063,19 @@ class DashboardHandler(_SuppressBrokenPipe, BaseHTTPRequestHandler):
                     build_messages_from_history,
                     _check_tool_usage,
                     _shell_is_safe,
+                    CheckpointManager,
+                    SystemMessage,
                 )
                 from langchain_core.messages import HumanMessage
+
+                # ── Task ID & Resume ────────────────────────────────────────────
+                ckpt_mgr = CheckpointManager()
+                goal = message[:200]
+                if not task_id:
+                    task_id = str(uuid.uuid4())
+                resume_context = None
+                if ckpt_mgr.exists(task_id):
+                    resume_context = ckpt_mgr.build_resume_context(task_id)
 
                 add_to_history(sid, "user", message)
                 session = _sessions[sid]
@@ -5019,6 +5085,8 @@ class DashboardHandler(_SuppressBrokenPipe, BaseHTTPRequestHandler):
                         model_name,
                         upstream=get_current_upstream(),
                         api_key=get_current_api_key(),
+                        task_id=task_id,
+                        goal=goal,
                     )
                 except Exception as e:
                     err_str = str(e)
@@ -5039,6 +5107,8 @@ class DashboardHandler(_SuppressBrokenPipe, BaseHTTPRequestHandler):
                     self.wfile.write(resp)
                     return
                 input_messages = chat_history + [HumanMessage(content=message)]
+                if resume_context:
+                    input_messages.insert(0, SystemMessage(content=resume_context))
                 shell_mode = session.get("shell_confirm_mode", "always")
 
                 import asyncio
@@ -5061,6 +5131,7 @@ class DashboardHandler(_SuppressBrokenPipe, BaseHTTPRequestHandler):
                 async def _run_agent_stream(write):
                     called_tools = set()
                     full_output = ""
+                    step_counter = 0
 
                     def emit(data):
                         try:
@@ -5128,6 +5199,22 @@ class DashboardHandler(_SuppressBrokenPipe, BaseHTTPRequestHandler):
                                             import sys
                                             print(f"[{datetime.now().strftime('%H:%M:%S')}] [Agent] \u2705 {tool_name} -> {output_str[:80]}", flush=True)
                                             emit({'name': tool_name, 'result': output_str, 'type': 'tool_result'})
+                                            # Save streaming checkpoint
+                                            try:
+                                                step_counter += 1
+                                                ckpt_mgr.save(task_id, {
+                                                    "step_number": step_counter,
+                                                    "goal": goal,
+                                                    "tool_name": tool_name,
+                                                    "tool_input": event.get("data", {}).get("input", {}),
+                                                    "tool_output": str(output_data)[:5000] if output_data else "",
+                                                    "reasoning": "",
+                                                    "context_injected": "",
+                                                    "model_used": model_name,
+                                                    "status": "success",
+                                                })
+                                            except Exception as cp_err:
+                                                print(f"[{datetime.now().strftime('%H:%M:%S')}] [checkpoint] save error: {cp_err}", flush=True)
                             result = await asyncio.wait_for(
                                 stream_agent.ainvoke({"messages": msgs}),
                                 timeout=AGENT_TIMEOUT,
@@ -5263,7 +5350,7 @@ class DashboardHandler(_SuppressBrokenPipe, BaseHTTPRequestHandler):
                             "type": "agent",
                         }
                     )
-                    resp = json.dumps({"response": output}).encode()
+                    resp = json.dumps({"response": output, "task_id": task_id}).encode()
                     self.send_response(200)
                     self.send_header("Content-Type", "application/json")
                     self.send_header("Content-Length", str(len(resp)))
@@ -5281,6 +5368,7 @@ class DashboardHandler(_SuppressBrokenPipe, BaseHTTPRequestHandler):
                     ))
 
                     try:
+                        self.wfile.write(f"event: checkpoint\ndata: {json.dumps({'task_id': task_id})}\n\n".encode())
                         self.wfile.write(b"data: [DONE]\n\n")
                         self.wfile.flush()
                     except BrokenPipeError:

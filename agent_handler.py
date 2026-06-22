@@ -8,6 +8,7 @@ All tools call ContextCut-PRO internals directly.
 import os
 import re
 import json
+import uuid
 import hashlib
 import subprocess
 import shutil
@@ -22,9 +23,108 @@ from langchain.tools import tool
 from langchain_openai import ChatOpenAI
 from langchain.agents import create_agent
 from langchain_core.messages import HumanMessage, AIMessage, SystemMessage
+from langchain_core.callbacks import BaseCallbackHandler
 from qdrant_proxy_final import qdrant_context
 
 _DEEP_POOL = concurrent.futures.ThreadPoolExecutor(max_workers=2)
+
+# ── Checkpoint Manager ─────────────────────────────────────────────────────────
+
+_CHECKPOINT_DIR = Path.home() / ".contextcut" / "checkpoints"
+
+
+class CheckpointManager:
+    """File-based episodic checkpoint storage for agent task recovery."""
+
+    def __init__(self, base_dir: str | Path = None):
+        self.base_dir = Path(base_dir or _CHECKPOINT_DIR)
+
+    def _task_dir(self, task_id: str) -> Path:
+        d = self.base_dir / task_id
+        d.mkdir(parents=True, exist_ok=True)
+        return d
+
+    def save(self, task_id: str, data: dict) -> Path:
+        step = data.get("step_number", 1)
+        path = self._task_dir(task_id) / f"{int(step):04d}.json"
+        data["timestamp"] = data.get("timestamp") or datetime.now().isoformat()
+        path.write_text(json.dumps(data, indent=2, default=str))
+        return path
+
+    def load(self, task_id: str, step_number: int = None) -> dict | None:
+        if step_number:
+            path = self._task_dir(task_id) / f"{int(step_number):04d}.json"
+            return json.loads(path.read_text()) if path.exists() else None
+        paths = sorted(self._task_dir(task_id).glob("*.json"))
+        return json.loads(paths[-1].read_text()) if paths else None
+
+    def list_all(self, task_id: str) -> list[dict]:
+        paths = sorted(self._task_dir(task_id).glob("*.json"))
+        return [json.loads(p.read_text()) for p in paths]
+
+    def exists(self, task_id: str) -> bool:
+        d = self.base_dir / task_id
+        return d.exists() and any(d.glob("*.json"))
+
+    def latest_step_number(self, task_id: str) -> int:
+        paths = sorted(self._task_dir(task_id).glob("*.json"))
+        return int(paths[-1].stem) if paths else 0
+
+    def build_resume_context(self, task_id: str) -> str | None:
+        if not self.exists(task_id):
+            return None
+        checkpoints = self.list_all(task_id)
+        lines = [
+            "You are continuing a previous task. Below is a summary of steps already completed.",
+            "Continue from where you left off. Do NOT re-do completed steps.",
+            "",
+        ]
+        for cp in checkpoints:
+            inp = json.dumps(cp.get("tool_input", {}))
+            out = str(cp.get("tool_output", ""))[:200]
+            lines.append(
+                f"Step {cp['step_number']}: {cp['tool_name']}({inp}) "
+                f"→ {out}"
+            )
+        lines.append("")
+        lines.append(
+            f"Resume at step {self.latest_step_number(task_id) + 1}. "
+            "Use the results from previous steps — they are already complete."
+        )
+        return "\n".join(lines)
+
+
+class CheckpointCallbackHandler(BaseCallbackHandler):
+    """LangChain callback that saves a checkpoint after each tool invocation."""
+
+    def __init__(self, task_id: str, goal: str, model_used: str):
+        self.task_id = task_id
+        self.goal = goal
+        self.model_used = model_used
+        self.step_number = 0
+        self._current_tool_name = None
+        self._current_tool_input = None
+        self._manager = CheckpointManager()
+
+    def on_tool_start(
+        self, serialized: dict, inputs: dict, **kwargs
+    ) -> None:
+        self._current_tool_name = serialized.get("name", "unknown")
+        self._current_tool_input = inputs
+
+    def on_tool_end(self, output: Any, **kwargs) -> None:
+        self.step_number += 1
+        self._manager.save(self.task_id, {
+            "step_number": self.step_number,
+            "goal": self.goal,
+            "tool_name": self._current_tool_name or "unknown",
+            "tool_input": self._current_tool_input or {},
+            "tool_output": str(output)[:5000] if output is not None else "",
+            "reasoning": "",
+            "context_injected": "",
+            "model_used": self.model_used,
+            "status": "success" if output is not None else "failed",
+        })
 
 # ── Blocked shell patterns ────────────────────────────────────────────────────
 BLOCKED_PREFIXES = [
@@ -1356,7 +1456,8 @@ Rules:
     - If the request involves checking external sources, assume it's a legitimate fact-checking task and proceed with tool use."""
 
 
-def build_agent(model_name: str = None, upstream: str = None, api_key: str = None):
+def build_agent(model_name: str = None, upstream: str = None,
+                api_key: str = None, task_id: str = None, goal: str = None):
 
     llm = ChatOpenAI(
         model=model_name or "qwen3:14b-q8_0",
@@ -1374,6 +1475,13 @@ def build_agent(model_name: str = None, upstream: str = None, api_key: str = Non
         system_prompt=SYSTEM_PROMPT,
     )
     agent.recursion_limit = 50
+
+    if task_id:
+        handler = CheckpointCallbackHandler(
+            task_id, goal or "", model_name or "qwen3:14b-q8_0"
+        )
+        agent = agent.with_config({"callbacks": [handler]})
+
     return agent
 
 
