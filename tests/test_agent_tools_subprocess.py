@@ -49,7 +49,10 @@ class TestShellExec:
         from agent_handler import shell_exec, BLOCKED_PREFIXES
 
         for prefix in BLOCKED_PREFIXES:
-            result = shell_exec.invoke({"command": prefix})
+            # Append a dummy argument so .strip() doesn't eat the trailing
+            # space that some prefixes (e.g. "apt ", "apt-get ") rely on.
+            cmd = prefix + "something" if prefix.endswith(" ") else prefix
+            result = shell_exec.invoke({"command": cmd})
             assert "BLOCKED" in result, f"{prefix!r} should be blocked"
         mock_subprocess.assert_not_called()
 

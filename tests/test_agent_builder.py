@@ -33,7 +33,7 @@ class TestBuildAgent:
 
         build_agent(upstream="http://localhost:11434")
         call_kwargs = mock_chat.call_args[1]
-        assert call_kwargs["model"] == "gpt-4o"
+        assert call_kwargs["model"] == "qwen3:14b-q8_0"
 
     @patch("agent_handler.ChatOpenAI")
     @patch("agent_handler.create_agent")
