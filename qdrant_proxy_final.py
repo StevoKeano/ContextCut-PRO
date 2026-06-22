@@ -4964,7 +4964,7 @@ class DashboardHandler(_SuppressBrokenPipe, BaseHTTPRequestHandler):
                     upstream=get_current_upstream(),
                     api_key=get_current_api_key(),
                     detailed=True,
-                    model=DEFAULT_MODEL,
+                    model=None if deep else DEFAULT_MODEL,
                     deep=deep,
                 )
                 body_resp = json.dumps({
@@ -5174,8 +5174,8 @@ class DashboardHandler(_SuppressBrokenPipe, BaseHTTPRequestHandler):
                     except _AgentAbort:
                         return full_output
 
-                    # Layer 2: Self-correction loop (skip for trivial responses)
-                    if full_output and len(full_output) > 80:
+                    # Layer 2: Self-correction loop (skip for trivial responses, no-op for deep scans)
+                    if full_output and len(full_output) > 80 and not deep:
                         try:
                             from agent_handler import _confidence_scan
                             loop = asyncio.get_event_loop()
