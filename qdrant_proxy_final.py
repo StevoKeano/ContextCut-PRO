@@ -382,7 +382,8 @@ def _init_db():
             msg_count        INTEGER DEFAULT 0,
             total_tokens     INTEGER DEFAULT 0,
             ctx_limit_reached INTEGER DEFAULT 0,
-            preview          TEXT DEFAULT ''
+            preview          TEXT DEFAULT '',
+            task_id          TEXT DEFAULT ''
         );
         CREATE TABLE IF NOT EXISTS messages (
             id          INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -399,6 +400,10 @@ def _init_db():
             value   TEXT NOT NULL,
             updated TEXT NOT NULL
         );""")
+    try:
+        db.execute("ALTER TABLE sessions ADD COLUMN task_id TEXT DEFAULT ''")
+    except sqlite3.OperationalError:
+        pass  # column already exists
     db.commit()
     db.close()
 
@@ -478,6 +483,7 @@ def new_session() -> str:
         "ctx_limit_reached": False,
         "shell_confirm_mode": "always",
         "_db_inserted": False,
+        "task_id": "",
     }
     _current_sid = sid
     return sid
@@ -532,8 +538,8 @@ def _update_session_on_disk(sid: str):
     try:
         db = _get_db()
         db.execute(
-            "UPDATE sessions SET title=?, preview=?, msg_count=?, total_tokens=?, ctx_limit_reached=? WHERE id=?",
-            (title, preview, len(history), total_tok, 1 if ctx_hit else 0, sid),
+            "UPDATE sessions SET title=?, preview=?, msg_count=?, total_tokens=?, ctx_limit_reached=?, task_id=? WHERE id=?",
+            (title, preview, len(history), total_tok, 1 if ctx_hit else 0, session.get("task_id", ""), sid),
         )
         db.commit()
         db.close()
@@ -3436,6 +3442,10 @@ async function recallSession(sid) {{
     await fetch('/api/session/recall/' + s.id);
     sessionId = s.id;
     updateSessionBadge();
+    if (s.task_id) {{
+      lastTaskId = s.task_id;
+      updateTaskBadge();
+    }}
     conversationHistory = s.history.map(m => ({{role: m.role, content: m.content}}));
     const msgs = document.getElementById('messages');
     if (msgs) {{
@@ -3738,13 +3748,14 @@ class DashboardHandler(_SuppressBrokenPipe, BaseHTTPRequestHandler):
                             "created": s["created"],
                             "total_tokens": total_tok,
                             "ctx_limit_reached": s.get("ctx_limit_reached", False),
+                            "task_id": s.get("task_id", ""),
                         },
                     }
                 else:
                     try:
                         db = _get_db()
                         cur = db.execute(
-                            "SELECT id, title, created, msg_count, total_tokens, ctx_limit_reached, preview FROM sessions WHERE id=?",
+                            "SELECT id, title, created, msg_count, total_tokens, ctx_limit_reached, preview, task_id FROM sessions WHERE id=?",
                             (sid,),
                         )
                         row = cur.fetchone()
@@ -3763,6 +3774,8 @@ class DashboardHandler(_SuppressBrokenPipe, BaseHTTPRequestHandler):
                                 "msg_count": row[3] or len(history),
                                 "created": row[2],
                                 "ctx_limit_reached": bool(row[5]),
+                                "task_id": row[7] or "",
+                                "_db_inserted": True,
                             }
                             data = {
                                 "ok": True,
@@ -3774,6 +3787,7 @@ class DashboardHandler(_SuppressBrokenPipe, BaseHTTPRequestHandler):
                                     "total_tokens": row[4],
                                     "ctx_limit_reached": bool(row[5]),
                                     "preview": row[6],
+                                    "task_id": row[7] or "",
                                     "history": history,
                                 },
                             }
@@ -5133,6 +5147,7 @@ class DashboardHandler(_SuppressBrokenPipe, BaseHTTPRequestHandler):
                 resume_context = None
                 if ckpt_mgr.exists(task_id):
                     resume_context = ckpt_mgr.build_resume_context(task_id)
+                _sessions[sid]["task_id"] = task_id
 
                 add_to_history(sid, "user", message)
                 session = _sessions[sid]
