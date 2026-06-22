@@ -2227,16 +2227,14 @@ async function runScan(text, assistantDiv, bubble) {{
       }}
     }}
     if (bubble) bubble.innerHTML = highlighted;
-    if (flags.incorrect || flags.uncertain) {{
-      const summary = document.createElement('div');
-      summary.style.cssText = 'font-size:10px;color:var(--muted);padding:2px 6px;border-top:1px solid var(--border);margin-top:4px';
-      let parts = [];
-      if (flags.incorrect) parts.push('<span style=\\"color:#ef4444\\">\\u26a0\\ufe0f ' + flags.incorrect + ' incorrect</span>');
-      if (flags.uncertain) parts.push('<span style=\\"color:#f59e0b\\">\\u26a1 ' + flags.uncertain + ' uncertain</span>');
-      if (flags.correct) parts.push('<span style=\\"color:#22c55e\\">\\u2713 ' + flags.correct + ' correct</span>');
-      summary.innerHTML = (deepMode ? '🧠 DEEP ' : '') + 'Scan: ' + parts.join(' | ');
-      assistantDiv.appendChild(summary);
-    }}
+    const summary = document.createElement('div');
+    summary.style.cssText = 'font-size:10px;color:var(--muted);padding:2px 6px;border-top:1px solid var(--border);margin-top:4px';
+    let parts = [];
+    if (flags.incorrect) parts.push('<span style=\\"color:#ef4444\\">\\u26a0\\ufe0f ' + flags.incorrect + ' incorrect</span>');
+    if (flags.uncertain) parts.push('<span style=\\"color:#f59e0b\\">\\u26a1 ' + flags.uncertain + ' uncertain</span>');
+    if (flags.correct) parts.push('<span style=\\"color:#22c55e\\">\\u2713 ' + flags.correct + ' correct</span>');
+    summary.innerHTML = (deepMode ? '🧠 DEEP ' : '') + 'Scan: ' + (parts.length ? parts.join(' | ') : '✅ no issues');
+    assistantDiv.appendChild(summary);
     addSelfEvalWarning(sd, assistantDiv);
   }} catch(e) {{ console.warn('Scan failed:', e); indicator.remove(); }}
 }}
