@@ -2052,6 +2052,8 @@ tr.cloud-off td{{background:#0a1a2e!important;color:#22c55e!important;border-top
   <div class="right">
     <div class="chat-header" id="chatHeader">
       <span class="session-badge" id="sessionBadge">Session: new</span>
+      <span class="task-badge" id="taskBadge" style="display:none;font-size:9px;color:var(--muted);margin-left:4px"></span>
+      <button class="clear-btn" id="resumeBtn" onclick="resumeTask()" style="display:none;font-size:9px;padding:1px 6px" title="Resume previous agent task">↩ Resume</button>
       <button class="clear-btn" id="fsBtn" onclick="toggleFullscreen()" title="Toggle fullscreen (F11)" style="font-size:15px;padding:2px 8px;line-height:1">⛶</button>
       <button class="clear-btn" id="clearBtn" onclick="clearConversation()" title="Clear conversation (/clear)">Clear</button>
     </div>
@@ -2132,6 +2134,7 @@ let scanPending = false;
 let deepMode = false;
 let abortController = null;
 let lastEsc = 0;
+let lastTaskId = null;
 
 function toggleAgentMode() {{
   agentMode = !agentMode;
@@ -2386,6 +2389,34 @@ function updateSessionBadge() {{
   }}
 }}
 
+function updateTaskBadge() {{
+  const badge = document.getElementById('taskBadge');
+  const btn = document.getElementById('resumeBtn');
+  if (!badge) return;
+  if (lastTaskId) {{
+    badge.style.display = 'inline';
+    badge.textContent = 'Task: ' + lastTaskId;
+    if (btn) btn.style.display = 'inline';
+  }} else {{
+    badge.style.display = 'none';
+    if (btn) btn.style.display = 'none';
+  }}
+}}
+
+function resumeTask() {{
+  if (!lastTaskId) return;
+  const input = document.getElementById('chatInput');
+  if (input) {{
+    input.value = '/resume ' + lastTaskId;
+    input.focus();
+  }}
+}}
+
+function sendAgentMessage(tid) {{
+  appendMsg('user', '/resume ' + tid, '');
+  sendMessage(tid);
+}}
+
 async function initSession() {{
   const saved = localStorage.getItem('contextcut_session');
   if (saved) {{
@@ -2635,10 +2666,20 @@ function handleCommand(text) {{
     abortGeneration();
     return true;
   }}
+  if (text.startsWith('/resume ')) {{
+    const tid = text.slice(8).trim();
+    if (tid) {{
+      lastTaskId = tid;
+      updateTaskBadge();
+      sendAgentMessage(lastTaskId);
+      return true;
+    }}
+  }}
   if (text === '/help') {{
     appendMsg('assistant',
       'Commands:\\n' +
       '/clear — Clear conversation history\\n' +
+      '/resume &lt;task_id&gt; — Resume an interrupted agent task\\n' +
       '/help — Show this help\\n\\n' +
       'Natural commands:\\n' +
       '"stop" / "that\\'s enough" — Stop current response\\n' +
@@ -2877,7 +2918,7 @@ fetchModels();
 initSession();
 document.querySelector('.right')?.classList.add('fullscreen');
 
-async function sendMessage() {{
+async function sendMessage(taskIdOverride) {{
   const input   = document.getElementById('chatInput');
   const sendBtn = document.getElementById('sendBtn');
   const model   = document.getElementById('modelInput').value.trim();
@@ -2922,7 +2963,7 @@ async function sendMessage() {{
         method: 'POST',
         headers: {{'Content-Type':'application/json'}},
         signal: abortController.signal,
-        body: JSON.stringify({{message: text, session_id: sessionId, model, stream: true, deep: deepMode}})
+        body: JSON.stringify({{message: text, session_id: sessionId, model, stream: true, deep: deepMode, task_id: taskIdOverride || lastTaskId || ''}})
       }});
       if (!resp.ok) {{
         removeTyping();
@@ -2972,6 +3013,10 @@ async function sendMessage() {{
           if (trimmed.startsWith('data: ')) {{
             try {{
               const data = JSON.parse(trimmed.slice(6));
+              if (data.task_id) {{
+                lastTaskId = data.task_id;
+                updateTaskBadge();
+              }}
               if (data.token) {{
                 fullText += data.token;
                 ensureBubble();
@@ -5482,6 +5527,9 @@ if __name__ == "__main__":
     _init_db()
     _migrate_json_to_sqlite()
     load_sessions()
+
+    from agent_handler import startup_cleanup as _startup_cleanup
+    _startup_cleanup()
 
     if LICENSE_KEY:
         print("[contextcut] Validating license key...")

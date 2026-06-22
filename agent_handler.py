@@ -44,12 +44,16 @@ class CheckpointManager:
         d.mkdir(parents=True, exist_ok=True)
         return d
 
-    def save(self, task_id: str, data: dict) -> Path:
+    def save(self, task_id: str, data: dict) -> Path | None:
         step = data.get("step_number", 1)
-        path = self._task_dir(task_id) / f"{int(step):04d}.json"
-        data["timestamp"] = data.get("timestamp") or datetime.now().isoformat()
-        path.write_text(json.dumps(data, indent=2, default=str))
-        return path
+        try:
+            path = self._task_dir(task_id) / f"{int(step):04d}.json"
+            data["timestamp"] = data.get("timestamp") or datetime.now().isoformat()
+            path.write_text(json.dumps(data, indent=2, default=str))
+            return path
+        except (OSError, IOError, TypeError) as e:
+            print(f"[checkpoint] save error for {task_id}/{step}: {e}", flush=True)
+            return None
 
     def load(self, task_id: str, step_number: int = None) -> dict | None:
         if step_number:
@@ -69,6 +73,31 @@ class CheckpointManager:
     def latest_step_number(self, task_id: str) -> int:
         paths = sorted(self._task_dir(task_id).glob("*.json"))
         return int(paths[-1].stem) if paths else 0
+
+    def list_task_ids(self) -> list[str]:
+        if not self.base_dir.exists():
+            return []
+        return sorted(
+            d.name for d in self.base_dir.iterdir()
+            if d.is_dir() and self.exists(d.name)
+        )
+
+    def cleanup(self, max_age_hours: int = 24) -> int:
+        """Remove checkpoint directories older than *max_age_hours*. Returns count."""
+        import time
+        now = time.time()
+        cutoff = now - max_age_hours * 3600
+        removed = 0
+        for d in self.base_dir.iterdir():
+            if not d.is_dir():
+                continue
+            mtime = d.stat().st_mtime
+            if mtime < cutoff:
+                import shutil
+                shutil.rmtree(d, ignore_errors=True)
+                removed += 1
+                print(f"[checkpoint] purged stale task {d.name} ({max_age_hours}h TTL)", flush=True)
+        return removed
 
     def build_resume_context(self, task_id: str) -> str | None:
         if not self.exists(task_id):
@@ -114,7 +143,7 @@ class CheckpointCallbackHandler(BaseCallbackHandler):
 
     def on_tool_end(self, output: Any, **kwargs) -> None:
         self.step_number += 1
-        self._manager.save(self.task_id, {
+        saved = self._manager.save(self.task_id, {
             "step_number": self.step_number,
             "goal": self.goal,
             "tool_name": self._current_tool_name or "unknown",
@@ -125,6 +154,20 @@ class CheckpointCallbackHandler(BaseCallbackHandler):
             "model_used": self.model_used,
             "status": "success" if output is not None else "failed",
         })
+        if saved is None:
+            print(f"[checkpoint] WARNING checkpoint save failed for task {self.task_id} "
+                  f"step {self.step_number}", flush=True)
+
+def startup_cleanup():
+    """Purge checkpoints older than 24h on proxy start."""
+    try:
+        mgr = CheckpointManager()
+        removed = mgr.cleanup(max_age_hours=24)
+        if removed:
+            print(f"[checkpoint] Startup cleanup removed {removed} stale task(s)", flush=True)
+    except Exception as e:
+        print(f"[checkpoint] Startup cleanup error: {e}", flush=True)
+
 
 # ── Blocked shell patterns ────────────────────────────────────────────────────
 BLOCKED_PREFIXES = [
