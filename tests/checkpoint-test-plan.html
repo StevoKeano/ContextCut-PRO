@@ -1,0 +1,167 @@
+<!DOCTYPE html>
+<html lang="en">
+<head><meta charset="utf-8"><title>Checkpoint System — Test Plan</title>
+<style>
+  body { background:#0f172a; color:#e2e8f0; font-family:system-ui,sans-serif; max-width:900px; margin:0 auto; padding:24px; line-height:1.6 }
+  h1 { color:#0ea5e9; border-bottom:2px solid #334155; padding-bottom:8px }
+  h2 { color:#38bdf8; margin-top:32px }
+  h3 { color:#7dd3fc }
+  table { border-collapse:collapse; width:100%; margin:12px 0 }
+  th,td { border:1px solid #334155; padding:6px 10px; text-align:left; font-size:13px }
+  th { background:#1e293b; color:#94a3b8 }
+  code { background:#1e293b; padding:1px 5px; border-radius:3px; font-size:13px }
+  pre { background:#1e293b; padding:12px; border-radius:6px; overflow-x:auto }
+  .step { background:#1e293b; padding:8px 12px; border-radius:4px; margin:4px 0; font-size:13px }
+  .step b { color:#38bdf8 }
+  .pass { color:#22c55e }
+  .fail { color:#ef4444 }
+  .tag { display:inline-block; padding:1px 8px; border-radius:10px; font-size:11px; font-weight:bold }
+  .tag-core { background:#1d4ed8; color:#fff }
+  .tag-edge { background:#7c3aed; color:#fff }
+  .tag-api { background:#059669; color:#fff }
+  .tag-ui { background:#d97706; color:#fff }
+  .tag-perf { background:#dc2626; color:#fff }
+  .summary-box { display:grid; grid-template-columns:1fr 1fr; gap:8px; margin:16px 0 }
+  .summary-card { background:#1e293b; border-radius:6px; padding:12px; text-align:center }
+  .summary-card .num { font-size:28px; font-weight:bold; color:#0ea5e9 }
+  .summary-card .lbl { font-size:11px; color:#94a3b8 }
+</style></head>
+<body>
+
+<h1>🧪 Checkpoint System — Test Plan</h1>
+<p>10 scenarios, 28 steps, ~8 min execution time.</p>
+
+<div class="summary-box">
+  <div class="summary-card"><div class="num">10</div><div class="lbl">Scenarios</div></div>
+  <div class="summary-card"><div class="num">28</div><div class="lbl">Total Steps</div></div>
+  <div class="summary-card"><div class="num">8</div><div class="lbl">Min Estimate</div></div>
+  <div class="summary-card"><div class="num">194</div><div class="lbl">Passing Tests</div></div>
+</div>
+
+<!-- ============================================================ -->
+<h2>1. Basic Multi-Step Capture <span class="tag tag-core">Sanity</span></h2>
+<p><strong>Purpose:</strong> Verify ≥2 checkpoint files land on disk with correct fields.</p>
+<table>
+  <tr><th>#</th><th>Action</th><th>Expected</th></tr>
+  <tr><td>1</td><td>Toggle <strong>Agent ON</strong></td><td>Button shows "🤖 Agent ON"</td></tr>
+  <tr><td>2</td><td>Send: <code>Search the web for 'population of Tokyo', then search the web for 'population of New York', then compare.</code></td><td>Agent runs, streaming tool calls visible</td></tr>
+  <tr><td>3</td><td>Look at dashboard header</td><td><code>Task: {uuid}</code> badge appears</td></tr>
+  <tr><td>4</td><td>Run: <code>ls ~/.contextcut/checkpoints/*/</code></td><td>≥2 directories (session-based task IDs)</td></tr>
+  <tr><td>5</td><td>Run: <code>for f in ~/.contextcut/checkpoints/&lt;latest&gt;/[0-9]*.json; do echo "--- $f"; python3 -m json.tool "$f" | head -6; done</code></td><td>Each file has: step_number, tool_name, tool_input, tool_output, goal, model_used, status, timestamp</td></tr>
+</table>
+
+<!-- ============================================================ -->
+<h2>2. Resume After Crash <span class="tag tag-core">Core Feature</span></h2>
+<p><strong>Purpose:</strong> Agent continues mid-task without re-doing prior work.</p>
+<table>
+  <tr><th>#</th><th>Action</th><th>Expected</th></tr>
+  <tr><td>1</td><td>Send: <code>List files in /tmp, then read /etc/hostname, then search the web for 'ContextCut-PRO'</code></td><td>Agent runs 3 tool calls</td></tr>
+  <tr><td>2</td><td>When <strong>Task:</strong> badge appears, copy the task_id</td><td>e.g. <code>a1b2c3d4</code></td></tr>
+  <tr><td>3</td><td>Send: <code>/resume a1b2c3d4</code></td><td>Server injects prior-step context as system message</td></tr>
+  <tr><td>4</td><td>Examine response</td><td>Agent acknowledges steps 1–2 done; does <em>not</em> re-list /tmp or re-read hostname; proceeds to web_search</td></tr>
+</table>
+
+<!-- ============================================================ -->
+<h2>3. Kill Mid-Stream <span class="tag tag-core">True Interruption</span></h2>
+<p><strong>Purpose:</strong> Simulate a process kill mid-tool-call, verify disk recovery.</p>
+<table>
+  <tr><th>#</th><th>Action</th><th>Expected</th></tr>
+  <tr><td>1</td><td>Send a long-running prompt: <code>Search the web for 'history of python', then 'history of rust', then 'history of go', then write a comparison</code></td><td>Agent starts running</td></tr>
+  <tr><td>2</td><td><strong>While still executing</strong>, kill proxy: <code>kill $(cat ~/contextcut/.proxy.pid)</code></td><td>Process dies mid-task</td></tr>
+  <tr><td>3</td><td>Restart: <code>cd ~/contextcut && ./start.sh</code></td><td>Cleanup log shows 0 stale or the killed task</td></tr>
+  <tr><td>4</td><td>Run: <code>ls ~/.contextcut/checkpoints/</code></td><td>Task dir exists with partial step files</td></tr>
+  <tr><td>5</td><td>Send: <code>/resume &lt;task_id&gt; Continue from where I left off.</code></td><td>Agent sees prior steps, continues with remaining searches</td></tr>
+</table>
+
+<!-- ============================================================ -->
+<h2>4. Resume Context Accuracy <span class="tag tag-edge">Fidelity</span></h2>
+<p><strong>Purpose:</strong> System message contains meaningful prior-step data.</p>
+<table>
+  <tr><th>#</th><th>Action</th><th>Expected</th></tr>
+  <tr><td>1</td><td>Send: <code>Remember my name is Alice.</code></td><td>Task badge appears</td></tr>
+  <tr><td>2</td><td>Copy task_id, send: <code>/resume &lt;tid&gt; What was my name and what have we done so far?</code></td><td>"Your name is Alice" — without re-calling remember()</td></tr>
+  <tr><td>3</td><td><code>curl http://192.168.137.252:18787/api/checkpoints/&lt;tid&gt;</code></td><td>JSON with step 1: tool_name "remember", input {key:"user_name", value:"Alice"}</td></tr>
+</table>
+
+<!-- ============================================================ -->
+<h2>5. Dashboard Routes <span class="tag tag-api">API</span></h2>
+<p><strong>Purpose:</strong> HTTP API returns correct data.</p>
+<table>
+  <tr><th>#</th><th>Action</th><th>Expected</th></tr>
+  <tr><td>1</td><td><code>curl http://192.168.137.252:18787/api/checkpoints</code></td><td>JSON listing all tasks with steps count, goal, model_used</td></tr>
+  <tr><td>2</td><td><code>curl http://192.168.137.252:18787/api/checkpoints/&lt;tid&gt;</code></td><td>task_id, step_count, steps[], estimated_resume_tokens</td></tr>
+  <tr><td>3</td><td><code>curl http://192.168.137.252:18787/api/checkpoints/fake</code></td><td>404 with <code>{"error":"task_id not found"}</code></td></tr>
+</table>
+
+<!-- ============================================================ -->
+<h2>6. Frontend Resume Button <span class="tag tag-ui">UI</span></h2>
+<p><strong>Purpose:</strong> UI flow works without typing commands.</p>
+<table>
+  <tr><th>#</th><th>Action</th><th>Expected</th></tr>
+  <tr><td>1</td><td>Send an agent prompt (any multi-step)</td><td>After completion: <strong>Task:</strong> badge + <strong>↩ Resume</strong> button appear</td></tr>
+  <tr><td>2</td><td>Click <strong>↩ Resume</strong></td><td>Input auto-fills with <code>/resume &lt;task_id&gt;</code></td></tr>
+  <tr><td>3</td><td>Press Enter</td><td>Agent sends request with task_id, receives context, continues</td></tr>
+  <tr><td>4</td><td>Send another agent prompt (no resume)</td><td>New task_id replaces previous; badge updates</td></tr>
+</table>
+
+<!-- ============================================================ -->
+<h2>7. Concurrent Isolation <span class="tag tag-edge">Non-Interference</span></h2>
+<p><strong>Purpose:</strong> Different task_ids don't share state.</p>
+<table>
+  <tr><th>#</th><th>Action</th><th>Expected</th></tr>
+  <tr><td>1</td><td>Send: <code>Remember my favorite color is blue.</code></td><td>Task A (1 tool call)</td></tr>
+  <tr><td>2</td><td>Copy task_id A</td><td>—</td></tr>
+  <tr><td>3</td><td>Send: <code>Remember my favorite food is pizza.</code></td><td>Task B (1 tool call)</td></tr>
+  <tr><td>4</td><td>Copy task_id B</td><td>—</td></tr>
+  <tr><td>5</td><td><code>ls ~/.contextcut/checkpoints/</code></td><td>Two separate directories</td></tr>
+  <tr><td>6</td><td><code>/resume &lt;A&gt; What is my favorite color?</code></td><td>"blue"</td></tr>
+  <tr><td>7</td><td><code>/resume &lt;B&gt; What is my favorite food?</code></td><td>"pizza"</td></tr>
+  <tr><td>8</td><td><code>/resume &lt;A&gt; What is my favorite food?</code></td><td>"I don't know / was in a different task"</td></tr>
+</table>
+
+<!-- ============================================================ -->
+<h2>8. Retention <span class="tag tag-perf">Cleanup</span></h2>
+<p><strong>Purpose:</strong> Old checkpoints don't accumulate forever.</p>
+<table>
+  <tr><th>#</th><th>Action</th><th>Expected</th></tr>
+  <tr><td>1</td><td><code>touch -t 202406010000 ~/.contextcut/checkpoints/stale/0001.json</code></td><td>Sets mtime 1 year ago</td></tr>
+  <tr><td>2</td><td><code>python3 -c "from agent_handler import CheckpointManager; CheckpointManager().cleanup(max_age_hours=1)"</code></td><td><code>[checkpoint] purged stale task stale (1h TTL)</code></td></tr>
+  <tr><td>3</td><td><code>ls ~/.contextcut/checkpoints/stale/ 2>&1</code></td><td><code>No such file or directory</code></td></tr>
+</table>
+
+<!-- ============================================================ -->
+<h2>9. Edge Cases <span class="tag tag-edge">Boundaries</span></h2>
+<table>
+  <tr><th>#</th><th>Action</th><th>What it tests</th></tr>
+  <tr><td>1</td><td>Send single-step prompt: <code>What is the capital of France?</code> → Check <code>~/.contextcut/checkpoints/&lt;tid&gt;</code></td><td>Exactly 1 .json file for single-tool tasks</td></tr>
+  <tr><td>2</td><td>Send no-tool prompt in agent mode: <code>Say hello</code></td><td>No checkpoint directory created when no tools called</td></tr>
+  <tr><td>3</td><td>Run a failing tool: <code>Read file /nonexistent</code></td><td>Checkpoint shows status "success" with error in output</td></tr>
+  <tr><td>4</td><td>Two back-to-back agent prompts via separate curl requests</td><td>No file collision; each task_id unique</td></tr>
+  <tr><td>5</td><td><code>python3 -c "from pathlib import Path; import json; p=list(sorted(Path.home().glob('.contextcut/checkpoints/*/0001.json')))[0]; d=json.loads(p.read_text()); print(d.keys())"</code></td><td>All 8 required fields present</td></tr>
+</table>
+
+<!-- ============================================================ -->
+<h2>10. Overhead Verification <span class="tag tag-perf">Budget</span></h2>
+<p><strong>Purpose:</strong> Confirm resume context &lt; 5% of CTX_LIMIT.</p>
+<table>
+  <tr><th>#</th><th>Action</th><th>Expected</th></tr>
+  <tr><td>1</td><td>Run 3 different multi-step agent prompts (5+ tool calls each)</td><td>—</td></tr>
+  <tr><td>2</td><td><pre>python3 -c "
+from agent_handler import CheckpointManager
+import os
+mgr = CheckpointManager()
+ctx = int(os.environ.get('CONTEXTCUT_CTX_LIMIT', 16384))
+for tid in mgr.list_task_ids():
+    if mgr.latest_step_number(tid) >= 2:
+        txt = mgr.build_resume_context(tid)
+        tok = len(txt) // 4
+        pct = tok / ctx * 100
+        print(f'{tid}: {tok} tok / {ctx} ctx = {pct:.1f}%')"</pre></td><td>All percentages &lt; 5%</td></tr>
+</table>
+
+<!-- ============================================================ -->
+<h2>Recommended Minimum Run Path</h2>
+<p>Covers the most risk in ~3 min: <strong>1 → 2 → 5 → 8 → 9</strong> (items 1, 3, 4).<br>
+Add scenario 3 for true crash recovery validation (~2 min extra).</p>
+
+</body></html>

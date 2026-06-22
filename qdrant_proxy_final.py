@@ -2412,8 +2412,10 @@ function resumeTask() {{
   }}
 }}
 
-function sendAgentMessage(tid) {{
-  appendMsg('user', '/resume ' + tid, '');
+function sendAgentMessage(tid, msg) {{
+  if (!msg) msg = 'Continue from where I left off.';
+  const input = document.getElementById('chatInput');
+  if (input && msg) input.value = msg;
   sendMessage(tid);
 }}
 
@@ -2667,11 +2669,20 @@ function handleCommand(text) {{
     return true;
   }}
   if (text.startsWith('/resume ')) {{
-    const tid = text.slice(8).trim();
-    if (tid) {{
+    const rest = text.slice(8).trim();
+    const spaceIdx = rest.indexOf(' ');
+    let tid, msg;
+    if (spaceIdx === -1) {{
+      tid = rest;
+      msg = '';
+    }} else {{
+      tid = rest.slice(0, spaceIdx);
+      msg = rest.slice(spaceIdx + 1).trim();
+    }}
+    if (tid && agentMode) {{
       lastTaskId = tid;
       updateTaskBadge();
-      sendAgentMessage(lastTaskId);
+      sendAgentMessage(lastTaskId, msg);
       return true;
     }}
   }}
@@ -2925,7 +2936,7 @@ async function sendMessage(taskIdOverride) {{
   const text    = input.value.trim();
   if (!text) return;
   if (!model) {{ alert('Enter a model name first.'); return; }}
-  if (handleCommand(text)) {{ input.value = ''; return; }}
+  if (!taskIdOverride && handleCommand(text)) {{ input.value = ''; return; }}
   inputHistory.unshift(text);
   if (inputHistory.length > 50) inputHistory.pop();
   inputHistoryIdx = -1;
@@ -2963,7 +2974,7 @@ async function sendMessage(taskIdOverride) {{
         method: 'POST',
         headers: {{'Content-Type':'application/json'}},
         signal: abortController.signal,
-        body: JSON.stringify({{message: text, session_id: sessionId, model, stream: true, deep: deepMode, task_id: taskIdOverride || lastTaskId || ''}})
+        body: JSON.stringify({{message: text, session_id: sessionId, model, stream: true, deep: deepMode, scan: scanMode, task_id: taskIdOverride || lastTaskId || ''}})
       }});
       if (!resp.ok) {{
         removeTyping();
@@ -5091,6 +5102,7 @@ class DashboardHandler(_SuppressBrokenPipe, BaseHTTPRequestHandler):
                 is_stream = body.get("stream", True)
                 deep = body.get("deep", False)
                 task_id = body.get("task_id", "").strip()
+                scan = body.get("scan", True)
 
                 if not sid or sid not in _sessions:
                     sid = new_session()
@@ -5185,9 +5197,10 @@ class DashboardHandler(_SuppressBrokenPipe, BaseHTTPRequestHandler):
                         except Exception:
                             raise _AgentAbort()
 
-                    async def _invoke_and_stream(msgs, is_retry=False):
-                        nonlocal full_output
+                    async def _invoke_and_stream(msgs, capture_only=False):
+                        nonlocal full_output, step_counter
                         local_tools = set()
+                        collected = []
                         try:
                             stream_agent = agent.with_config(
                                 {"recursion_limit": 50}
@@ -5207,7 +5220,9 @@ class DashboardHandler(_SuppressBrokenPipe, BaseHTTPRequestHandler):
                                             ):
                                                 text = chunk.content
                                                 if isinstance(text, str) and text:
-                                                    emit({'token': text})
+                                                    collected.append(text)
+                                                    if not capture_only:
+                                                        emit({'token': text})
                                         elif kind == "on_tool_start":
                                             tool_name = event.get("name", "unknown")
                                             local_tools.add(tool_name)
@@ -5260,12 +5275,7 @@ class DashboardHandler(_SuppressBrokenPipe, BaseHTTPRequestHandler):
                                                 })
                                             except Exception as cp_err:
                                                 print(f"[{datetime.now().strftime('%H:%M:%S')}] [checkpoint] save error: {cp_err}", flush=True)
-                            result = await asyncio.wait_for(
-                                stream_agent.ainvoke({"messages": msgs}),
-                                timeout=AGENT_TIMEOUT,
-                            )
-                            final_msgs = result.get("messages", [])
-                            full_output = final_msgs[-1].content if final_msgs else ""
+                            full_output = "".join(collected)
                         except _AgentAbort:
                             raise
                         except asyncio.TimeoutError:
@@ -5305,7 +5315,8 @@ class DashboardHandler(_SuppressBrokenPipe, BaseHTTPRequestHandler):
                         return full_output
 
                     # Layer 2: Self-correction loop (skip for trivial responses, no-op for deep scans)
-                    if full_output and len(full_output) > 80 and not deep:
+                    final_output = full_output
+                    if scan and full_output and len(full_output) > 80 and not deep:
                         try:
                             from agent_handler import _confidence_scan
                             loop = asyncio.get_event_loop()
@@ -5343,7 +5354,7 @@ class DashboardHandler(_SuppressBrokenPipe, BaseHTTPRequestHandler):
                                     AIMessage(content=full_output),
                                     HumanMessage(content=correction_msg),
                                 ]
-                                await _invoke_and_stream(retry_msgs)
+                                await _invoke_and_stream(retry_msgs, capture_only=True)
                                 correction_retries += 1
                                 if full_output and full_output != prev_output and len(full_output) > 80:
                                     scan_result = await loop.run_in_executor(
@@ -5372,10 +5383,10 @@ class DashboardHandler(_SuppressBrokenPipe, BaseHTTPRequestHandler):
                     tok_count = len(full_output.split())
                     print(f"[{datetime.now().strftime('%H:%M:%S')}] [Agent] \U0001f3af Done ({tok_count} words, {len(called_tools)} tools)", flush=True)
                     try:
-                        emit({'response': full_output, 'type': 'done'})
+                        emit({'response': final_output, 'type': 'done'})
                     except _AgentAbort:
                         pass
-                    return full_output
+                    return final_output
 
                 import sys
                 print(f"[{datetime.now().strftime('%H:%M:%S')}] [Agent] 🤖 Agent session started for model '{model_name}'", flush=True)
