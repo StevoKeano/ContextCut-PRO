@@ -2306,25 +2306,29 @@ async function runScan(text, assistantDiv, bubble) {{
     }}
     let highlighted = text;
     let flags = {{incorrect:0, uncertain:0, correct:0}};
+    let flagged = [];
     for (const p of sd.passages) {{
       const factual = p.factual;
       if (factual === 'correct') {{ flags.correct++; continue; }}
       if (factual === 'incorrect' || factual === 'uncertain') {{
         flags[factual]++;
-        if (p.text && p.text.length > 5) {{
-          const escaped = p.text.replace(/[.*+?^${{}}()|[\\]\\\\]/g, '\\\\$&');
-          const icon = factual === 'incorrect' ? '\\u26a0\\ufe0f ' : '\\u26a1 ';
-          const title = esc('factual=' + factual + ': ' + (p.reason || ''));
-          try {{
-            const re = new RegExp(escaped.replace(/\\n/g, '\\\\n'), 'gi');
-            highlighted = highlighted.replace(re, (match) =>
-              '<span class=\\"suspect\\" title=\\"' + title + '\\">' + icon + esc(match) + '</span>'
-            );
-          }} catch(e) {{}}
+        if (p.text && p.text.length > 5 && p.start != null && p.end != null && p.start >= 0 && p.end <= text.length) {{
+          flagged.push(p);
         }}
       }}
     }}
-    if (bubble) bubble.innerHTML = highlighted;
+    if (flagged.length > 0) {{
+      flagged.sort((a,b) => b.start - a.start);
+      for (const p of flagged) {{
+        const before = highlighted.slice(0, p.start);
+        const match = highlighted.slice(p.start, p.end);
+        const after = highlighted.slice(p.end);
+        const icon = p.factual === 'incorrect' ? '\\u26a0\\ufe0f ' : '\\u26a1 ';
+        const title = esc('factual=' + p.factual + ': ' + (p.reason || ''));
+        highlighted = before + '<span class=\\"suspect\\" title=\\"' + title + '\\">' + icon + esc(match) + '</span>' + after;
+      }}
+    }}
+    if (bubble) bubble.innerHTML = linkCitations(esc(highlighted));
     const summary = document.createElement('div');
     summary.style.cssText = 'font-size:10px;color:var(--muted);padding:2px 6px;border-top:1px solid var(--border);margin-top:4px';
     let parts = [];
@@ -2364,17 +2368,21 @@ async function testScan() {{
     const data = await resp.json();
     let highlighted = TEST_SCAN_TEXT;
     if (data.passages && data.passages.length > 0) {{
+      let flagged = [];
       for (const p of data.passages) {{
-        if ((p.factual === 'incorrect' || p.factual === 'uncertain') && p.text && p.text.length > 5) {{
-          const escaped = p.text.replace(/[.*+?^${{}}()|[\\]\\\\]/g, '\\\\$&');
+        if ((p.factual === 'incorrect' || p.factual === 'uncertain') && p.text && p.text.length > 5 && p.start != null && p.end != null && p.start >= 0 && p.end <= TEST_SCAN_TEXT.length) {{
+          flagged.push(p);
+        }}
+      }}
+      if (flagged.length > 0) {{
+        flagged.sort((a,b) => b.start - a.start);
+        for (const p of flagged) {{
+          const before = highlighted.slice(0, p.start);
+          const match = highlighted.slice(p.start, p.end);
+          const after = highlighted.slice(p.end);
           const icon = p.factual === 'incorrect' ? '\\u26a0\\ufe0f ' : '\\u26a1 ';
           const title = esc('factual=' + p.factual + ': ' + (p.reason || ''));
-          try {{
-            const re = new RegExp(escaped.replace(/\\n/g, '\\\\n'), 'gi');
-            highlighted = highlighted.replace(re, (match) =>
-              '<span class=\\"suspect\\" title=\\"' + title + '\\">' + icon + esc(match) + '</span>'
-            );
-          }} catch(e) {{}}
+          highlighted = before + '<span class=\\"suspect\\" title=\\"' + title + '\\">' + icon + esc(match) + '</span>' + after;
         }}
       }}
     }}

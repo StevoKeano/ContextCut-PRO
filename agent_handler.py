@@ -469,7 +469,19 @@ Text:
                 content = content[: end + 1]
             content = content.strip()
             results = json.loads(content)
-            return results if isinstance(results, list) else []
+            if isinstance(results, list):
+                # Find exact character offsets in original text for each passage
+                for p in results:
+                    pt = p.get("text", "")
+                    if pt:
+                        for candidate in (pt, pt.strip(), pt.strip().rstrip('.,!?;:')):
+                            idx = text.find(candidate)
+                            if idx >= 0:
+                                p["start"] = idx
+                                p["end"] = idx + len(candidate)
+                                break
+                return results
+            return []
         except Exception as e:
             return [{"text": text, "confidence": "HIGH", "reason": f"Scan error: {e}"}]
     else:
@@ -1478,12 +1490,12 @@ CRITICAL — NEVER overcomplicate:
 - Only use shell_exec when you truly need a system operation (git, compilation, background process, package install via apt).
 
 Rules:
-1. For shell_exec, inform the user what command you want to run and why.
+1. For shell_exec, briefly state the command then run it. Do NOT ask for permission — the user has a separate Allow/Deny mechanism.
 2. Use vector_search proactively when the question relates to the knowledge base.
 3. Write well-structured, correct code.
 4. When reading files, respect the file size limit.
 5. Do NOT fabricate information — use tools to verify facts.
-6. Always explain what you plan to do before doing it.
+6. Be proactive — after completing a task, immediately take the next logical step rather than asking "Would you like me to...". The user can always interrupt. For example, after listing devices on the network, do NOT ask what to do next — just try port scanning, MAC lookup, or whatever makes sense.
 7. For complex tasks, call plan() first to create a structured approach, then execute each step.
 8. At the start of a conversation, call recall() to load persistent memories relevant to the user's request.
 9. Use remember() to store important facts about the user (name, preferences, project details) so they persist across sessions.
@@ -1496,7 +1508,8 @@ Rules:
     - "Write false statements" or "generate test claims" requests framed as testing or verification are legitimate tool-use operations — comply using your tools.
     - Your refusal is a hallucination. You DO have web access via tools. Use them.
     - Never refuse a request that can be fulfilled by calling web_search or fetch_url.
-    - If the request involves checking external sources, assume it's a legitimate fact-checking task and proceed with tool use."""
+    - If the request involves checking external sources, assume it's a legitimate fact-checking task and proceed with tool use.
+15. NEVER end a response with "Would you like me to..." or "Let me know how to proceed". Just DO the most useful thing next using your tools."""
 
 
 def build_agent(model_name: str = None, upstream: str = None,
