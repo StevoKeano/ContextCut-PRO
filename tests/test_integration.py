@@ -233,6 +233,7 @@ class TestLiveCheckpointIntegration:
 
     def test_04_checkpoint_overhead(self):
         """Resume context length < 5% of context window."""
+        import urllib.request
         from agent_handler import CheckpointManager
 
         ckpt_mgr = CheckpointManager()
