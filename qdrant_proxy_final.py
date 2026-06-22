@@ -2106,6 +2106,15 @@ tr.cloud-off td{{background:#0a1a2e!important;color:#22c55e!important;border-top
             <input type="range" class="param-slider" id="topkSlider" min="1" max="15" step="1" value="{TOP_K}" oninput="updateTopK()" style="width:50px">
             <span class="param-val" id="topkVal">{TOP_K}</span>
           </div>
+          <div class="param-group" style="border-top:1px solid var(--border);padding-top:6px;margin-top:4px">
+            <span class="param-label">Mode:</span>
+            <button class="agent-toggle" id="agentToggle" onclick="toggleAgentMode()" title="Toggle Agent mode (tool-use)" style="font-size:10px;padding:4px 8px">🤖 Agent OFF</button>
+            <button class="scan-toggle" id="scanToggle" onclick="toggleScanMode()" title="Scan responses for potential hallucinations" style="font-size:10px;padding:4px 8px">🧪 Scan OFF</button>
+            <button class="scan-test" id="scanTestBtn" onclick="testScan()" title="Run a demo scan on known false claims to test highlighting" style="font-size:10px;padding:4px 8px">🔬 Test</button>
+            <label class="scan-deep-lbl" id="deepLbl" title="Use Deep Agents harness with sub-agent verification"><input type="checkbox" id="deepChk" onchange="toggleDeepMode(this)"> DEEP</label>
+            <label class="unattended-lbl" id="unattendedLbl" title="Auto-approve shell commands"><input type="checkbox" id="unattendedChk" onchange="confirmUnattended(this)"> Unattended</label>
+            <button class="clear-btn" id="defaultBtn" onclick="resetDefaults()" title="Reset all settings to defaults" style="font-size:9px;padding:4px 8px;margin-left:auto">Default</button>
+          </div>
           <div style="font-size:9px;color:var(--muted);margin-top:6px;border-top:1px solid var(--border);padding-top:6px">
             ⚡ 128K context = 5GB VRAM for KV cache. If responses take &gt;5s, your GPU is swapping models — set <code>OLLAMA_CONTEXT_LENGTH=32768</code> on the Ollama host to fit both embed &amp; chat models in VRAM.
           </div>
@@ -2117,11 +2126,6 @@ tr.cloud-off td{{background:#0a1a2e!important;color:#22c55e!important;border-top
         <textarea class="chat-input" id="chatInput" rows="2" role="textbox" aria-label="Message input"
           placeholder="Type a message… (Enter to send, Shift+Enter for newline). Try: /clear, /help"
           onkeydown="handleKey(event)"></textarea>
-        <button class="scan-toggle" id="scanToggle" onclick="toggleScanMode()" title="Scan responses for potential hallucinations">🧪 Scan OFF</button>
-        <button class="scan-test" id="scanTestBtn" onclick="testScan()" title="Run a demo scan on known false claims to test highlighting">🔬 Test</button>
-        <label class="scan-deep-lbl" id="deepLbl" title="Use Deep Agents harness with sub-agent verification (requires deepagents)"><input type="checkbox" id="deepChk" onchange="toggleDeepMode(this)"> DEEP</label>
-        <button class="agent-toggle" id="agentToggle" onclick="toggleAgentMode()" title="Toggle Agent mode (tool-use)" style="background:transparent;border:1px solid var(--border);color:var(--muted);border-radius:3px;padding:8px 10px;font-size:11px;cursor:pointer;line-height:1;flex-shrink:0;font-family:'JetBrains Mono',monospace">🤖 Agent OFF</button>
-        <label class="unattended-lbl" id="unattendedLbl" title="Auto-approve shell commands without Allow/Deny prompts"><input type="checkbox" id="unattendedChk" onchange="confirmUnattended(this)"> Unattended</label>
         <button class="send-btn" id="sendBtn" onclick="sendMessage()" aria-label="Send message">Send ↑</button>
       </div>
     </div>
@@ -2141,6 +2145,89 @@ let deepMode = false;
 let abortController = null;
 let lastEsc = 0;
 let lastTaskId = null;
+
+function saveState() {{
+  localStorage.setItem('cc_agentMode', agentMode ? '1' : '0');
+  localStorage.setItem('cc_scanMode', scanMode ? '1' : '0');
+  localStorage.setItem('cc_deepMode', deepMode ? '1' : '0');
+  const uc = document.getElementById('unattendedChk');
+  if (uc) localStorage.setItem('cc_unattended', uc.checked ? '1' : '0');
+  const mi = document.getElementById('modelInput');
+  if (mi) localStorage.setItem('cc_model', mi.value);
+  const ts = document.getElementById('tempSlider');
+  if (ts) localStorage.setItem('cc_temp', ts.value);
+  const tp = document.getElementById('toppSlider');
+  if (tp) localStorage.setItem('cc_topp', tp.value);
+  const mt = document.getElementById('maxTokInput');
+  if (mt) localStorage.setItem('cc_maxTok', mt.value);
+  const ms = document.getElementById('minscoreSlider');
+  if (ms) localStorage.setItem('cc_minscore', ms.value);
+  const tk = document.getElementById('topkSlider');
+  if (tk) localStorage.setItem('cc_topk', tk.value);
+}}
+
+function loadState() {{
+  const ls = localStorage;
+  function setChk(id, key) {{
+    const v = ls.getItem(key);
+    if (v !== null) {{
+      const el = document.getElementById(id);
+      if (el) el.checked = v === '1';
+    }}
+  }}
+  function setVal(id, key) {{
+    const v = ls.getItem(key);
+    if (v !== null) {{
+      const el = document.getElementById(id);
+      if (el) el.value = v;
+    }}
+  }}
+  const am = ls.getItem('cc_agentMode');
+  if (am !== null) agentMode = am === '1';
+  const sm = ls.getItem('cc_scanMode');
+  if (sm !== null) scanMode = sm === '1';
+  const dm = ls.getItem('cc_deepMode');
+  if (dm !== null) deepMode = dm === '1';
+  setChk('unattendedChk', 'cc_unattended');
+  setVal('modelInput', 'cc_model');
+  setVal('tempSlider', 'cc_temp');
+  updateParamVal('tempSlider', 'tempVal');
+  setVal('toppSlider', 'cc_topp');
+  updateParamVal('toppSlider', 'toppVal');
+  setVal('maxTokInput', 'cc_maxTok');
+  updateParamVal('maxTokInput', 'maxTokVal');
+  setVal('minscoreSlider', 'cc_minscore');
+  setVal('topkSlider', 'cc_topk');
+  updateMinScore();
+  updateTopK();
+  const agentBtn = document.getElementById('agentToggle');
+  if (agentBtn) {{
+    agentBtn.textContent = agentMode ? '🤖 Agent ON' : '🤖 Agent OFF';
+    agentBtn.classList.toggle('agent-on', agentMode);
+  }}
+  const scanBtn = document.getElementById('scanToggle');
+  if (scanBtn) {{
+    scanBtn.textContent = scanMode ? '🧪 Scan ON' : '🧪 Scan OFF';
+    scanBtn.classList.toggle('scan-on', scanMode);
+  }}
+  const dc = document.getElementById('deepChk');
+  if (dc) dc.checked = deepMode;
+  const uc = document.getElementById('unattendedChk');
+  if (uc) uc.classList.toggle('show', agentMode);
+  const input = document.getElementById('chatInput');
+  if (input) {{
+    input.placeholder = agentMode
+      ? 'Agent: use tools, run code, search the web…'
+      : 'Type a message… (Enter to send, Shift+Enter for newline). Try: /clear, /help';
+  }}
+}}
+
+function resetDefaults() {{
+  if (!confirm('Reset all settings to defaults?')) return;
+  const keys = ['cc_agentMode','cc_scanMode','cc_deepMode','cc_unattended','cc_model','cc_temp','cc_topp','cc_maxTok','cc_minscore','cc_topk'];
+  keys.forEach(k => localStorage.removeItem(k));
+  location.reload();
+}}
 
 function toggleAgentMode() {{
   agentMode = !agentMode;
@@ -2170,6 +2257,7 @@ function toggleAgentMode() {{
       }}
     }}
   }}
+  saveState();
 }}
 
 function toggleScanMode() {{
@@ -2183,6 +2271,7 @@ function toggleScanMode() {{
 
 function toggleDeepMode(cb) {{
   deepMode = cb.checked;
+  saveState();
 }}
 
 function addSelfEvalWarning(sd, parent) {{
@@ -2351,6 +2440,7 @@ async function confirmUnattended(cb) {{
       body: JSON.stringify({{session_id: sessionId, mode: 'ask'}})
     }});
   }}
+  saveState();
 }}
 
 function handleKey(e) {{
@@ -2569,6 +2659,7 @@ function updateMinScore() {{
       headers: {{'Content-Type': 'application/json'}},
       body: JSON.stringify({{min_score: parseFloat(slider.value)}})
     }}).catch(e => console.warn('min_score sync failed', e));
+    saveState();
   }}
 }}
 
@@ -2582,6 +2673,7 @@ function updateTopK() {{
       headers: {{'Content-Type': 'application/json'}},
       body: JSON.stringify({{top_k: parseInt(slider.value)}})
     }}).catch(e => console.warn('top_k sync failed', e));
+    saveState();
   }}
 }}
 
@@ -2933,6 +3025,7 @@ pollLicense();
 pollGpu();
 fetchModels();
 initSession();
+loadState();
 document.querySelector('.right')?.classList.add('fullscreen');
 
 async function sendMessage(taskIdOverride) {{
