@@ -1495,7 +1495,7 @@ Rules:
 3. Write well-structured, correct code.
 4. When reading files, respect the file size limit.
 5. Do NOT fabricate information — use tools to verify facts.
-6. Be proactive — after completing a task, immediately take the next logical step rather than asking "Would you like me to...". The user can always interrupt. For example, after listing devices on the network, do NOT ask what to do next — just try port scanning, MAC lookup, or whatever makes sense.
+6. Be proactive — after completing a task, immediately take the next logical step rather than asking "Would you like me to...". The user can always interrupt. For example, after listing devices on the network, do NOT ask what to do next — just try port scanning, MAC lookup, or whatever makes sense.  After running ss -tulpn, immediately check firewall rules without asking.
 7. For complex tasks, call plan() first to create a structured approach, then execute each step.
 8. At the start of a conversation, call recall() to load persistent memories relevant to the user's request.
 9. Use remember() to store important facts about the user (name, preferences, project details) so they persist across sessions.
@@ -1509,11 +1509,98 @@ Rules:
     - Your refusal is a hallucination. You DO have web access via tools. Use them.
     - Never refuse a request that can be fulfilled by calling web_search or fetch_url.
     - If the request involves checking external sources, assume it's a legitimate fact-checking task and proceed with tool use.
-15. NEVER end a response with "Would you like me to..." or "Let me know how to proceed". Just DO the most useful thing next using your tools."""
+15. NEVER end a response with "Would you like me to..." or "Let me know how to proceed". Just DO the most useful thing next using your tools.
+16. SECURITY ASSESSMENT PROTOCOL — When asked to perform any security scan, audit,
+    or assessment, ALWAYS follow this exact tool-call order:
+    a. shell_exec: enumerate open ports and listening services
+       (e.g., ss -tulpn, netstat -tulpn)
+    b. shell_exec: check firewall rules (ufw status verbose, iptables -L -n)
+    c. shell_exec: audit failed logins (grep 'Failed' /var/log/auth.log | tail -20)
+    d. shell_exec: find SUID/SGID files (find / -perm /6000 -type f 2>/dev/null)
+    e. shell_exec: check for outdated packages (apt list --upgradeable 2>/dev/null)
+    f. shell_exec: inspect cron jobs (crontab -l; ls /etc/cron*)
+    g. system_info: hardware snapshot
+    h. ONLY THEN use web_search to supplement findings with current CVEs or
+       hardening guidance specific to what was found locally.
+    web_search is NEVER the first tool for a security task. Local enumeration is."""
+
+
+# ── Harness Reliability V1: Pre-tool Constraint Validator ──────────────
+# When the agent's first tool call is web_search on a security-related prompt,
+# reroute it to shell_exec so the model can't reason around local enforcement.
+
+HARNESS_USER_PATTERNS = re.compile(
+    r'(network\s*(scan|audit|map|discover|analyze)'
+    r'|security\s*(scan|audit|assessment|check|hardening|review)'
+    r'|who\s*(is|are)\s*(on|in)\s*my\s*network'
+    r'|what\s*(devices|hosts|machines|computers)\s*(are|on)\s*(my|this|the)\s*network'
+    r'|arp\s*(table|scan|-a)'
+    r'|nmap|port\s*scan|enumeration|recon|pentest'
+    r'|find\s*(connected\s*)?devices'
+    r'|list\s*(connected\s*)?(devices|hosts|machines|clients)'
+    r'|show\s*(me\s*)?(my\s*)?(network|connected|devices)'
+    r'|check\s*(my\s*)?network'
+    r'|scan\s*(my\s*)?(local\s*)?network'
+    r'|vulnerability|exploit|breach|compromise)',
+    re.IGNORECASE
+)
+
+
+def make_harness_web_search(original_tool):
+    """Wrap web_search to detect first-call security queries and reroute to shell_exec.
+
+    Returns a @tool-decorated function with identical signature to the original
+    web_search. On first invocation, if the query matches network/security
+    patterns, runs ``arp -a`` via subprocess instead of searching the web.
+    """
+    import subprocess
+    first_call = True
+
+    @tool
+    def harness_web_search(query: str, max_results: int = 5) -> str:
+        nonlocal first_call
+        if first_call and HARNESS_USER_PATTERNS.search(query):
+            first_call = False
+            try:
+                result = subprocess.run(
+                    ["arp", "-a"],
+                    capture_output=True, text=True, timeout=15
+                )
+                output = result.stdout or result.stderr
+                return (
+                    "[⚡ Harness-rerouted: web_search → shell_exec(arp -a)]\n"
+                    "Your web_search call was intercepted because the query "
+                    "appears to ask about local network information, which is more "
+                    "accurately obtained via shell.\n\n"
+                    f"{output.strip()}\n\n"
+                    "Use this data to answer the user's question."
+                )
+            except Exception as e:
+                return f"[Harness] shell_exec(arp -a) failed: {e}"
+        first_call = False
+        return original_tool.invoke({"query": query, "max_results": max_results})
+
+    return harness_web_search
+
+
+def apply_harness(tools: list, user_message: str) -> list:
+    """If user_message is security-related, replace web_search with harness wrapper.
+
+    This is the entry point — call before passing tools to create_agent.
+    """
+    if not user_message or not HARNESS_USER_PATTERNS.search(user_message):
+        return tools
+    modified = list(tools)
+    for i, t in enumerate(modified):
+        if getattr(t, "name", None) == "web_search":
+            modified[i] = make_harness_web_search(t)
+            break
+    return modified
 
 
 def build_agent(model_name: str = None, upstream: str = None,
-                api_key: str = None, task_id: str = None, goal: str = None):
+                api_key: str = None, task_id: str = None, goal: str = None,
+                user_message: str = None):
 
     llm = ChatOpenAI(
         model=model_name or "qwen3:14b-q8_0",
@@ -1523,7 +1610,7 @@ def build_agent(model_name: str = None, upstream: str = None,
         streaming=True,
     )
 
-    tools = ALL_TOOLS + _get_dynamic_tools()
+    tools = apply_harness(ALL_TOOLS + _get_dynamic_tools(), user_message)
 
     agent = create_agent(
         model=llm,

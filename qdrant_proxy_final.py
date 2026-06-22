@@ -5260,6 +5260,7 @@ class DashboardHandler(_SuppressBrokenPipe, BaseHTTPRequestHandler):
                         api_key=get_current_api_key(),
                         task_id=task_id,
                         goal=goal,
+                        user_message=message,
                     )
                 except Exception as e:
                     err_str = str(e)
