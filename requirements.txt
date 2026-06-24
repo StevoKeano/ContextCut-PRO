@@ -6,9 +6,9 @@ langgraph-prebuilt==1.1.0
 qdrant-client==1.18.0
 openai==2.41.1
 tiktoken==0.13.0
-cryptography==48.0.0
+cryptography==48.0.1
 httpx==0.28.1
-requests==2.32.3
+requests==2.33.0
 PyMuPDF==1.27.2.3
 python-docx==1.2.0
 openpyxl==3.1.5
@@ -22,5 +22,5 @@ ollama==0.6.2
 uvicorn==0.48.0
 fastmcp==3.4.2
 deepagents==0.6.11
-pytest==8.3.4
-pytest-mock==3.14.0
+pytest==9.0.3
+pytest-mock==3.15.1
