@@ -332,8 +332,8 @@ source "$INSTALL_DIR/venv/bin/activate"
 
 echo "  Installing Python dependencies..."
 pip install --upgrade pip -q 2>/dev/null
-curl -sf "$REPO/requirements.txt" -o "$INSTALL_DIR/requirements.txt"
-pip install -r "$INSTALL_DIR/requirements.txt" -q
+curl -sf "$REPO/requirements.lock.txt" -o "$INSTALL_DIR/requirements.lock.txt"
+pip install -r "$INSTALL_DIR/requirements.lock.txt" -q
 if [ -n "$VOYAGE_KEY" ]; then
   pip install voyageai -q && echo "  voyageai installed" || echo "  WARNING: voyageai install failed (Voyage AI mode will not work)"
 fi
