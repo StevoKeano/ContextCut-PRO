@@ -66,8 +66,8 @@ Five controls affect how the proxy responds:
 
 | Control | Options | Description |
 |---|---|---|
-| **Scan ON/OFF** | Toggle button | Enables confidence scanning of responses |
-| **DEEP** | Checkbox | Uses Deep Agents harness (sub-agents + KB search) instead of a single LLM call for scanning. Requires Scan ON |
+| **Scan ON/OFF** | Toggle button | Enables confidence scanning of responses. After each assistant reply, a secondary LLM evaluates factual claims and highlights suspect passages inline. When ON with Agent mode, enables automatic self-correction on LOW-confidence responses |
+| **DEEP** | Checkbox | Uses sub-agent verifier harness with Qdrant KB search for evidence-backed fact-checking, instead of a single LLM pass. Requires Scan ON. Disables the self-correction loop |
 | **Agent ON/OFF** | Toggle button | Enables tool-use mode — agent can run shell commands, read/write files, search the KB |
 | **Unattended** | Checkbox | Auto-approves shell commands the agent wants to run, skipping the Allow/Deny prompt |
 | **Model** | Text input | The model name to use (e.g. `qwen3:14b-q8_0`, `deepseek-v4-pro:cloud`) |
@@ -290,58 +290,80 @@ In short: ContextCut-PRO is the proxy + RAG layer you put in front of any model 
 
 ---
 
-## Agent Mode & Confidence Scan
+## Scan & DEEP Modes
 
-The dashboard chat has two toggle buttons that control agent behavior and response verification:
+The dashboard provides two response-verification controls: **Scan ON/OFF** and **DEEP**. They work together or independently.
 
-| Toggle | What it does | Self-corrects? | UI highlighting? |
-|--------|-------------|:---:|:---:|
-| **🤖 Agent OFF/ON** | Enables the LangChain agent with tool calls (shell, python, web search, file ops, RAG, etc.) | ✅ Backend confidence scan runs inside the agent flow | ❌ |
-| **🧪 Scan OFF/ON** | After the agent responds, the frontend calls `/api/agent/confidence-scan` and highlights suspect passages | ❌ Just visual feedback | ✅ Passages with factual errors or uncertainties are highlighted with ⚠️ / ⚡ icons |
-| **Both ON** | Agent responds → backend auto-scans for LOW confidence and optionally self-corrects → frontend highlights any remaining issues | ✅ | ✅ |
-| **Both OFF** | Plain chat — no agent, no scan, no correction | ❌ | ❌ |
+### Scan ON/OFF — Confidence Scan
 
-### How to use
+After every assistant response (agent or plain chat), the text is POSTed to `/api/agent/confidence-scan`. A secondary LLM call evaluates each factual claim as **correct / uncertain / incorrect**. Suspect passages are highlighted inline in the chat bubble with a summary bar.
 
-1. **Toggle 🤖 Agent ON** to enable tool-using agent mode (required for self-correction)
-2. **Toggle 🧪 Scan ON** to see visual feedback on response accuracy
-3. **Click 🔬 Test** (next to Scan toggle) for a live demo — sends hardcoded false claims and highlights them
+| Feature | Scan ON |
+|---|---|
+| Speed | ~seconds |
+| Dependencies | None |
+| Evidence-backed | No |
+| Self-correction loop | ✅ (agent mode only) |
+| Best for | Daily use, rapid iteration |
 
-### Backend self-correction (automatic)
+**How it works:**
 
-When `CONTEXTCUT_SCAN_MODEL` is configured in `.env`, every agent response is automatically scanned for factual errors. If LOW-confidence passages are found, the agent receives a correction prompt and one retry attempt. This runs regardless of the frontend Scan toggle.
+1. **Frontend** — After the response finishes, `runScan()` sends the text to `/api/agent/confidence-scan`.
+2. **Backend** — `_confidence_scan()` calls the scan model (or the agent model as fallback) with `temperature=0.0` and a detailed prompt that asks for a JSON array of passages with `text`, `factual` (correct/incorrect/uncertain), and `reason`.
+3. **Highlighting** — The frontend injects `<span class="suspect">` tags at the character offsets returned by the backend and appends a summary bar: `✓ N correct | ⚡ N uncertain | ⚠️ N incorrect`.
+4. **Self-correction loop** — In agent mode, if the backend finds LOW-confidence passages (simple HIGH/MEDIUM/LOW check), the agent receives a correction prompt and one retry. This is **disabled** when DEEP is on.
+
+**Scan model:** Set `CONTEXTCUT_SCAN_MODEL` to a different, smaller model (e.g. `qwen3:4b` or `llama3.2:1b-instruct-q4_K_M`) to avoid self-evaluation. If unset, the chat model is used and a yellow warning is shown: *"Self-evaluating (no separate scan model)."*
 
 ```bash
-# .env — set a separate, smaller model for scanning (avoids self-evaluation)
+# .env
 CONTEXTCUT_SCAN_MODEL=qwen3:4b
 ```
 
-The scan model must differ from the agent model (`CONTEXTCUT_MODEL`). Recommended: `qwen3:4b` (2.5 GB VRAM) or `llama3.2:1b-instruct-q4_K_M` (0.8 GB VRAM).
+### DEEP — Sub-Agent Verifier
 
-### Frontend highlighting
+Replaces the simple LLM scan with a **sub-agent harness** (`_deep_confidence_scan()`) that spawns parallel workers to check each factual claim against your Qdrant knowledge base. Each claim gets evidence search → source-backed verdict.
 
-The **🧪 Scan** toggle calls `/api/agent/confidence-scan` after the agent responds. It uses the agent model itself to identify suspect passages. Results are rendered inline:
+| Feature | DEEP |
+|---|---|
+| Speed | 10–120s |
+| Dependencies | `pip install deepagents` |
+| Evidence-backed | ✅ (Qdrant KB citations) |
+| Self-correction loop | ❌ |
+| Best for | Critical responses (medical, legal, security) |
 
-- ⚠️ **incorrect** — passage highlighted with orange background and warning icon
-- ⚡ **uncertain** — passage highlighted with lightning icon
+**How it works:**
+
+1. Creates a `verifier` agent via `create_deep_agent()` from the `deepagents` package.
+2. The verifier has one tool: `search_knowledge_base(query)` — which searches Qdrant for supporting or contradicting evidence.
+3. The verifier parses the text into individual factual claims, spawns parallel sub-agents for independent claims, and returns a JSON array with `text`, `factual`, `reason`, and `source_url`.
+4. Runs with a 120-second timeout. Falls back gracefully if `deepagents` is not installed.
+
+### Practical Guidance
+
+| Scenario | Scan | DEEP | Why |
+|---|---|---|---|
+| Daily chat, quick iteration | OFF | OFF | Max throughput, no overhead |
+| Lightweight hallucination check | ON | OFF | Fast single-LLM check, self-correction loop active |
+| Critical response with sources | ON | ON | Sub-agent verification against your KB |
+| Debugging or testing prompts | OFF | OFF | No post-processing, see raw output |
+| Security audit / pentest results | ON | ON | Verifiable claims with evidence from KB |
 
 ### Two scan modes (detailed vs simple)
 
-| | Frontend (🧪 Scan) | Backend (self-correction) |
+| | Frontend (🧪 Scan ON) | Backend (self-correction) |
 |---|---|---|
-| **Model** | Agent model (`qwen3:14b-q8_0`) | `CONTEXTCUT_SCAN_MODEL` (`qwen3:4b`) |
+| **Model** | Scan model or fallback to agent model | `CONTEXTCUT_SCAN_MODEL` |
 | **Prompt** | Detailed — returns passages with `"text"`, `"factual"`, `"reason"` | Simple — single-word rating: HIGH/MEDIUM/LOW |
 | **Purpose** | Visual highlighting for the user | Automated correction loop |
 | **Trigger** | Frontend calls `/api/agent/confidence-scan` | Runs inside `_run_agent_stream` / `_run_agent` |
 
----
-
-### Configuration reference
+### Configuration
 
 | Variable | Default | Description |
 |---|---|---|
-| `CONTEXTCUT_MODEL` | `qwen3:14b-q8_0` | Agent model (chat + tool use) |
-| `CONTEXTCUT_SCAN_MODEL` | *(unset = disabled)* | Separate model for backend confidence scan. Must differ from agent model. E.g. `qwen3:4b` or `llama3.2:1b-instruct-q4_K_M` |
+| `CONTEXTCUT_SCAN_MODEL` | *(unset)* | Separate model for scanning. Must differ from agent model. E.g. `qwen3:4b` |
+| `CONTEXTCUT_MODEL` | `qwen3:14b-q8_0` | Agent / chat model, fallback for scanning |
 
 ---
 
