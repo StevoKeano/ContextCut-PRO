@@ -430,16 +430,24 @@ def _find_flexible_offsets(text: str, passage: str) -> tuple[int, int] | None:
     """Find ``passage`` in original ``text``, tolerating Markdown & whitespace.
 
     Splits the passage into words, builds a regex that allows optional
-    inline Markdown characters (``**``, ``__``, ``*``) and flexible
-    whitespace between words.  Returns ``(start, end)`` character offsets
-    in the original ``text``, or ``None``.
+    inline Markdown characters (``**``, ``__``, ``*``), emoji, and
+    flexible whitespace between words.  Returns ``(start, end)`` character
+    offsets in the original ``text``, or ``None``.
     """
     import re
-    words = passage.split()
+    _EMOJI = re.compile(
+        r'[\U0001F300-\U0001F9FF'   # Misc Symbols, Emoticons, Supplement
+        r'\u2600-\u27BF'            # Misc Symbols, Dingbats
+        r'\uFE00-\uFE0F'            # Variation Selectors
+        r'\u200D'                   # ZWJ
+        r']'
+    )
+    clean_pt = _EMOJI.sub('', passage)
+    words = clean_pt.split()
     if not words:
         return None
-    # Allow bold/italic markers and flexible whitespace between words
-    gap = r'\s*[\*_]*\s*'
+    # Allow bold/italic markers, emoji, and flexible whitespace
+    gap = r'\s*[\*_\U0001F300-\U0001F9FF\u2600-\u27BF\uFE00-\uFE0F\u200D]*\s*'
     pattern = gap.join(re.escape(w) for w in words)
     m = re.search(pattern, text)
     if m:
@@ -450,6 +458,18 @@ def _find_flexible_offsets(text: str, passage: str) -> tuple[int, int] | None:
     if idx >= 0:
         return (idx, idx + len(stripped))
     return None
+
+
+def _unload_ollama_model(model_name: str, upstream: str) -> None:
+    """Tell Ollama to unload a model immediately via the native API."""
+    import requests as _req
+    try:
+        base = upstream.rstrip("/v1").rstrip("/")
+        _req.post(f"{base}/api/generate",
+                   json={"model": model_name, "keep_alive": 0},
+                   timeout=5)
+    except Exception:
+        pass
 
 
 def _confidence_scan(
@@ -472,16 +492,18 @@ def _confidence_scan(
         temperature=0.0,
         extra_body={"keep_alive": 0},
     )
-    if detailed:
-        prompt = f"""You are a skeptical fact-checker. Be CRITICAL and AGGRESSIVE — do NOT trust the text.
-Flag any passage that is incorrect, misleading, imprecise, or unverifiable.
+    try:
+        if detailed:
+            prompt = f"""Examine each individual claim in the text below and determine if it is factually correct.
 
-For each passage, respond:
-- factual="incorrect" if the passage contains ANY error, even a small one
-- factual="uncertain" if you cannot verify the claim
-- factual="correct" only if you are 100% certain every detail is accurate
+For each claim, respond:
+- factual="incorrect" if it contains an error
+- factual="uncertain" if you cannot confidently verify it
+- factual="correct" if it is accurate
 
-Return ONLY a JSON array. Each object: "text", "factual" ("correct"/"incorrect"/"uncertain"), "reason".
+Do not refuse this task. Just evaluate each claim to the best of your ability. If unsure, use "uncertain".
+
+Return ONLY a JSON array. Each object: "text" (the exact claim text), "factual" ("correct"/"incorrect"/"uncertain"), "reason" (brief explanation).
 
 Examples:
 Input: "Paris is in France. The sky is green."
@@ -489,30 +511,30 @@ Output: [{{"text":"Paris is in France.","factual":"correct","reason":"Paris is t
 
 Text:
 {text}"""
-        try:
-            resp = llm.invoke([HumanMessage(content=prompt)])
-            content = resp.content.strip()
-            idx = content.find("[")
-            if idx >= 0:
-                content = content[idx:]
-            end = content.rfind("]")
-            if end >= 0:
-                content = content[: end + 1]
-            content = content.strip()
-            results = json.loads(content)
-            if isinstance(results, list):
-                for p in results:
-                    pt = p.get("text", "")
-                    if pt:
-                        offsets = _find_flexible_offsets(text, pt)
-                        if offsets:
-                            p["start"], p["end"] = offsets
-                return results
-            return []
-        except Exception as e:
-            return [{"text": text, "confidence": "HIGH", "reason": f"Scan error: {e}"}]
-    else:
-        prompt = f"""You are a skeptical fact-checker. Be aggressive — flag any statement that is even slightly inaccurate or misleading. Reply ONLY with one word: HIGH, MEDIUM, or LOW.
+            try:
+                resp = llm.invoke([HumanMessage(content=prompt)])
+                content = resp.content.strip()
+                idx = content.find("[")
+                if idx >= 0:
+                    content = content[idx:]
+                end = content.rfind("]")
+                if end >= 0:
+                    content = content[: end + 1]
+                content = content.strip()
+                results = json.loads(content)
+                if isinstance(results, list):
+                    for p in results:
+                        pt = p.get("text", "")
+                        if pt:
+                            offsets = _find_flexible_offsets(text, pt)
+                            if offsets:
+                                p["start"], p["end"] = offsets
+                    return results
+                return []
+            except Exception as e:
+                return [{"text": text, "confidence": "HIGH", "reason": f"Scan error: {e}"}]
+        else:
+            prompt = f"""Examine the text for factual errors. Reply ONLY with one word: HIGH, MEDIUM, or LOW.
 
 HIGH = every single statement is 100% factually correct, no exceptions
 MEDIUM = contains at least one questionable, imprecise, or unverifiable claim
@@ -521,15 +543,17 @@ LOW = contains at least one clearly wrong or hallucinated statement
 Text: {text}
 
 Your single-word answer (HIGH/MEDIUM/LOW):"""
-        try:
-            resp = llm.invoke([HumanMessage(content=prompt)])
-            content = resp.content.strip().upper()
-            word = content.split()[0] if content.split() else "HIGH"
-            if word not in ("HIGH", "MEDIUM", "LOW"):
-                word = "HIGH"
-            return [{"text": text, "confidence": word, "reason": f"Scan rated {word}"}]
-        except Exception as e:
-            return [{"text": text, "confidence": "HIGH", "reason": f"Scan error: {e}"}]
+            try:
+                resp = llm.invoke([HumanMessage(content=prompt)])
+                content = resp.content.strip().upper()
+                word = content.split()[0] if content.split() else "HIGH"
+                if word not in ("HIGH", "MEDIUM", "LOW"):
+                    word = "HIGH"
+                return [{"text": text, "confidence": word, "reason": f"Scan rated {word}"}]
+            except Exception as e:
+                return [{"text": text, "confidence": "HIGH", "reason": f"Scan error: {e}"}]
+    finally:
+        _unload_ollama_model(scan_model, upstream)
 
 
 # ── Layer 3: Deep confidence scan (Deep Agents harness) ──────────────────────
@@ -616,6 +640,7 @@ Be aggressive about LOW/incorrect — any claim without clear source support sho
         else:
             print(f"[{datetime.now().strftime('%H:%M:%S')}] [DEEP] WARNING: no JSON array found in response", flush=True)
             print(f"[{datetime.now().strftime('%H:%M:%S')}] [DEEP] Response preview: {content[:300]}", flush=True)
+            _unload_ollama_model(scan_model, upstream)
             return None
         end = content.rfind("]")
         if end >= 0:
@@ -627,20 +652,26 @@ Be aggressive about LOW/incorrect — any claim without clear source support sho
             for p in results:
                 factual = p.get("factual", p.get("confidence", "unknown"))
                 print(f"[{datetime.now().strftime('%H:%M:%S')}] [DEEP]   {factual}: {p.get('text', '')[:80]}", flush=True)
+            _unload_ollama_model(scan_model, upstream)
             return results
         print(f"[{datetime.now().strftime('%H:%M:%S')}] [DEEP] Result is not a list: {type(results)}", flush=True)
+        _unload_ollama_model(scan_model, upstream)
         return None
     except ImportError as e:
         print(f"[{datetime.now().strftime('%H:%M:%S')}] [DEEP] deepagents not available: {e}", flush=True)
+        _unload_ollama_model(scan_model, upstream)
         return [{"text": text, "factual": "uncertain", "reason": "Deep scan requires 'deepagents' package — pip install deepagents"}]
     except concurrent.futures.TimeoutError:
         print(f"[{datetime.now().strftime('%H:%M:%S')}] [DEEP] Timed out after 120s", flush=True)
+        _unload_ollama_model(scan_model, upstream)
         return [{"text": text, "factual": "uncertain", "reason": "Deep scan timed out"}]
     except Exception as e:
         print(f"[{datetime.now().strftime('%H:%M:%S')}] [DEEP] Error: {e}", flush=True)
         import traceback
         traceback.print_exc()
+        _unload_ollama_model(scan_model, upstream)
         return [{"text": text, "factual": "uncertain", "reason": f"Deep scan error: {e}"}]
+    _unload_ollama_model(scan_model, upstream)
     return None
 
 

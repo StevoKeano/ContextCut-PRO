@@ -2282,7 +2282,7 @@ function addSelfEvalWarning(sd, parent) {{
   parent.appendChild(w);
 }}
 
-async function runScan(text, assistantDiv, bubble) {{
+async function runScan(text, assistantDiv, bubble, signal) {{
   if (!scanMode || !assistantDiv || !text) return;
   let indicator = document.createElement('div');
   indicator.style.cssText = 'font-size:10px;color:var(--muted);padding:2px 6px;margin-top:2px';
@@ -2292,7 +2292,8 @@ async function runScan(text, assistantDiv, bubble) {{
     const sr = await fetch('/api/agent/confidence-scan', {{
       method: 'POST',
       headers: {{'Content-Type':'application/json'}},
-      body: JSON.stringify({{text, deep: deepMode}})
+      body: JSON.stringify({{text, deep: deepMode}}),
+      signal,
     }});
     indicator.remove();
     if (!sr.ok) return;
@@ -3036,6 +3037,29 @@ initSession();
 loadState();
 document.querySelector('.right')?.classList.add('fullscreen');
 
+function resetSendButton() {{
+  const sendBtn = document.getElementById('sendBtn');
+  if (!sendBtn) return;
+  sendBtn.disabled = false;
+  abortController = null;
+  sendBtn.textContent = 'Send \\u2191';
+  sendBtn.onclick = function() {{ sendMessage(); }};
+  document.getElementById('chatInput')?.focus();
+}}
+
+async function doScan(text, assistantDiv, bubble) {{
+  const sendBtn = document.getElementById('sendBtn');
+  const scanAbort = new AbortController();
+  sendBtn.textContent = '\\u25a0 Stop';
+  sendBtn.disabled = false;
+  sendBtn.onclick = function() {{ if (scanAbort) scanAbort.abort(); }};
+  try {{
+    await runScan(text, assistantDiv, bubble, scanAbort.signal);
+  }} finally {{
+    resetSendButton();
+  }}
+}}
+
 async function sendMessage(taskIdOverride) {{
   const input   = document.getElementById('chatInput');
   const sendBtn = document.getElementById('sendBtn');
@@ -3191,16 +3215,14 @@ async function sendMessage(taskIdOverride) {{
       }}
     }} finally {{
       clearTimeout(agentTimeout);
-      // Always reset the send button, regardless of how the try/catch exits
       if (fullText) {{
         conversationHistory.push({{role:'assistant', content:fullText}});
-        if (fullText) runScan(fullText, assistantDiv, bubble);
+        if (scanMode) {{
+          doScan(fullText, assistantDiv, bubble);
+          return;
+        }}
       }}
-      sendBtn.disabled = false;
-      abortController = null;
-      sendBtn.textContent = 'Send \\u2191';
-      sendBtn.onclick = function() {{ sendMessage(); }};
-      input.focus();
+      resetSendButton();
     }}
     return;
   }}
@@ -3278,19 +3300,17 @@ async function sendMessage(taskIdOverride) {{
       }}
     }} catch(e) {{}}
 
-    runScan(fullText, assistantDiv, bubble);
+    if (scanMode) {{
+      doScan(fullText, assistantDiv, bubble);
+      return;
+    }}
 
   }} catch(e) {{
     if (e.name === 'AbortError') return;
     removeTyping();
     appendMsg('assistant', '\u274c Network error: ' + e.message, '');
-  }} finally {{
-    sendBtn.disabled = false;
-    abortController = null;
-    sendBtn.textContent = 'Send \\u2191';
-    sendBtn.onclick = function() {{ sendMessage(); }};
-    input.focus();
   }}
+  resetSendButton();
 }}
 
 // ── Embed Settings Modal ─────────────────────────────────────────────────────
