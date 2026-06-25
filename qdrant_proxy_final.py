@@ -2328,7 +2328,7 @@ async function runScan(text, assistantDiv, bubble) {{
         highlighted = before + '<span class=\\"suspect\\" title=\\"' + title + '\\">' + icon + esc(match) + '</span>' + after;
       }}
     }}
-    if (bubble) bubble.innerHTML = linkCitations(esc(highlighted));
+    if (bubble) bubble.innerHTML = linkCitations(highlighted);
     const summary = document.createElement('div');
     summary.style.cssText = 'font-size:10px;color:var(--muted);padding:2px 6px;border-top:1px solid var(--border);margin-top:4px';
     let parts = [];

@@ -426,6 +426,32 @@ def _check_tool_usage(user_message: str, called_tools: set) -> tuple[bool, str]:
 _SCAN_MODEL = os.environ.get("CONTEXTCUT_SCAN_MODEL", "").strip()
 
 
+def _find_flexible_offsets(text: str, passage: str) -> tuple[int, int] | None:
+    """Find ``passage`` in original ``text``, tolerating Markdown & whitespace.
+
+    Splits the passage into words, builds a regex that allows optional
+    inline Markdown characters (``**``, ``__``, ``*``) and flexible
+    whitespace between words.  Returns ``(start, end)`` character offsets
+    in the original ``text``, or ``None``.
+    """
+    import re
+    words = passage.split()
+    if not words:
+        return None
+    # Allow bold/italic markers and flexible whitespace between words
+    gap = r'\s*[\*_]*\s*'
+    pattern = gap.join(re.escape(w) for w in words)
+    m = re.search(pattern, text)
+    if m:
+        return (m.start(), m.end())
+    # Fallback: stripped exact match
+    stripped = passage.strip()
+    idx = text.find(stripped)
+    if idx >= 0:
+        return (idx, idx + len(stripped))
+    return None
+
+
 def _confidence_scan(
     text: str, upstream: str = None, api_key: str = None,
     detailed: bool = False, model: str = None, deep: bool = False
@@ -436,19 +462,24 @@ def _confidence_scan(
         )
     if not upstream or not text or len(text.strip()) < (10 if detailed else 80):
         return None
-    if detailed:
-        scan_model = model or os.environ.get("CONTEXTCUT_MODEL", "").strip() or "qwen3:14b-q8_0"
-    else:
-        scan_model = (_SCAN_MODEL or os.environ.get("CONTEXTCUT_SCAN_MODEL") or
-                      os.environ.get("CONTEXTCUT_MODEL") or "qwen3:14b-q8_0")
+    scan_model = (_SCAN_MODEL or model or
+                  os.environ.get("CONTEXTCUT_SCAN_MODEL") or
+                  os.environ.get("CONTEXTCUT_MODEL") or "qwen3:14b-q8_0")
     llm = ChatOpenAI(
         model=scan_model,
         openai_api_base=upstream + "/v1",
         openai_api_key=api_key or "not-needed",
         temperature=0.0,
+        extra_body={"keep_alive": 0},
     )
     if detailed:
-        prompt = f"""Check the text below for factual errors. For any passage that contains an error, return it with factual="incorrect". For correct passages, factual="correct". For uncertain ones, factual="uncertain".
+        prompt = f"""You are a skeptical fact-checker. Be CRITICAL and AGGRESSIVE — do NOT trust the text.
+Flag any passage that is incorrect, misleading, imprecise, or unverifiable.
+
+For each passage, respond:
+- factual="incorrect" if the passage contains ANY error, even a small one
+- factual="uncertain" if you cannot verify the claim
+- factual="correct" only if you are 100% certain every detail is accurate
 
 Return ONLY a JSON array. Each object: "text", "factual" ("correct"/"incorrect"/"uncertain"), "reason".
 
@@ -470,22 +501,18 @@ Text:
             content = content.strip()
             results = json.loads(content)
             if isinstance(results, list):
-                # Find exact character offsets in original text for each passage
                 for p in results:
                     pt = p.get("text", "")
                     if pt:
-                        for candidate in (pt, pt.strip(), pt.strip().rstrip('.,!?;:')):
-                            idx = text.find(candidate)
-                            if idx >= 0:
-                                p["start"] = idx
-                                p["end"] = idx + len(candidate)
-                                break
+                        offsets = _find_flexible_offsets(text, pt)
+                        if offsets:
+                            p["start"], p["end"] = offsets
                 return results
             return []
         except Exception as e:
             return [{"text": text, "confidence": "HIGH", "reason": f"Scan error: {e}"}]
     else:
-        prompt = f"""Does the following text contain ANY factual errors or hallucinations? Be aggressive — flag any statement that is even slightly inaccurate or misleading. Reply ONLY with one word: HIGH, MEDIUM, or LOW.
+        prompt = f"""You are a skeptical fact-checker. Be aggressive — flag any statement that is even slightly inaccurate or misleading. Reply ONLY with one word: HIGH, MEDIUM, or LOW.
 
 HIGH = every single statement is 100% factually correct, no exceptions
 MEDIUM = contains at least one questionable, imprecise, or unverifiable claim
@@ -531,6 +558,7 @@ def _deep_confidence_scan(
             openai_api_base=upstream + "/v1",
             openai_api_key=api_key or "not-needed",
             temperature=0.0,
+            extra_body={"keep_alive": 0},
         )
 
         @tool
