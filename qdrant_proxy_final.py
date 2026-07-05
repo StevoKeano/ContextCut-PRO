@@ -2561,9 +2561,9 @@ async function runScan(text, assistantDiv, bubble, signal) {{
         const icon = p.factual === 'incorrect' ? '\\u26a0\\ufe0f ' : '\\u26a1 ';
         const title = esc('factual=' + p.factual + ': ' + (p.reason || ''));
         let link = '';
-        if (p.source_url && p.source_url !== 'unverifiable' && p.source_url.startsWith('http')) {
+        if (p.source_url && p.source_url !== 'unverifiable' && p.source_url.startsWith('http')) {{
           link = ' <a href="' + esc(p.source_url) + '" target="_blank" rel="noopener" style="font-size:9px;color:#3b82f6;text-decoration:underline;white-space:nowrap">source</a>';
-        }
+        }}
         highlighted = before + '<span class=\\"suspect\\" title=\\"' + title + '\\">' + icon + esc(match) + '</span>' + link + after;
       }}
     }}
@@ -2622,9 +2622,9 @@ async function testScan() {{
           const icon = p.factual === 'incorrect' ? '\\u26a0\\ufe0f ' : '\\u26a1 ';
           const title = esc('factual=' + p.factual + ': ' + (p.reason || ''));
           let link = '';
-          if (p.source_url && p.source_url !== 'unverifiable' && p.source_url.startsWith('http')) {
+          if (p.source_url && p.source_url !== 'unverifiable' && p.source_url.startsWith('http')) {{
             link = ' <a href="' + esc(p.source_url) + '" target="_blank" rel="noopener" style="font-size:9px;color:#3b82f6;text-decoration:underline;white-space:nowrap">source</a>';
-          }
+          }}
           highlighted = before + '<span class=\\"suspect\\" title=\\"' + title + '\\">' + icon + esc(match) + '</span>' + link + after;
         }}
       }}
