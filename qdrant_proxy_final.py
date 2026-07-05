@@ -1,5 +1,7 @@
 #!/usr/bin/env python3
 # Version: fbe5ec4 — grep for this to verify you're on the latest commit
+import warnings
+warnings.filterwarnings('ignore', category=SyntaxWarning)
 """
 ContextCut-PRO — Qdrant-enriching reverse proxy for any local LLM endpoint.
 
