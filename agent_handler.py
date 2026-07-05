@@ -752,6 +752,17 @@ Return ONLY the JSON array, nothing else."""
             _unload_ollama_model(scan_model, upstream)
             return None
         if isinstance(results, list):
+            # Post-process source_url: force real URLs or "unverifiable"
+            for p in results:
+                su = p.get("source_url", "")
+                if su and su != "unverifiable" and not su.startswith("http"):
+                    # Try to find a URL in the reason field
+                    reason = p.get("reason", "")
+                    found = re.search(r'https?://\S+', reason)
+                    if found:
+                        p["source_url"] = found.group(0)
+                    else:
+                        p["source_url"] = "unverifiable"
             print(f"[{datetime.now().strftime('%H:%M:%S')}] [DEEP] Scan complete: {len(results)} passages", flush=True)
             for p in results:
                 factual = p.get("factual", p.get("confidence", "unknown"))
