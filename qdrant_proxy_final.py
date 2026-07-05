@@ -2571,7 +2571,7 @@ async function runScan(text, assistantDiv, bubble, signal) {{
         if (p.source_url && p.source_url !== 'unverifiable') {{
           const label = esc(p.source_url);
           if (p.source_url.startsWith('http')) {{
-            suffix = ' <a href="' + label + '" target="_blank" rel="noopener" style="font-size:9px;color:#3b82f6;text-decoration:underline">source</a>';
+            suffix = ' <a href="' + label + '" target="_blank" rel="noopener" style="font-size:9px;text-decoration:none" title="' + label + '">🔗</a>';
           }} else {{
             suffix = ' <span style="font-size:9px;color:var(--muted);font-style:italic">' + label + '</span>';
           }}
@@ -2586,7 +2586,7 @@ async function runScan(text, assistantDiv, bubble, signal) {{
         }}
       }}
     }}
-    if (bubble) bubble.innerHTML = linkCitations(highlighted);
+    if (bubble) bubble.innerHTML = stripDeadKnowledgeLinks(linkCitations(highlighted));
     const summary = document.createElement('div');
     summary.style.cssText = 'font-size:10px;color:var(--muted);padding:2px 6px;border-top:1px solid var(--border);margin-top:4px';
     let parts = [];
@@ -3117,16 +3117,30 @@ function setSendStop() {{
 function linkCitations(text) {{
   return text
     .replace(/(\\b)([\\w\\-.]+\\.(?:md|pdf|docx|xlsx|txt))(\\b)/g,
-      '<a href="/knowledge/$2" target="_blank" style="color:var(--accent);text-decoration:underline">$2</a>')
+      '<a href="/knowledge/$2" target="_blank" style="text-decoration:none" title="$2">🔗</a>')
     .replace(/\\[([\\w\\-.]+\\.(?:md|pdf|docx|xlsx|txt))\\]/g,
-      '<a href="/knowledge/$1" target="_blank" style="color:var(--accent);text-decoration:underline">$1</a>');
+      '<a href="/knowledge/$1" target="_blank" style="text-decoration:none" title="$1">🔗</a>');
+}}
+
+let _kbFiles = null;
+function stripDeadKnowledgeLinks(html) {{
+  if (_kbFiles === null) {{
+    _kbFiles = fetch('/api/knowledge/files')
+      .then(r => r.json())
+      .then(data => {{ _kbFiles = new Set(data.files.map(f => f.name)); return _kbFiles; }})
+      .catch(() => {{ _kbFiles = new Set(); return _kbFiles; }});
+    return html;
+  }}
+  if (_kbFiles instanceof Promise) return html;
+  return html.replace(/<a\s+href="\/knowledge\/([^"]+)"[^>]*>🔗<\/a>/g, (m, fname) =>
+    _kbFiles.has(fname) ? m : '');
 }}
 
 function appendMsg(role, text, statHtml) {{
   const box = document.getElementById('messages');
   const div = document.createElement('div');
   div.className = 'msg ' + role;
-  const display = role === 'assistant' ? linkCitations(esc(text)) : esc(text);
+  const display = role === 'assistant' ? stripDeadKnowledgeLinks(linkCitations(esc(text))) : esc(text);
   div.innerHTML =
     `<div class="bubble">${{display}}</div>` +
     (statHtml ? `<div class="msg-meta"><div class="msg-stat">${{statHtml}}</div></div>` : '');
@@ -3315,6 +3329,8 @@ pollGpu();
 fetchModels();
 initSession();
 loadState();
+// Pre-warm knowledge file cache
+fetch('/api/knowledge/files').then(r=>r.json()).then(d=>{{ _kbFiles = new Set(d.files.map(f=>f.name)); }}).catch(()=>{{}});
 document.querySelector('.right')?.classList.add('fullscreen');
 
 function resetSendButton() {{
@@ -3442,7 +3458,7 @@ async function sendMessage(taskIdOverride) {{
               if (data.token) {{
                 fullText += data.token;
                 ensureBubble();
-                bubble.innerHTML = linkCitations(esc(fullText));
+                bubble.innerHTML = stripDeadKnowledgeLinks(linkCitations(esc(fullText)));
               }} else if (data.name && data.input && !data.result) {{
                 const td = getToolDiv();
                 const div = document.createElement('div');
@@ -3484,7 +3500,7 @@ async function sendMessage(taskIdOverride) {{
               }} else if (data.response) {{
                 fullText = data.response;
                 ensureBubble();
-                bubble.innerHTML = linkCitations(esc(fullText));
+                bubble.innerHTML = stripDeadKnowledgeLinks(linkCitations(esc(fullText)));
               }} else if (data.error) {{
                 ensureBubble();
                 bubble.innerHTML = '\u274c Agent error: ' + esc(data.error);
@@ -3551,7 +3567,7 @@ async function sendMessage(taskIdOverride) {{
           if (!token) continue;
           fullText += token;
           ensureBubble();
-          bubble.innerHTML = linkCitations(esc(fullText));
+          bubble.innerHTML = stripDeadKnowledgeLinks(linkCitations(esc(fullText)));
         }} catch(e) {{}}
       }}
     }}
@@ -3856,7 +3872,7 @@ async function recallSession(sid) {{
     conversationHistory = s.history.map(m => ({{role: m.role, content: m.content}}));
     const msgs = document.getElementById('messages');
     if (msgs) {{
-      msgs.innerHTML = s.history.map(m => '<div class="msg ' + m.role + '"><div class="bubble">' + (m.role === 'assistant' ? linkCitations(esc(m.content)) : esc(m.content)) + '</div></div>').join('');
+      msgs.innerHTML = s.history.map(m => '<div class="msg ' + m.role + '"><div class="bubble">' + (m.role === 'assistant' ? stripDeadKnowledgeLinks(linkCitations(esc(m.content))) : esc(m.content)) + '</div></div>').join('');
       msgs.querySelector('.bubble:last-of-type')?.scrollIntoView({{behavior:'instant', block:'end'}});
     }}
     document.querySelectorAll('[style*="z-index:1000"]').forEach(el => el.remove());
