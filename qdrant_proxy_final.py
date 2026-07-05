@@ -2539,21 +2539,6 @@ async function runScan(text, assistantDiv, bubble, signal) {{
       addSelfEvalWarning(sd, assistantDiv);
       return;
     }}
-    // Build source URL map from all passages (top-to-bottom order)
-    const srcOrder = [];
-    const srcSeen = new Set();
-    const sortedByPos = [...sd.passages].filter(p => p.start != null).sort((a,b) => a.start - b.start);
-    for (const p of sortedByPos) {{
-      if (p.source_url && p.source_url !== 'unverifiable' && !srcSeen.has(p.source_url)) {{
-        srcSeen.add(p.source_url);
-        srcOrder.push(p.source_url);
-      }}
-    }}
-    const srcNum = (url) => {{
-      const idx = srcOrder.indexOf(url);
-      return idx >= 0 ? idx + 1 : null;
-    }};
-
     let highlighted = text;
     let flags = {{incorrect:0, uncertain:0, correct:0}};
     let flagged = [];
@@ -2575,34 +2560,19 @@ async function runScan(text, assistantDiv, bubble, signal) {{
         const after = highlighted.slice(p.end);
         const icon = p.factual === 'incorrect' ? '\\u26a0\\ufe0f ' : '\\u26a1 ';
         const title = esc('factual=' + p.factual + ': ' + (p.reason || ''));
-        let num = p.source_url && p.source_url !== 'unverifiable' ? srcNum(p.source_url) : null;
         let suffix = '';
-        if (num !== null) {{
+        if (p.source_url && p.source_url !== 'unverifiable') {{
           const label = esc(p.source_url);
           if (p.source_url.startsWith('http')) {{
-            suffix = '<sup><a href="' + label + '" target="_blank" rel="noopener" style="color:#3b82f6;text-decoration:none;cursor:pointer">[' + num + ']</a></sup>';
+            suffix = ' <a href="' + label + '" target="_blank" rel="noopener" style="font-size:9px;color:#3b82f6;text-decoration:underline">source</a>';
           }} else {{
-            suffix = '<sup style="color:var(--muted);font-style:italic;cursor:help" title="' + label + '">[' + num + ']</sup>';
+            suffix = ' <span style="font-size:9px;color:var(--muted);font-style:italic">' + label + '</span>';
           }}
         }}
         highlighted = before + '<span class=\\"suspect\\" title=\\"' + title + '\\">' + icon + esc(match) + '</span>' + suffix + after;
       }}
     }}
     if (bubble) bubble.innerHTML = linkCitations(highlighted);
-    // Source legend
-    if (srcOrder.length > 0) {{
-      const legend = document.createElement('div');
-      legend.style.cssText = 'font-size:9px;color:var(--muted);padding:3px 6px;border-top:1px solid var(--border);margin-top:2px;line-height:1.6';
-      legend.innerHTML = srcOrder.map((url, i) => {{
-        const n = i + 1;
-        if (url.startsWith('http')) {{
-          return '<span style="margin-right:6px">[' + n + '] <a href="' + esc(url) + '" target="_blank" rel="noopener" style="color:#3b82f6;text-decoration:underline">' + esc(url) + '</a></span>';
-        }} else {{
-          return '<span style="margin-right:6px">[' + n + '] <span style="font-style:italic">' + esc(url) + '</span></span>';
-        }}
-      }}).join('');
-      assistantDiv.appendChild(legend);
-    }}
     const summary = document.createElement('div');
     summary.style.cssText = 'font-size:10px;color:var(--muted);padding:2px 6px;border-top:1px solid var(--border);margin-top:4px';
     let parts = [];
