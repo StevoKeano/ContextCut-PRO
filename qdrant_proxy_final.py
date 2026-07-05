@@ -1368,6 +1368,9 @@ class ProxyHandler(_SuppressBrokenPipe, BaseHTTPRequestHandler):
                 tok_before = count_body_tokens(body)
                 if query:
                     ctx, hits_meta = qdrant_context(query)
+                    session = _sessions.get(session_id)
+                    if session:
+                        session["_kb_context"] = ctx
                     body = inject_context(body, ctx)
                     tok_after = count_body_tokens(body)
                     if tok_after > CTX_LIMIT:
@@ -2530,7 +2533,7 @@ async function runScan(text, assistantDiv, bubble, signal) {{
     const sr = await fetch('/api/agent/confidence-scan', {{
       method: 'POST',
       headers: {{'Content-Type':'application/json'}},
-      body: JSON.stringify({{text, deep: deepMode, query: conversationHistory.length > 1 ? conversationHistory[conversationHistory.length - 2].content : ''}}),
+      body: JSON.stringify({{text, deep: deepMode, session_id: sessionId, query: conversationHistory.length > 1 ? conversationHistory[conversationHistory.length - 2].content : ''}}),
       signal,
     }});
     indicator.remove();
@@ -5590,6 +5593,12 @@ class DashboardHandler(_SuppressBrokenPipe, BaseHTTPRequestHandler):
                     return
                 deep = body.get("deep", False)
                 query = body.get("query", "")
+                sid = body.get("session_id", "")
+                kb_context = ""
+                if sid and sid in _sessions:
+                    kb_context = _sessions[sid].get("_kb_context", "")
+                    if kb_context:
+                        print(f"[{datetime.now().strftime('%H:%M:%S')}] [Scan] Using saved KB context ({len(kb_context)} chars)", flush=True)
                 from agent_handler import _confidence_scan, _SCAN_MODEL
 
                 print(f"[{datetime.now().strftime('%H:%M:%S')}] [Agent] 🔍 Confidence scan (model={_SCAN_MODEL!r}, deep={deep})", flush=True)
@@ -5601,6 +5610,7 @@ class DashboardHandler(_SuppressBrokenPipe, BaseHTTPRequestHandler):
                     model=None if deep else DEFAULT_MODEL,
                     deep=deep,
                     query=query,
+                    kb_context=kb_context,
                 )
                 body_resp = json.dumps({
                     "passages": result,
@@ -5970,15 +5980,17 @@ class DashboardHandler(_SuppressBrokenPipe, BaseHTTPRequestHandler):
                     if scan and loop_retries > 0 and full_output and len(full_output) > 80 and not deep:
                         try:
                             from agent_handler import _confidence_scan
+                            _kb_ctx = _sessions.get(sid, {}).get("_kb_context", "")
                             loop = asyncio.get_event_loop()
                             scan_result = await loop.run_in_executor(
                                 None,
-                                lambda: _confidence_scan(
+                                lambda ctx=_kb_ctx: _confidence_scan(
                                     full_output,
                                     upstream=get_current_upstream(),
                                     api_key=get_current_api_key(),
                                     detailed=True,
                                     deep=deep,
+                                    kb_context=ctx,
                                 ),
                             )
                             if scan_result is None:
@@ -6015,12 +6027,13 @@ class DashboardHandler(_SuppressBrokenPipe, BaseHTTPRequestHandler):
                                 if full_output and full_output != prev_output and len(full_output) > 80:
                                     scan_result = await loop.run_in_executor(
                                         None,
-                                        lambda: _confidence_scan(
+                                        lambda ctx=_kb_ctx: _confidence_scan(
                                             full_output,
                                             upstream=get_current_upstream(),
                                             api_key=get_current_api_key(),
                                             detailed=True,
                                             deep=deep,
+                                            kb_context=ctx,
                                         ),
                                     )
                                     flagged = [

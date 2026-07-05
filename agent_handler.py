@@ -485,12 +485,12 @@ def _unload_ollama_model(model_name: str, upstream: str) -> None:
 def _confidence_scan(
     text: str, upstream: str = None, api_key: str = None,
     detailed: bool = False, model: str = None, deep: bool = False,
-    query: str = "",
+    query: str = "", kb_context: str = "",
 ) -> list[dict] | None:
     if deep:
         try:
             return _deep_confidence_scan(
-                text, upstream=upstream, api_key=api_key, model=model, query=query
+                text, upstream=upstream, api_key=api_key, model=model, query=query, kb_context=kb_context
             )
         except Exception as _deep_err:
             msg = str(_deep_err)
@@ -580,7 +580,7 @@ Your single-word answer (HIGH/MEDIUM/LOW):"""
 
 def _deep_confidence_scan(
     text: str, upstream: str = None, api_key: str = None,
-    model: str = None, query: str = ""
+    model: str = None, query: str = "", kb_context: str = ""
 ) -> list[dict] | None:
     """Deep scan: extract claims from text, verify each via KB + web search, return JSON array."""
     if not upstream or not text or len(text.strip()) < 80:
@@ -679,9 +679,13 @@ def _deep_confidence_scan(
         return "\n\n".join(result_parts)
 
     try:
-        print(f"[{datetime.now().strftime('%H:%M:%S')}] [DEEP] Pre-fetching context...", flush=True)
-        context_info = _prefetch_context(text)
-        print(f"[{datetime.now().strftime('%H:%M:%S')}] [DEEP] Context length: {len(context_info)} chars", flush=True)
+        if kb_context:
+            context_info = f"=== KNOWLEDGE BASE (from original query) ===\n{kb_context}"
+            print(f"[{datetime.now().strftime('%H:%M:%S')}] [DEEP] Using saved KB context ({len(context_info)} chars)", flush=True)
+        else:
+            print(f"[{datetime.now().strftime('%H:%M:%S')}] [DEEP] Pre-fetching context...", flush=True)
+            context_info = _prefetch_context(text)
+            print(f"[{datetime.now().strftime('%H:%M:%S')}] [DEEP] Context length: {len(context_info)} chars", flush=True)
 
         llm = ChatOpenAI(
             model=scan_model,
