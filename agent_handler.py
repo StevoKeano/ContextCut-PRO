@@ -484,12 +484,13 @@ def _unload_ollama_model(model_name: str, upstream: str) -> None:
 
 def _confidence_scan(
     text: str, upstream: str = None, api_key: str = None,
-    detailed: bool = False, model: str = None, deep: bool = False
+    detailed: bool = False, model: str = None, deep: bool = False,
+    query: str = "",
 ) -> list[dict] | None:
     if deep:
         try:
             return _deep_confidence_scan(
-                text, upstream=upstream, api_key=api_key, model=model
+                text, upstream=upstream, api_key=api_key, model=model, query=query
             )
         except Exception as _deep_err:
             msg = str(_deep_err)
@@ -579,7 +580,7 @@ Your single-word answer (HIGH/MEDIUM/LOW):"""
 
 def _deep_confidence_scan(
     text: str, upstream: str = None, api_key: str = None,
-    model: str = None
+    model: str = None, query: str = ""
 ) -> list[dict] | None:
     """Deep scan: extract claims from text, verify each via KB + web search, return JSON array."""
     if not upstream or not text or len(text.strip()) < 80:
@@ -615,6 +616,12 @@ def _deep_confidence_scan(
             except Exception:
                 pass
             return None, []
+
+        if query:
+            ctx, urls = _search_kb(query)
+            if ctx:
+                kb_parts.insert(0, f"[Original query: {query[:120]}]\n{ctx}")
+                seen_urls.update(urls)
 
         for chunk in chunks:
             ctx, urls = _search_kb(chunk)

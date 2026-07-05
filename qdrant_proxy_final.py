@@ -2530,7 +2530,7 @@ async function runScan(text, assistantDiv, bubble, signal) {{
     const sr = await fetch('/api/agent/confidence-scan', {{
       method: 'POST',
       headers: {{'Content-Type':'application/json'}},
-      body: JSON.stringify({{text, deep: deepMode}}),
+      body: JSON.stringify({{text, deep: deepMode, query: conversationHistory.length > 1 ? conversationHistory[conversationHistory.length - 2].content : ''}}),
       signal,
     }});
     indicator.remove();
@@ -5589,6 +5589,7 @@ class DashboardHandler(_SuppressBrokenPipe, BaseHTTPRequestHandler):
                     self.wfile.write(resp)
                     return
                 deep = body.get("deep", False)
+                query = body.get("query", "")
                 from agent_handler import _confidence_scan, _SCAN_MODEL
 
                 print(f"[{datetime.now().strftime('%H:%M:%S')}] [Agent] 🔍 Confidence scan (model={_SCAN_MODEL!r}, deep={deep})", flush=True)
@@ -5599,6 +5600,7 @@ class DashboardHandler(_SuppressBrokenPipe, BaseHTTPRequestHandler):
                     detailed=True,
                     model=None if deep else DEFAULT_MODEL,
                     deep=deep,
+                    query=query,
                 )
                 body_resp = json.dumps({
                     "passages": result,
