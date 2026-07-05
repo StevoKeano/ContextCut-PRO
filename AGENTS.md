@@ -1,5 +1,10 @@
 # Agent Instructions
 
+## Workflow
+- Edit files in `~/dev/ContextCut-PRO/` (workspace, git repo)
+- After editing, `cp` changed files to `~/contextcut/` (deployed directory)
+- Do NOT edit `~/contextcut/` files directly — edit workspace, then copy
+
 ## Restart Policy
 - After making code changes, ASK the user to restart the proxy.
 - Do NOT kill or restart the proxy automatically.
