@@ -581,7 +581,7 @@ def _deep_confidence_scan(
     text: str, upstream: str = None, api_key: str = None,
     model: str = None
 ) -> list[dict] | None:
-    """Deep scan using LangChain Deep Agents harness with sub-agent verification."""
+    """Deep scan: extract claims from text, verify each via KB + web search, return JSON array."""
     if not upstream or not text or len(text.strip()) < 80:
         return None
     scan_model = (model or _SCAN_MODEL or os.environ.get("CONTEXTCUT_SCAN_MODEL") or
@@ -590,10 +590,89 @@ def _deep_confidence_scan(
     print(f"[{datetime.now().strftime('%H:%M:%S')}] [DEEP] Starting deep scan (model={scan_model!r})", flush=True)
     print(f"[{datetime.now().strftime('%H:%M:%S')}] [DEEP] Text length: {len(text)} chars", flush=True)
 
-    try:
-        from langgraph.prebuilt import create_react_agent
+    TIMEOUT = 300
 
-        print(f"[{datetime.now().strftime('%H:%M:%S')}] [DEEP] langgraph loaded", flush=True)
+    def _prefetch_context(text: str) -> str:
+        """Split text into claim-level chunks, search KB per chunk, fall back to topic-level web search."""
+        # Split into sentence-like chunks (non-empty, trimmed)
+        raw_chunks = re.split(r'(?<=[.?!])\s+', text)
+        chunks = [c.strip() for c in raw_chunks if len(c.strip()) > 15]
+
+        kb_parts = []
+        seen_urls = set()
+        kb_empty = 0
+
+        def _search_kb(q: str) -> tuple[str | None, list[str]]:
+            try:
+                ctx_str, meta = qdrant_context(q, min_score=0.25)
+                if meta:
+                    urls = []
+                    for m in meta:
+                        src = m.get("source", m.get("url", ""))
+                        if src:
+                            urls.append(src)
+                    return ctx_str[:1500], urls
+            except Exception:
+                pass
+            return None, []
+
+        for chunk in chunks:
+            ctx, urls = _search_kb(chunk)
+            if ctx:
+                kb_parts.append(f"Chunk: {chunk[:120]}\n{ctx}")
+                seen_urls.update(urls)
+            else:
+                kb_empty += 1
+
+        # If KB returned little, search the full text on the web (broader queries)
+        total_kb = sum(len(p) for p in kb_parts)
+        ws_parts = []
+
+        if total_kb < 200 or kb_empty > len(chunks) // 2:
+            # Extract key named entities / topics for better web search
+            entities = re.findall(r"([A-Z][a-z]+(?:\s+[A-Z][a-z]+)*(?:\s+et al\.?)?(?:\s+\(\d{4}\))?)", text)
+            # Also find hyphenated entities like "Stochastic-Quantum"
+            entities += re.findall(r"([A-Z][a-z]+-[A-Z][a-z]+(?:\s+[A-Z][a-z]+(?:-[A-Z][a-z]+)?)*)", text)
+            topics = set()
+            for e in entities:
+                words = e.strip().split()
+                if len(words) >= 2 and len(e.strip()) > 10:
+                    topics.add(e.strip())
+            # Also add the full text as a search query (trimmed)
+            full_query = text[:500].strip()
+
+            search_queries = [full_query] + list(topics)
+            for q in search_queries:
+                if len(q) < 20:
+                    continue
+                try:
+                    print(f"[{datetime.now().strftime('%H:%M:%S')}] [DEEP] Web searching: {q[:80]!r}", flush=True)
+                    result = web_search.invoke({"query": q})
+                    print(f"[{datetime.now().strftime('%H:%M:%S')}] [DEEP] Web result ({len(result)} chars): {result[:200]!r}", flush=True)
+                    if result and not result.startswith("web_search error") and result != "No results found.":
+                        urls = re.findall(r'https?://[^\s\n]+', result)
+                        ws_parts.append(f"Query: {q[:80]}\n{result[:1500]}")
+                        seen_urls.update(urls)
+                except Exception as exc:
+                    print(f"[{datetime.now().strftime('%H:%M:%S')}] [DEEP] Web search exception: {exc}", flush=True)
+                    pass
+
+        result_parts = []
+        if kb_parts:
+            result_parts.append("=== KNOWLEDGE BASE ===")
+            result_parts.append("\n\n".join(kb_parts))
+        if ws_parts:
+            result_parts.append("=== WEB SEARCH ===")
+            result_parts.append("\n\n".join(ws_parts))
+        if not result_parts:
+            return "No relevant context found."
+
+        return "\n\n".join(result_parts)
+
+    try:
+        print(f"[{datetime.now().strftime('%H:%M:%S')}] [DEEP] Pre-fetching context...", flush=True)
+        context_info = _prefetch_context(text)
+        print(f"[{datetime.now().strftime('%H:%M:%S')}] [DEEP] Context length: {len(context_info)} chars", flush=True)
 
         llm = ChatOpenAI(
             model=scan_model,
@@ -603,94 +682,71 @@ def _deep_confidence_scan(
             extra_body={"keep_alive": 0},
         )
 
-        _kb_cache = {}
-        _kb_call_count = 0
-        _KB_MAX_CALLS = 8
-
-        @tool
-        def search_knowledge_base(query: str) -> str:
-            """Search the knowledge base for factual evidence to verify claims."""
-            nonlocal _kb_call_count
-            _kb_call_count += 1
-            if _kb_call_count > _KB_MAX_CALLS:
-                return "[Knowledge base: max searches reached. Use web search instead.]"
-            key = query.strip().lower()
-            if key in _kb_cache:
-                return _kb_cache[key]
-            try:
-                ctx_str, meta = qdrant_context(query, min_score=0.25)
-                if not meta:
-                    msg = "No relevant documents found in knowledge base."
-                    _kb_cache[key] = msg
-                    return msg
-                _kb_cache[key] = ctx_str
-                return ctx_str
-            except Exception as e:
-                msg = f"Knowledge base search error: {e}"
-                _kb_cache[key] = msg
-                return msg
-
-        print(f"[{datetime.now().strftime('%H:%M:%S')}] [DEEP] Creating verifier agent...", flush=True)
-        verifier = create_react_agent(
-            llm,
-            tools=[search_knowledge_base, web_search],
-            state_modifier="""You are a precise factual verifier. Your task:
-
-1. Parse the user's text into individual factual claims
-2. For each claim, search the knowledge base for supporting or contradicting evidence
-3. If the knowledge base has no relevant results, use web_search to find evidence online
-4. Return ONLY a valid JSON array (no other text or markdown)
-
-CRITICAL: The "text" field MUST be an EXACT VERBATIM substring of the user's original text.
-Copy it character-for-character including any Markdown formatting.
-Do NOT paraphrase, rephrase, summarize, or edit the text in any way.
+        prompt = f"""You are a precise factual verifier. Analyze the user's text and the context provided below, then return ONLY a valid JSON array (no markdown, no other text).
 
 Each object in the array:
-- "text": EXACT verbatim substring from the user's text (copy exactly, do not change)
-- "factual": one of "correct", "incorrect", or "uncertain"
-- "reason": what the knowledge base or web search says and whether it supports or contradicts
-- "source_url": the title/URL of the source document, or "unverifiable"
+- "text": EXACT VERBATIM substring from the user's text (copy character-for-character, do not paraphrase)
+- "factual": "correct", "incorrect", or "uncertain"
+- "reason": what the context says and whether it supports or contradicts
+- "source_url": the title/URL of the source, or "unverifiable"
 
-Strategy:
-- SEARCH KNOWLEDGE BASE first for each claim
-- If the knowledge base has no relevant results, use web_search to find evidence
-- Use "correct" only for claims clearly supported by evidence
-- Use "incorrect" for claims clearly contradicted by evidence
-- Use "uncertain" only when neither source has relevant information to verify""",
-        )
-        print(f"[{datetime.now().strftime('%H:%M:%S')}] [DEEP] Verifier agent created, invoking...", flush=True)
+Use "correct" for claims clearly supported by context.
+Use "incorrect" for claims clearly contradicted by context.
+Use "uncertain" only when neither knowledge base nor web search has relevant information.
 
-        TIMEOUT = 300
+CONTEXT:
+{context_info}
 
-        def _run_verifier():
+USER TEXT:
+{text}
+
+Return ONLY the JSON array, nothing else."""
+
+        print(f"[{datetime.now().strftime('%H:%M:%S')}] [DEEP] Invoking LLM (one-shot, no tool loop)...", flush=True)
+
+        def _call_llm():
             try:
-                return verifier.invoke(
-                    {"messages": [HumanMessage(content=f"Verify this text and return a JSON array:\n\n{text}")]},
-                    {"recursion_limit": 15}
-                )
+                resp = llm.invoke([HumanMessage(content=prompt)])
+                return resp.content if hasattr(resp, "content") else str(resp)
             except Exception as e:
-                return {"messages": [AIMessage(content=f'[verifier error: {e}]')]}
+                return f"[LLM error: {e}]"
 
-        fut = _DEEP_POOL.submit(_run_verifier)
-        result = fut.result(timeout=TIMEOUT)
+        fut = _DEEP_POOL.submit(_call_llm)
+        content = fut.result(timeout=TIMEOUT)
 
-        final_msgs = result.get("messages", [])
-        content = final_msgs[-1].content if final_msgs else ""
-        print(f"[{datetime.now().strftime('%H:%M:%S')}] [DEEP] Verifier response length: {len(content)} chars", flush=True)
+        print(f"[{datetime.now().strftime('%H:%M:%S')}] [DEEP] Response length: {len(content)} chars", flush=True)
+        print(f"[{datetime.now().strftime('%H:%M:%S')}] [DEEP] Raw response: {content[:500]!r}", flush=True)
+
+        # Strip markdown code fences if present
+        content = content.strip()
+        if content.startswith("```json"):
+            content = content[7:]
+        elif content.startswith("```"):
+            content = content[3:]
+        content = content.strip()
+        if content.endswith("```"):
+            content = content[:-3]
+        content = content.strip()
 
         idx = content.find("[")
         if idx >= 0:
             content = content[idx:]
         else:
-            print(f"[{datetime.now().strftime('%H:%M:%S')}] [DEEP] WARNING: no JSON array found in response", flush=True)
-            print(f"[{datetime.now().strftime('%H:%M:%S')}] [DEEP] Response preview: {content[:300]}", flush=True)
+            print(f"[{datetime.now().strftime('%H:%M:%S')}] [DEEP] WARNING: no JSON array found", flush=True)
+            print(f"[{datetime.now().strftime('%H:%M:%S')}] [DEEP] Response preview: {content[:500]}", flush=True)
             _unload_ollama_model(scan_model, upstream)
             return None
         end = content.rfind("]")
         if end >= 0:
             content = content[: end + 1]
 
-        results = json.loads(content)
+        try:
+            results = json.loads(content)
+        except json.JSONDecodeError:
+            print(f"[{datetime.now().strftime('%H:%M:%S')}] [DEEP] JSON parse failed", flush=True)
+            print(f"[{datetime.now().strftime('%H:%M:%S')}] [DEEP] Sanitized content: {content[:500]!r}", flush=True)
+            _unload_ollama_model(scan_model, upstream)
+            return None
         if isinstance(results, list):
             print(f"[{datetime.now().strftime('%H:%M:%S')}] [DEEP] Scan complete: {len(results)} passages", flush=True)
             for p in results:
@@ -707,9 +763,9 @@ Strategy:
         _unload_ollama_model(scan_model, upstream)
         return None
     except ImportError as e:
-        print(f"[{datetime.now().strftime('%H:%M:%S')}] [DEEP] langgraph not available: {e}", flush=True)
+        print(f"[{datetime.now().strftime('%H:%M:%S')}] [DEEP] Import error: {e}", flush=True)
         _unload_ollama_model(scan_model, upstream)
-        return [{"text": text, "factual": "uncertain", "reason": "Deep scan requires langgraph — pip install langgraph"}]
+        return None
     except concurrent.futures.TimeoutError:
         print(f"[{datetime.now().strftime('%H:%M:%S')}] [DEEP] Timed out after {TIMEOUT}s", flush=True)
         _unload_ollama_model(scan_model, upstream)

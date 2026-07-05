@@ -1,2 +1,4 @@
 nohup: ignoring input
 ./start.sh: line 18: ./venv/bin/python: No such file or directory
+./start.sh: line 18: ./venv/bin/python: No such file or directory
+./start.sh: line 18: ./venv/bin/python: No such file or directory
