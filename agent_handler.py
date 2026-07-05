@@ -680,8 +680,9 @@ def _deep_confidence_scan(
 
     try:
         if kb_context:
-            context_info = f"=== KNOWLEDGE BASE (from original query) ===\n{kb_context}"
-            print(f"[{datetime.now().strftime('%H:%M:%S')}] [DEEP] Using saved KB context ({len(context_info)} chars)", flush=True)
+            truncated = kb_context[:3000]
+            context_info = f"=== KNOWLEDGE BASE (from original query) ===\n{truncated}"
+            print(f"[{datetime.now().strftime('%H:%M:%S')}] [DEEP] Using saved KB context ({len(truncated)} chars)", flush=True)
         else:
             print(f"[{datetime.now().strftime('%H:%M:%S')}] [DEEP] Pre-fetching context...", flush=True)
             context_info = _prefetch_context(text)
