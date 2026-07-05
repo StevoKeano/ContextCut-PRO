@@ -1782,6 +1782,188 @@ document.getElementById('togBtn').addEventListener('click',togTheme);
 </html>"""
 
 
+def make_swarm_page():
+    return (
+        '<!DOCTYPE html>\n<html lang="en">\n<head>\n'
+        '<meta charset="utf-8">\n'
+        '<meta name="viewport" content="width=device-width,initial-scale=1">\n'
+        '<title>Swarm Research - ContextCut-PRO</title>\n'
+        '<style>\n'
+        '*{margin:0;padding:0;box-sizing:border-box}\n'
+        ':root{--bg:#1a1a2e;--surf:#16213e;--surf2:#1e2a4a;--text:#e0e0e0;--muted:#888;--accent:#8b5cf6;--green:#22c55e;--yellow:#f59e0b;--red:#ef4444;--border:#2a2a4a;--r:6px;font-family:\'Inter\',\'Segoe UI\',sans-serif;font-size:14px;color:var(--text);background:var(--bg)}\n'
+        'body{display:flex;flex-direction:column;height:100vh}\n'
+        'header{background:var(--surf);border-bottom:1px solid var(--border);padding:10px 16px;display:flex;align-items:center;gap:12px}\n'
+        'header h1{font-size:15px;font-weight:600;color:var(--accent)}\n'
+        'header a{color:var(--muted);font-size:12px;text-decoration:none;margin-left:auto}\n'
+        'header a:hover{color:var(--accent)}\n'
+        '.main{display:flex;flex:1;overflow:hidden}\n'
+        '.left{width:55%;display:flex;flex-direction:column;border-right:1px solid var(--border);min-width:0}\n'
+        '.right{flex:1;display:flex;flex-direction:column;min-width:0}\n'
+        '.panel{padding:12px;overflow-y:auto}\n'
+        '.form-row{display:flex;gap:8px;align-items:center;margin-bottom:8px;flex-wrap:wrap}\n'
+        '.form-row label{font-size:11px;color:var(--muted);white-space:nowrap}\n'
+        '.form-row input,.form-row select{background:var(--surf2);border:1px solid var(--border);color:var(--text);border-radius:3px;padding:4px 6px;font-size:11px;font-family:\'JetBrains Mono\',monospace;width:60px}\n'
+        '.form-row input[type=text]{width:200px}\n'
+        '.btn{background:var(--accent);color:#000;border:none;border-radius:3px;padding:6px 14px;font-size:11px;font-weight:600;cursor:pointer;font-family:\'JetBrains Mono\',monospace}\n'
+        '.btn:disabled{opacity:.5;cursor:not-allowed}\n'
+        '.btn-danger{background:var(--red);color:#fff;margin-left:4px}\n'
+        '.log{background:var(--surf2);border:1px solid var(--border);border-radius:var(--r);padding:8px;font-size:10px;font-family:\'JetBrains Mono\',monospace;height:220px;overflow-y:auto;white-space:pre-wrap;word-break:break-word;line-height:1.6}\n'
+        '.log .info{color:var(--muted)}.log .done{color:var(--green)}.log .fail{color:var(--red)}.log .retry{color:var(--yellow)}.log .result{color:var(--accent)}\n'
+        '#matrix-container{margin-top:8px;overflow-x:auto}\n'
+        '#report-container{margin-top:8px}\n'
+        'details.report-details{background:var(--surf2);border:1px solid var(--border);border-radius:var(--r);padding:8px}\n'
+        'details.report-details summary{cursor:pointer;color:var(--accent);font-size:11px;font-weight:600}\n'
+        'details.report-details pre{margin-top:6px;font-size:10px;line-height:1.5;max-height:400px;overflow-y:auto;background:var(--bg);padding:8px;border-radius:3px}\n'
+        '.stats{display:flex;gap:12px;margin:6px 0;font-size:11px;flex-wrap:wrap}\n'
+        '.stats span{background:var(--surf2);padding:3px 8px;border-radius:3px;border:1px solid var(--border)}\n'
+        '@media(max-width:900px){.main{flex-direction:column}.left{width:100%;border-right:none;border-bottom:1px solid var(--border)}}\n'
+        '</style>\n</head>\n<body>\n<header>\n'
+        '  <h1>\U0001f41d Swarm Research</h1>\n'
+        '  <span style="font-size:11px;color:var(--muted)">Parallel company research with verification</span>\n'
+        '  <a href="/">\u2190 Dashboard</a>\n'
+        '</header>\n<div class="main">\n<div class="left panel">\n'
+        '  <div class="form-row">\n'
+        '    <label>Topic:</label>\n'
+        '    <input type="text" id="topicInput" value="EV-market companies" style="width:200px">\n'
+        '    <label>Count:</label>\n'
+        '    <input type="number" id="countInput" value="100" min="1" max="500">\n'
+        '    <label>Parallel:</label>\n'
+        '    <input type="number" id="parallelInput" value="5" min="1" max="20">\n'
+        '    <label>Retries:</label>\n'
+        '    <input type="number" id="retryInput" value="3" min="0" max="10">\n'
+        '    <button class="btn" id="startBtn" onclick="startSwarm()">\u25b6 Start</button>\n'
+        '    <button class="btn btn-danger" id="stopBtn" onclick="stopSwarm()" disabled>\u25a0 Stop</button>\n'
+        '  </div>\n'
+        '  <div class="stats" id="stats"></div>\n'
+        '  <div class="log" id="log">Ready. Enter a topic and click Start.</div>\n'
+        '</div>\n<div class="right panel" id="resultsPanel" style="display:none">\n'
+        '  <div style="font-size:11px;font-weight:600;color:var(--accent);margin-bottom:6px">Comparison Matrix</div>\n'
+        '  <div id="matrix-container"></div>\n'
+        '  <details class="report-details" style="margin-top:8px">\n'
+        '    <summary>\U0001f4dd Full Research Report</summary>\n'
+        '    <pre id="report-container"></pre>\n'
+        '  </details>\n</div>\n</div>\n'
+        '<script>\n'
+        'let abortController = null;\n'
+        'function log(msg, cls) {\n'
+        '  const el = document.getElementById(\'log\');\n'
+        '  if (!el) return;\n'
+        '  const d = document.createElement(\'div\');\n'
+        '  d.className = cls;\n'
+        '  d.textContent = msg;\n'
+        '  el.appendChild(d);\n'
+        '  el.scrollTop = el.scrollHeight;\n'
+        '}\n'
+        'function setStats(summary) {\n'
+        '  const el = document.getElementById(\'stats\');\n'
+        '  if (!el) return;\n'
+        '  if (!summary) { el.innerHTML = \'\'; return; }\n'
+        '  el.innerHTML =\n'
+        '    \'<span>\u2705 Passed: \' + (summary.passed||0) + \'</span>\' +\n'
+        '    \'<span>\u274c Failed: \' + (summary.failed||0) + \'</span>\' +\n'
+        '    \'<span>\u23f1 Time: \' + (summary.elapsed||\'\') + \'</span>\';\n'
+        '}\n'
+        'async function startSwarm() {\n'
+        '  if (abortController) return;\n'
+        '  abortController = new AbortController();\n'
+        '  document.getElementById(\'startBtn\').disabled = true;\n'
+        '  document.getElementById(\'stopBtn\').disabled = false;\n'
+        '  document.getElementById(\'resultsPanel\').style.display = \'none\';\n'
+        '  document.getElementById(\'matrix-container\').innerHTML = \'\';\n'
+        '  document.getElementById(\'report-container\').textContent = \'\';\n'
+        '  document.getElementById(\'log\').innerHTML = \'\';\n'
+        '  setStats(null);\n'
+        '  const topic = document.getElementById(\'topicInput\').value.trim();\n'
+        '  const count = parseInt(document.getElementById(\'countInput\').value) || 100;\n'
+        '  const parallel = parseInt(document.getElementById(\'parallelInput\').value) || 5;\n'
+        '  const maxRetries = parseInt(document.getElementById(\'retryInput\').value) || 3;\n'
+        '  if (!topic) { log(\'Topic is required\', \'fail\'); reset(); return; }\n'
+        '  log(\'Starting swarm: topic=\' + topic + \', count=\' + count + \', parallel=\' + parallel + \', retries=\' + maxRetries, \'info\');\n'
+        '  try {\n'
+        '    const resp = await fetch(\'/api/swarm/research\', {\n'
+        '      method: \'POST\',\n'
+        '      headers: {\'Content-Type\':\'application/json\'},\n'
+        '      signal: abortController.signal,\n'
+        '      body: JSON.stringify({topic, count, parallel, max_retries: maxRetries})\n'
+        '    });\n'
+        '    if (!resp.ok) {\n'
+        '      const err = await resp.text();\n'
+        '      log(\'HTTP \' + resp.status + \': \' + err, \'fail\');\n'
+        '      reset();\n'
+        '      return;\n'
+        '    }\n'
+        '    const reader = resp.body.getReader();\n'
+        '    const decoder = new TextDecoder();\n'
+        '    let buf = \'\';\n'
+        '    while (true) {\n'
+        '      const {done, value} = await reader.read();\n'
+        '      if (done) break;\n'
+        '      buf += decoder.decode(value, {stream: true});\n'
+        '      const lines = buf.split(\'\\n\');\n'
+        '      buf = lines.pop();\n'
+        '      for (const line of lines) {\n'
+        '        const trimmed = line.trim();\n'
+        '        if (!trimmed) continue;\n'
+        '        if (trimmed.startsWith(\'event: \')) continue;\n'
+        '        if (trimmed === \'data: [DONE]\') { log(\'Research complete.\', \'done\'); continue; }\n'
+        '        if (!trimmed.startsWith(\'data: \')) continue;\n'
+        '        try {\n'
+        '          const data = JSON.parse(trimmed.slice(6));\n'
+        '          const t = data.type || \'message\';\n'
+        '          if (t === \'progress\') {\n'
+        '            log(data.message || data.phase, \'info\');\n'
+        '          } else if (t === \'company_result\') {\n'
+        '            log(data.company + \': \u2705 passed (rev=\' + (data.revenue||\'?\') + \', margin=\' + (data.margin||\'?\') + \')\', \'done\');\n'
+        '          } else if (t === \'company_failed\') {\n'
+        '            log(data.company + \': \u274c failed (\' + (data.errors||[]).join(\'; \') + \')\', \'fail\');\n'
+        '          } else if (t === \'company_retry\') {\n'
+        '            log(data.company + \': \\ud83d\\udd04 retry \' + data.retry + \'/\' + data.max, \'retry\');\n'
+        '          } else if (t === \'company_exhausted\') {\n'
+        '            log(data.company + \': \u274c exhausted (\' + (data.errors||[]).join(\'; \') + \')\', \'fail\');\n'
+        '          } else if (t === \'done\') {\n'
+        '            log(\'Swarm complete!\', \'done\');\n'
+        '            if (data.matrix) {\n'
+        '              document.getElementById(\'matrix-container\').innerHTML = data.matrix;\n'
+        '            }\n'
+        '            if (data.report) {\n'
+        '              document.getElementById(\'report-container\').textContent = data.report;\n'
+        '            }\n'
+        '            if (data.summary) {\n'
+        '              setStats(data.summary);\n'
+        '              log(\'Summary: \' + data.summary.passed + \'/\' + data.summary.total + \' passed in \' + data.summary.elapsed, \'done\');\n'
+        '            }\n'
+        '            document.getElementById(\'resultsPanel\').style.display = \'block\';\n'
+        '            document.getElementById(\'resultsPanel\').scrollIntoView({behavior:\'smooth\', block:\'start\'});\n'
+        '          } else if (t === \'error\') {\n'
+        '            log(\'Error: \' + (data.message||\'unknown\'), \'fail\');\n'
+        '          }\n'
+        '        } catch(e) {}\n'
+        '      }\n'
+        '    }\n'
+        '  } catch(e) {\n'
+        '    if (e.name === \'AbortError\') {\n'
+        '      log(\'Stopped by user\', \'fail\');\n'
+        '    } else {\n'
+        '      log(\'Network error: \' + e.message, \'fail\');\n'
+        '    }\n'
+        '  }\n'
+        '  reset();\n'
+        '}\n'
+        'function stopSwarm() {\n'
+        '  if (abortController) {\n'
+        '    abortController.abort();\n'
+        '    abortController = null;\n'
+        '  }\n'
+        '}\n'
+        'function reset() {\n'
+        '  abortController = null;\n'
+        '  document.getElementById(\'startBtn\').disabled = false;\n'
+        '  document.getElementById(\'stopBtn\').disabled = true;\n'
+        '}\n'
+        '</script>\n</body>\n</html>'
+    )
+
+
 def make_dashboard():
     with _lock:
         rows = list(_log)
@@ -1953,6 +2135,10 @@ tr:hover td{{background:var(--surf2)}}
 .scan-deep-lbl{{display:inline-flex;align-items:center;gap:3px;font-size:10px;color:var(--muted);cursor:pointer;margin-left:4px;padding:4px 6px;border:1px solid var(--border);border-radius:3px;white-space:nowrap;font-family:'JetBrains Mono',monospace}}
 .scan-deep-lbl:hover{{border-color:var(--accent);color:var(--accent)}}
 .scan-deep-lbl input{{accent-color:#8b5cf6;cursor:pointer}}
+.loop-toggle{{background:transparent;border:1px solid var(--border);color:var(--muted);border-radius:3px;padding:8px 10px;font-size:11px;cursor:pointer;line-height:1;flex-shrink:0;font-family:'JetBrains Mono',monospace;margin-left:4px}}
+.loop-toggle.loop-on{{background:#8b5cf6;color:#fff;border-color:#8b5cf6;font-weight:600}}
+.retry-group{{display:none;align-items:center;gap:2px;margin-left:4px}}
+.retry-group.show{{display:inline-flex}}
 .suspect{{background:rgba(245,158,11,0.2);border-left:3px solid #f59e0b;padding:2px 6px;border-radius:2px}}
 .tool-call{{background:var(--surf2);border:1px solid var(--border);border-radius:var(--r);padding:8px 12px;margin:6px 0;font-size:12px}}
 .tool-call summary{{cursor:pointer;color:var(--accent);font-weight:600}}
@@ -2006,6 +2192,7 @@ tr.cloud-off td{{background:#0a1a2e!important;color:#22c55e!important;border-top
   <div class="hinfo">{UPSTREAM} · Qdrant {QDRANT_HOST}:{QDRANT_PORT} · min_score={MIN_SCORE} · top_k={TOP_K}</div>
   <button class="tog" id="togBtn" title="Toggle day/night">☀</button>
   <a href="/settings" style="background:transparent;border:1px solid var(--border);color:var(--muted);border-radius:3px;padding:3px 10px;font-size:11px;cursor:pointer;font-family:'JetBrains Mono',monospace;text-decoration:none">LLM-Provider ⚙</a>
+  <a href="/swarm" style="background:#8b5cf6;color:#fff;border:1px solid #8b5cf6;border-radius:3px;padding:3px 8px;font-size:11px;font-weight:600;cursor:pointer;font-family:'JetBrains Mono',monospace;text-decoration:none" title="Parallel company research with verification">🐝 Swarm</a>
   <button onclick="openFileBrowser()" style="background:transparent;border:1px solid var(--border);color:var(--muted);border-radius:3px;padding:3px 10px;font-size:11px;cursor:pointer;font-family:'JetBrains Mono',monospace">Browse Files 📂</button>
   <a href="/api/logs/export" style="background:transparent;border:1px solid var(--border);color:var(--muted);border-radius:3px;padding:3px 8px;font-size:11px;cursor:pointer;font-family:'JetBrains Mono',monospace;text-decoration:none" title="Download audit log CSV">Export Log</a>
   <button onclick="seedDemo()" style="background:transparent;border:1px solid var(--border);color:var(--muted);border-radius:3px;padding:3px 8px;font-size:11px;cursor:pointer;font-family:'JetBrains Mono',monospace" title="Load sample data for demo">Demo Data</button>
@@ -2113,6 +2300,12 @@ tr.cloud-off td{{background:#0a1a2e!important;color:#22c55e!important;border-top
             <button class="scan-test" id="scanTestBtn" onclick="testScan()" title="Run a demo scan on known false claims to test highlighting" style="font-size:10px;padding:4px 8px">🔬 Test</button>
             <label class="scan-deep-lbl" id="deepLbl" title="Use Deep Agents harness with sub-agent verification"><input type="checkbox" id="deepChk" onchange="toggleDeepMode(this)"> DEEP</label>
             <label class="unattended-lbl" id="unattendedLbl" title="Auto-approve shell commands"><input type="checkbox" id="unattendedChk" onchange="confirmUnattended(this)"> Unattended</label>
+            <button class="loop-toggle" id="loopToggle" onclick="toggleLoopMode()" title="Auto-correct flagged passages" style="font-size:10px;padding:4px 8px">🔄 Loop OFF</button>
+            <span class="retry-group" id="retryGroup">
+              <span class="param-label" style="font-size:9px;margin:0 2px">Retry:</span>
+              <input type="range" class="param-slider" id="retrySlider" min="1" max="5" step="1" value="3" oninput="updateRetry()" style="width:40px">
+              <span class="param-val" id="retryVal">3</span>
+            </span>
             <button class="clear-btn" id="defaultBtn" onclick="resetDefaults()" title="Reset all settings to defaults" style="font-size:9px;padding:4px 8px;margin-left:auto">Default</button>
           </div>
           <div style="font-size:9px;color:var(--muted);margin-top:6px;border-top:1px solid var(--border);padding-top:6px">
@@ -2142,6 +2335,8 @@ let agentMode = false;
 let scanMode = false;
 let scanPending = false;
 let deepMode = false;
+let loopMode = false;
+let maxRetries = 3;
 let abortController = null;
 let lastEsc = 0;
 let lastTaskId = null;
@@ -2150,6 +2345,8 @@ function saveState() {{
   localStorage.setItem('cc_agentMode', agentMode ? '1' : '0');
   localStorage.setItem('cc_scanMode', scanMode ? '1' : '0');
   localStorage.setItem('cc_deepMode', deepMode ? '1' : '0');
+  localStorage.setItem('cc_loopMode', loopMode ? '1' : '0');
+  localStorage.setItem('cc_maxRetries', String(maxRetries));
   const uc = document.getElementById('unattendedChk');
   if (uc) localStorage.setItem('cc_unattended', uc.checked ? '1' : '0');
   const mi = document.getElementById('modelInput');
@@ -2188,6 +2385,10 @@ function loadState() {{
   if (sm !== null) scanMode = sm === '1';
   const dm = ls.getItem('cc_deepMode');
   if (dm !== null) deepMode = dm === '1';
+  const lm = ls.getItem('cc_loopMode');
+  if (lm !== null) loopMode = lm === '1';
+  const mr = ls.getItem('cc_maxRetries');
+  if (mr !== null) maxRetries = parseInt(mr, 10) || 3;
   setChk('unattendedChk', 'cc_unattended');
   setVal('modelInput', 'cc_model');
   setVal('tempSlider', 'cc_temp');
@@ -2210,6 +2411,17 @@ function loadState() {{
     scanBtn.textContent = scanMode ? '🧪 Scan ON' : '🧪 Scan OFF';
     scanBtn.classList.toggle('scan-on', scanMode);
   }}
+  const loopBtn = document.getElementById('loopToggle');
+  if (loopBtn) {{
+    loopBtn.textContent = loopMode ? '🔄 Loop ON' : '🔄 Loop OFF';
+    loopBtn.classList.toggle('loop-on', loopMode);
+  }}
+  const rg = document.getElementById('retryGroup');
+  if (rg) rg.classList.toggle('show', loopMode);
+  const rs = document.getElementById('retrySlider');
+  if (rs) rs.value = maxRetries;
+  const rv = document.getElementById('retryVal');
+  if (rv) rv.textContent = maxRetries;
   const dc = document.getElementById('deepChk');
   if (dc) dc.checked = deepMode;
   const uc = document.getElementById('unattendedChk');
@@ -2224,7 +2436,7 @@ function loadState() {{
 
 function resetDefaults() {{
   if (!confirm('Reset all settings to defaults?')) return;
-  const keys = ['cc_agentMode','cc_scanMode','cc_deepMode','cc_unattended','cc_model','cc_temp','cc_topp','cc_maxTok','cc_minscore','cc_topk'];
+  const keys = ['cc_agentMode','cc_scanMode','cc_deepMode','cc_unattended','cc_model','cc_temp','cc_topp','cc_maxTok','cc_minscore','cc_topk','cc_loopMode','cc_maxRetries'];
   keys.forEach(k => localStorage.removeItem(k));
   location.reload();
 }}
@@ -2271,6 +2483,28 @@ function toggleScanMode() {{
 
 function toggleDeepMode(cb) {{
   deepMode = cb.checked;
+  saveState();
+}}
+
+function toggleLoopMode() {{
+  loopMode = !loopMode;
+  const btn = document.getElementById('loopToggle');
+  if (btn) {{
+    btn.textContent = loopMode ? '🔄 Loop ON' : '🔄 Loop OFF';
+    btn.classList.toggle('loop-on', loopMode);
+  }}
+  const rg = document.getElementById('retryGroup');
+  if (rg) rg.classList.toggle('show', loopMode);
+  saveState();
+}}
+
+function updateRetry() {{
+  const rs = document.getElementById('retrySlider');
+  const rv = document.getElementById('retryVal');
+  if (rs && rv) {{
+    maxRetries = parseInt(rs.value, 10);
+    rv.textContent = maxRetries;
+  }}
   saveState();
 }}
 
@@ -2798,11 +3032,25 @@ function handleCommand(text) {{
       'Commands:\\n' +
       '/clear — Clear conversation history\\n' +
       '/resume &lt;task_id&gt; — Resume an interrupted agent task\\n' +
+      '/swarm — Open Swarm Research page (parallel company research with verification)\\n' +
       '/help — Show this help\\n\\n' +
       'Natural commands:\\n' +
       '"stop" / "that\\'s enough" — Stop current response\\n' +
       '"continue" / "go on" — Continue previous response\\n' +
       '"revise..." / "rewrite..." — Ask for revision',
+      '');
+    return true;
+  }}
+  if (text === '/swarm') {{
+    appendMsg('assistant',
+      '🐝 <strong>Swarm Research</strong><br><br>' +
+      'Navigate to <a href="/swarm" style="color:var(--accent)">/swarm</a> or click the <strong>🐝 Swarm</strong> button in the header.<br><br>' +
+      'This is a separate page — not a chat command. It runs parallel research agents that:<br>' +
+      '• Auto-discover up to 500 companies for any topic<br>' +
+      '• Research each company via web search + source URL verification<br>' +
+      '• Verify every figure against the checklist (revenue, margin, source URL resolvable)<br>' +
+      '• Auto-retry failed companies<br>' +
+      '• Generate an HTML comparison matrix + markdown research report',
       '');
     return true;
   }}
@@ -3105,7 +3353,7 @@ async function sendMessage(taskIdOverride) {{
         method: 'POST',
         headers: {{'Content-Type':'application/json'}},
         signal: abortController.signal,
-        body: JSON.stringify({{message: text, session_id: sessionId, model, stream: true, deep: deepMode, scan: scanMode, task_id: taskIdOverride || lastTaskId || ''}})
+        body: JSON.stringify({{message: text, session_id: sessionId, model, stream: true, deep: deepMode, scan: scanMode, loop_retries: loopMode ? maxRetries : 0, task_id: taskIdOverride || lastTaskId || ''}})
       }});
       if (!resp.ok) {{
         removeTyping();
@@ -3195,6 +3443,12 @@ async function sendMessage(taskIdOverride) {{
                   rdiv.textContent = typeof data.result === 'string' ? data.result.substring(0,2000) : JSON.stringify(data.result).substring(0,2000);
                   existing.appendChild(rdiv);
                 }}
+              }} else if (data.type === 'correction') {{
+                ensureBubble();
+                const corrDiv = document.createElement('div');
+                corrDiv.style.cssText = 'font-size:9px;color:#f59e0b;padding:2px 6px;margin-top:2px;border-top:1px solid var(--border)';
+                corrDiv.textContent = '\\ud83d\\udd04 Correction: ' + (data.reasons || '');
+                assistantDiv.appendChild(corrDiv);
               }} else if (data.response) {{
                 fullText = data.response;
                 ensureBubble();
@@ -4516,6 +4770,14 @@ class DashboardHandler(_SuppressBrokenPipe, BaseHTTPRequestHandler):
             self.end_headers()
             self.wfile.write(page)
             return
+        if self.path == "/swarm":
+            page = make_swarm_page().encode("utf-8")
+            self.send_response(200)
+            self.send_header("Content-Type", "text/html; charset=utf-8")
+            self.send_header("Content-Length", str(len(page)))
+            self.end_headers()
+            self.wfile.write(page)
+            return
         else:
             page = make_dashboard().encode()
             self.send_response(200)
@@ -5228,6 +5490,80 @@ class DashboardHandler(_SuppressBrokenPipe, BaseHTTPRequestHandler):
                 self.wfile.write(err)
             return
 
+        if self.path == "/api/swarm/research":
+            try:
+                body = json.loads(raw_body)
+                topic = body.get("topic", "").strip()
+                if not topic:
+                    resp = json.dumps({"error": "topic is required"}).encode()
+                    self.send_response(400)
+                    self.send_header("Content-Type", "application/json")
+                    self.send_header("Content-Length", str(len(resp)))
+                    self.end_headers()
+                    self.wfile.write(resp)
+                    return
+                count = int(body.get("count", 100))
+                parallel = int(body.get("parallel", 5))
+                max_retries = int(body.get("max_retries", 3))
+                timeout = int(body.get("timeout", 60))
+
+                self.send_response(200)
+                self.send_header("Content-Type", "text/event-stream")
+                self.send_header("Cache-Control", "no-cache")
+                self.send_header("Connection", "close")
+                self.end_headers()
+
+                upstream = get_current_upstream()
+                api_key = get_current_api_key()
+                from agent_handler import _SCAN_MODEL
+                model = body.get("model") or _SCAN_MODEL or DEFAULT_MODEL
+
+                import traceback as _tb
+                from swarm_handler import run_swarm
+
+                def emit(data):
+                    try:
+                        event_type = data.get("type", "message")
+                        self.wfile.write(f"event: {event_type}\ndata: {json.dumps(data)}\n\n".encode())
+                        self.wfile.flush()
+                    except (BrokenPipeError, ConnectionResetError, OSError):
+                        raise SystemExit()
+
+                print(f"[{datetime.now().strftime('%H:%M:%S')}] [Swarm] Starting: topic={topic!r}, count={count}, parallel={parallel}, retries={max_retries}", flush=True)
+                try:
+                    run_swarm(
+                        topic=topic,
+                        count=count,
+                        parallel=parallel,
+                        max_retries=max_retries,
+                        timeout=timeout,
+                        upstream=upstream,
+                        api_key=api_key,
+                        model=model,
+                        emit=emit,
+                    )
+                except SystemExit:
+                    pass
+                except Exception as e:
+                    try:
+                        emit({"type": "error", "message": str(e), "traceback": _tb.format_exc()})
+                    except Exception:
+                        pass
+                try:
+                    self.wfile.write(b"data: [DONE]\n\n")
+                    self.wfile.flush()
+                except (BrokenPipeError, ConnectionResetError, OSError):
+                    pass
+                return
+            except Exception as e:
+                err = json.dumps({"error": str(e)}).encode()
+                self.send_response(500)
+                self.send_header("Content-Type", "application/json")
+                self.send_header("Content-Length", str(len(err)))
+                self.end_headers()
+                self.wfile.write(err)
+                return
+
         if self.path == "/api/agent":
             try:
                 body = json.loads(raw_body)
@@ -5238,6 +5574,7 @@ class DashboardHandler(_SuppressBrokenPipe, BaseHTTPRequestHandler):
                 deep = body.get("deep", False)
                 task_id = body.get("task_id", "").strip()
                 scan = body.get("scan", True)
+                loop_retries = int(body.get("loop_retries", 0))
 
                 if not sid or sid not in _sessions:
                     sid = new_session()
@@ -5330,7 +5667,7 @@ class DashboardHandler(_SuppressBrokenPipe, BaseHTTPRequestHandler):
                     def emit(data):
                         try:
                             write(data)
-                            import sys; sys.stdout.flush()
+                            sys.stdout.flush()
                         except Exception:
                             raise _AgentAbort()
 
@@ -5373,7 +5710,6 @@ class DashboardHandler(_SuppressBrokenPipe, BaseHTTPRequestHandler):
                                                 )
                                             else:
                                                 cmd = str(tool_input)[:200]
-                                            import sys
                                             print(f"[{datetime.now().strftime('%H:%M:%S')}] [Agent] \U0001f9e0 {tool_name}({cmd[:120]})", flush=True)
                                             if tool_name == "shell_exec" and not _shell_is_safe(cmd):
                                                 emit({'name': tool_name, 'input': cmd, 'shell_mode': shell_mode})
@@ -5393,7 +5729,6 @@ class DashboardHandler(_SuppressBrokenPipe, BaseHTTPRequestHandler):
                                             output_str = (
                                                 str(output_data)[:2000] if output_data else ""
                                             )
-                                            import sys
                                             print(f"[{datetime.now().strftime('%H:%M:%S')}] [Agent] \u2705 {tool_name} -> {output_str[:80]}", flush=True)
                                             emit({'name': tool_name, 'result': output_str, 'type': 'tool_result'})
                                             # Save streaming checkpoint
@@ -5417,14 +5752,12 @@ class DashboardHandler(_SuppressBrokenPipe, BaseHTTPRequestHandler):
                             raise
                         except asyncio.TimeoutError:
                             emit({'error': f'Agent timed out ({AGENT_TIMEOUT}s). Try simplifying the prompt.'})
-                            import sys
                             print(f"[{datetime.now().strftime('%H:%M:%S')}] [Agent] \u23f0 Timeout", flush=True)
                             raise _AgentAbort()
                         except Exception as e:
                             err_msg = f"Agent error: {e}"
                             emit({'error': err_msg})
                             full_output = err_msg
-                            import sys
                             print(f"[{datetime.now().strftime('%H:%M:%S')}] [Agent] \u274c {err_msg[:200]}", flush=True)
                             raise _AgentAbort()
                         return local_tools
@@ -5453,7 +5786,7 @@ class DashboardHandler(_SuppressBrokenPipe, BaseHTTPRequestHandler):
 
                     # Layer 2: Self-correction loop (skip for trivial responses, no-op for deep scans)
                     final_output = full_output
-                    if scan and full_output and len(full_output) > 80 and not deep:
+                    if scan and loop_retries > 0 and full_output and len(full_output) > 80 and not deep:
                         try:
                             from agent_handler import _confidence_scan
                             loop = asyncio.get_event_loop()
@@ -5463,29 +5796,34 @@ class DashboardHandler(_SuppressBrokenPipe, BaseHTTPRequestHandler):
                                     full_output,
                                     upstream=get_current_upstream(),
                                     api_key=get_current_api_key(),
+                                    detailed=True,
                                     deep=deep,
                                 ),
                             )
-                            import sys
                             if scan_result is None:
                                 scan_result = []
-                            low_passages = [
+                            flagged = [
                                 p for p in (scan_result or [])
-                                if isinstance(p, dict) and p.get("confidence") == "LOW"
+                                if isinstance(p, dict) and p.get("factual") in ("incorrect", "uncertain")
                             ]
                             correction_retries = 0
-                            max_corrections = 1
-                            while low_passages and correction_retries < max_corrections:
+                            max_corrections = min(loop_retries, 5)
+                            while flagged and correction_retries < max_corrections:
                                 reasons = "; ".join(
-                                    p.get("reason", "") for p in low_passages if isinstance(p, dict)
+                                    f"{p.get('text','')[:80]} ({p.get('factual','?')}: {p.get('reason','')})"
+                                    for p in flagged if isinstance(p, dict)
                                 )
-                                print(f"[{datetime.now().strftime('%H:%M:%S')}] [Agent] \U0001f504 Correction attempt {correction_retries + 1}: {reasons[:120]}", flush=True)
-                                emit({'confidence': 'LOW', 'reasons': reasons, 'type': 'correction'})
+                                print(f"[{datetime.now().strftime('%H:%M:%S')}] [Agent] \U0001f504 Correction attempt {correction_retries + 1}: {reasons[:200]}", flush=True)
+                                emit({'type': 'correction', 'reasons': reasons, 'count': len(flagged), 'attempt': correction_retries + 1})
                                 prev_output = full_output
+                                flagged_text = "\n".join(
+                                    f'- "{p.get("text","")}" — {p.get("factual","?")}: {p.get("reason","")}'
+                                    for p in flagged if isinstance(p, dict)
+                                )
                                 correction_msg = (
-                                    f"Your previous response contained passages with LOW factual confidence. "
-                                    f"Reasons: {reasons}. "
-                                    f"Please correct these issues in your response."
+                                    f"Your previous response contained these potentially incorrect statements:\n{flagged_text}\n\n"
+                                    f"Please provide a corrected version of your entire response fixing these specific claims. "
+                                    f"Keep all factual parts unchanged."
                                 )
                                 retry_msgs = input_messages + [
                                     AIMessage(content=full_output),
@@ -5500,23 +5838,27 @@ class DashboardHandler(_SuppressBrokenPipe, BaseHTTPRequestHandler):
                                             full_output,
                                             upstream=get_current_upstream(),
                                             api_key=get_current_api_key(),
+                                            detailed=True,
                                             deep=deep,
                                         ),
                                     )
-                                    low_passages = [
+                                    flagged = [
                                         p for p in (scan_result or [])
-                                        if isinstance(p, dict) and p.get("confidence") == "LOW"
+                                        if isinstance(p, dict) and p.get("factual") in ("incorrect", "uncertain")
                                     ]
                                 else:
-                                    low_passages = []
+                                    flagged = []
+                            if not flagged and correction_retries > 0:
+                                print(f"[{datetime.now().strftime('%H:%M:%S')}] [Agent] \u2705 All issues resolved after {correction_retries} correction(s)", flush=True)
+                            final_output = full_output
                         except _AgentAbort:
+                            final_output = full_output
                             return full_output
                         except ImportError:
                             pass
                         except Exception as scan_e:
                             emit({'error': str(scan_e), 'type': 'correction'})
 
-                    import sys
                     tok_count = len(full_output.split())
                     print(f"[{datetime.now().strftime('%H:%M:%S')}] [Agent] \U0001f3af Done ({tok_count} words, {len(called_tools)} tools)", flush=True)
                     try:
@@ -5525,7 +5867,6 @@ class DashboardHandler(_SuppressBrokenPipe, BaseHTTPRequestHandler):
                         pass
                     return final_output
 
-                import sys
                 print(f"[{datetime.now().strftime('%H:%M:%S')}] [Agent] 🤖 Agent session started for model '{model_name}'", flush=True)
                 if not is_stream:
                     output = asyncio.run(_run_agent())

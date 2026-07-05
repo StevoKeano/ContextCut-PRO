@@ -427,12 +427,13 @@ _SCAN_MODEL = os.environ.get("CONTEXTCUT_SCAN_MODEL", "").strip()
 
 
 def _find_flexible_offsets(text: str, passage: str) -> tuple[int, int] | None:
-    """Find ``passage`` in original ``text``, tolerating Markdown & whitespace.
+    """Find ``passage`` in original ``text``, tolerating Markdown & whitespace
+    and fuzzy (paraphrased) matches.
 
-    Splits the passage into words, builds a regex that allows optional
-    inline Markdown characters (``**``, ``__``, ``*``), emoji, and
-    flexible whitespace between words.  Returns ``(start, end)`` character
-    offsets in the original ``text``, or ``None``.
+    Tries three strategies in order:
+      1. Regex with flexible whitespace/Markdown between words.
+      2. Exact substring match.
+      3. `difflib` longest common substring (handles paraphrasing).
     """
     import re
     _EMOJI = re.compile(
@@ -446,17 +447,26 @@ def _find_flexible_offsets(text: str, passage: str) -> tuple[int, int] | None:
     words = clean_pt.split()
     if not words:
         return None
-    # Allow bold/italic markers, emoji, and flexible whitespace
+    # Try 1: Regex with flexible inline Markdown/whitespace
     gap = r'\s*[\*_\U0001F300-\U0001F9FF\u2600-\u27BF\uFE00-\uFE0F\u200D]*\s*'
     pattern = gap.join(re.escape(w) for w in words)
     m = re.search(pattern, text)
     if m:
         return (m.start(), m.end())
-    # Fallback: stripped exact match
+    # Try 2: Exact stripped match
     stripped = passage.strip()
     idx = text.find(stripped)
     if idx >= 0:
         return (idx, idx + len(stripped))
+    # Try 3: difflib longest common substring (handles paraphrasing)
+    try:
+        import difflib
+        matcher = difflib.SequenceMatcher(None, text.lower(), passage.lower())
+        match = matcher.find_longest_match(0, len(text), 0, len(passage))
+        if match.size > max(5, len(passage) * 0.4):
+            return (match.a, match.a + match.size)
+    except Exception:
+        pass
     return None
 
 
@@ -477,9 +487,17 @@ def _confidence_scan(
     detailed: bool = False, model: str = None, deep: bool = False
 ) -> list[dict] | None:
     if deep:
-        return _deep_confidence_scan(
-            text, upstream=upstream, api_key=api_key, model=model
-        )
+        try:
+            return _deep_confidence_scan(
+                text, upstream=upstream, api_key=api_key, model=model
+            )
+        except Exception as _deep_err:
+            msg = str(_deep_err)
+            if "does not support tools" in msg:
+                print(f"[{datetime.now().strftime('%H:%M:%S')}] [Scan] Deep scan not supported by model, falling back to simple scan", flush=True)
+                deep = False
+            else:
+                raise
     if not upstream or not text or len(text.strip()) < (10 if detailed else 80):
         return None
     scan_model = (_SCAN_MODEL or model or
@@ -652,6 +670,14 @@ Be aggressive about LOW/incorrect — any claim without clear source support sho
             for p in results:
                 factual = p.get("factual", p.get("confidence", "unknown"))
                 print(f"[{datetime.now().strftime('%H:%M:%S')}] [DEEP]   {factual}: {p.get('text', '')[:80]}", flush=True)
+                pt = p.get("text", "")
+                if pt:
+                    offsets = _find_flexible_offsets(text, pt)
+                    if offsets:
+                        p["start"], p["end"] = offsets
+                        print(f"[{datetime.now().strftime('%H:%M:%S')}] [DEEP]   offset found: {offsets} for {pt[:60]}...", flush=True)
+                    else:
+                        print(f"[{datetime.now().strftime('%H:%M:%S')}] [DEEP]   no offset for: {pt[:60]}...", flush=True)
             _unload_ollama_model(scan_model, upstream)
             return results
         print(f"[{datetime.now().strftime('%H:%M:%S')}] [DEEP] Result is not a list: {type(results)}", flush=True)
@@ -666,6 +692,8 @@ Be aggressive about LOW/incorrect — any claim without clear source support sho
         _unload_ollama_model(scan_model, upstream)
         return [{"text": text, "factual": "uncertain", "reason": "Deep scan timed out"}]
     except Exception as e:
+        if "does not support tools" in str(e):
+            raise
         print(f"[{datetime.now().strftime('%H:%M:%S')}] [DEEP] Error: {e}", flush=True)
         import traceback
         traceback.print_exc()
@@ -1667,12 +1695,17 @@ def build_agent(model_name: str = None, upstream: str = None,
                 api_key: str = None, task_id: str = None, goal: str = None,
                 user_message: str = None):
 
+    extra = {}
+    if _SCAN_MODEL:
+        extra["extra_body"] = {"keep_alive": 0}
+
     llm = ChatOpenAI(
         model=model_name or "qwen3:14b-q8_0",
         openai_api_base=upstream + "/v1",
         openai_api_key=api_key or "not-needed",
         temperature=0.3,
         streaming=True,
+        **extra,
     )
 
     tools = apply_harness(ALL_TOOLS + _get_dynamic_tools(), user_message)
