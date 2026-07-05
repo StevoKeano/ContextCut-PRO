@@ -617,25 +617,35 @@ def _deep_confidence_scan(
         print(f"[{datetime.now().strftime('%H:%M:%S')}] [DEEP] Creating verifier agent...", flush=True)
         verifier = create_deep_agent(
             model=llm,
-            tools=[search_knowledge_base],
+            tools=[search_knowledge_base, web_search],
             interrupt_on=[],
             system_prompt="""You are a precise factual verifier. Your task:
 
 1. Parse the user's text into individual factual claims
 2. For each claim, search the knowledge base for supporting or contradicting evidence
-3. Use the built-in task tool to spawn parallel sub-agents for independent claims
-4. Return ONLY a valid JSON array (no other text or markdown)
+3. If the knowledge base has no relevant results, use web_search to find evidence online
+4. Use the built-in task tool to spawn parallel sub-agents for independent claims
+5. Return ONLY a valid JSON array (no other text or markdown)
+
+CRITICAL: The "text" field MUST be an EXACT VERBATIM substring of the user's original text.
+Copy it character-for-character including any Markdown formatting.
+Do NOT paraphrase, rephrase, summarize, or edit the text in any way.
 
 Each object in the array:
-- "text": the exact claim text (as written)
+- "text": EXACT verbatim substring from the user's text (copy exactly, do not change)
 - "factual": one of "correct", "incorrect", or "uncertain"
-- "reason": what the knowledge base says and whether it supports or contradicts
-- "source_url": the title of the source document, or "unverifiable"
+- "reason": what the knowledge base or web search says and whether it supports or contradicts
+- "source_url": the title/URL of the source document, or "unverifiable"
 
-Map confidence to factual: HIGH -> correct, MEDIUM -> uncertain, LOW -> incorrect.
-Be aggressive about LOW/incorrect — any claim without clear source support should be MEDIUM/uncertain at best.""",
+Strategy:
+- SEARCH KNOWLEDGE BASE first for each claim
+- If the knowledge base has no relevant results, use web_search to find evidence
+- Use "correct" only for claims clearly supported by evidence
+- Use "incorrect" for claims clearly contradicted by evidence
+- Use "uncertain" only when neither source has relevant information to verify""",
         )
         print(f"[{datetime.now().strftime('%H:%M:%S')}] [DEEP] Verifier agent created, invoking...", flush=True)
+        verifier.recursion_limit = 30
 
         fut = _DEEP_POOL.submit(
             verifier.invoke, {
@@ -646,7 +656,7 @@ Be aggressive about LOW/incorrect — any claim without clear source support sho
                 ]
             }
         )
-        result = fut.result(timeout=120)
+        result = fut.result(timeout=180)
 
         final_msgs = result.get("messages", [])
         content = final_msgs[-1].content if final_msgs else ""
@@ -675,9 +685,6 @@ Be aggressive about LOW/incorrect — any claim without clear source support sho
                     offsets = _find_flexible_offsets(text, pt)
                     if offsets:
                         p["start"], p["end"] = offsets
-                        print(f"[{datetime.now().strftime('%H:%M:%S')}] [DEEP]   offset found: {offsets} for {pt[:60]}...", flush=True)
-                    else:
-                        print(f"[{datetime.now().strftime('%H:%M:%S')}] [DEEP]   no offset for: {pt[:60]}...", flush=True)
             _unload_ollama_model(scan_model, upstream)
             return results
         print(f"[{datetime.now().strftime('%H:%M:%S')}] [DEEP] Result is not a list: {type(results)}", flush=True)
