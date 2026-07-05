@@ -2579,6 +2579,8 @@ async function runScan(text, assistantDiv, bubble, signal) {{
           }} else {{
             suffix = ' <span style="font-size:9px;color:var(--muted);font-style:italic">' + label + '</span>';
           }}
+        }} else if (p.text) {{
+          suffix = matchKnowledgeFile(p.text);
         }}
         if (p._isCorrect) {{
           // Correct passage: no highlight/icon, just append source link
@@ -3171,11 +3173,32 @@ function linkCitations(text) {{
 }}
 
 let _kbFiles = null;
+let _kbStems = [];
+function _loadKbFiles(data) {{
+  _kbFiles = new Set(data.files.map(f => f.name));
+  _kbStems = [];
+  for (const f of data.files) {{
+    let stem = f.name.replace(/\.[^.]+$/, '').toLowerCase().replace(/[-_\s]+/g, ' ');
+    if (stem.length > 2) _kbStems.push([stem, f.name]);
+  }}
+  _kbStems.sort((a,b) => b[0].length - a[0].length);
+  return _kbFiles;
+}}
+function matchKnowledgeFile(text) {{
+  if (!_kbFiles || !_kbStems.length) return '';
+  const lower = text.toLowerCase();
+  for (const [stem, fname] of _kbStems) {{
+    if (lower.includes(stem)) {{
+      return ' <a href="/knowledge/' + encodeURIComponent(fname) + '" target="_blank" rel="noopener" style="font-size:9px;text-decoration:none" title="' + fname + '">🔗</a>';
+    }}
+  }}
+  return '';
+}}
 function stripDeadKnowledgeLinks(html) {{
   if (_kbFiles === null) {{
     _kbFiles = fetch('/api/knowledge/files')
       .then(r => r.json())
-      .then(data => {{ _kbFiles = new Set(data.files.map(f => f.name)); return _kbFiles; }})
+      .then(_loadKbFiles)
       .catch(() => {{ _kbFiles = new Set(); return _kbFiles; }});
     return html;
   }}
