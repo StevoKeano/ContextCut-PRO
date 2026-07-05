@@ -3158,7 +3158,6 @@ function setSendStop() {{
 
 function linkCitations(text) {{
   return text
-    .replace(/🔗/g, '')
     .replace(/\\[\\s*\\]/g, '')
     .replace(/\\[(?!https?:\\/\\/|\\w+\\.(?:md|pdf|docx|xlsx|txt)\\])/g, '')
     .replace(/\\[([^\\]]*)\\]\\((?!https?:\\/\\/)[^)]*\\)/g, '')
@@ -3181,8 +3180,9 @@ function stripDeadKnowledgeLinks(html) {{
     return html;
   }}
   if (_kbFiles instanceof Promise) return html;
-  return html.replace(/<a\s+href="\/knowledge\/([^"]+)"[^>]*>🔗<\/a>/g, (m, fname) =>
+  html = html.replace(/<a\s+href="\/knowledge\/([^"]+)"[^>]*>🔗<\/a>/g, (m, fname) =>
     _kbFiles.has(fname) ? m : '');
+  return html.replace(/🔗(?![^<]*>)/g, '');
 }}
 
 function appendMsg(role, text, statHtml) {{
