@@ -591,9 +591,9 @@ def _deep_confidence_scan(
     print(f"[{datetime.now().strftime('%H:%M:%S')}] [DEEP] Text length: {len(text)} chars", flush=True)
 
     try:
-        from deepagents import create_deep_agent
+        from langgraph.prebuilt import create_react_agent
 
-        print(f"[{datetime.now().strftime('%H:%M:%S')}] [DEEP] deepagents imported successfully", flush=True)
+        print(f"[{datetime.now().strftime('%H:%M:%S')}] [DEEP] langgraph loaded", flush=True)
 
         llm = ChatOpenAI(
             model=scan_model,
@@ -603,29 +603,43 @@ def _deep_confidence_scan(
             extra_body={"keep_alive": 0},
         )
 
+        _kb_cache = {}
+        _kb_call_count = 0
+        _KB_MAX_CALLS = 8
+
         @tool
         def search_knowledge_base(query: str) -> str:
             """Search the knowledge base for factual evidence to verify claims."""
+            nonlocal _kb_call_count
+            _kb_call_count += 1
+            if _kb_call_count > _KB_MAX_CALLS:
+                return "[Knowledge base: max searches reached. Use web search instead.]"
+            key = query.strip().lower()
+            if key in _kb_cache:
+                return _kb_cache[key]
             try:
-                ctx_str, meta = qdrant_context(query)
+                ctx_str, meta = qdrant_context(query, min_score=0.25)
                 if not meta:
-                    return "No relevant documents found in knowledge base."
+                    msg = "No relevant documents found in knowledge base."
+                    _kb_cache[key] = msg
+                    return msg
+                _kb_cache[key] = ctx_str
                 return ctx_str
             except Exception as e:
-                return f"Knowledge base search error: {e}"
+                msg = f"Knowledge base search error: {e}"
+                _kb_cache[key] = msg
+                return msg
 
         print(f"[{datetime.now().strftime('%H:%M:%S')}] [DEEP] Creating verifier agent...", flush=True)
-        verifier = create_deep_agent(
-            model=llm,
+        verifier = create_react_agent(
+            llm,
             tools=[search_knowledge_base, web_search],
-            interrupt_on=[],
-            system_prompt="""You are a precise factual verifier. Your task:
+            state_modifier="""You are a precise factual verifier. Your task:
 
 1. Parse the user's text into individual factual claims
 2. For each claim, search the knowledge base for supporting or contradicting evidence
 3. If the knowledge base has no relevant results, use web_search to find evidence online
-4. Use the built-in task tool to spawn parallel sub-agents for independent claims
-5. Return ONLY a valid JSON array (no other text or markdown)
+4. Return ONLY a valid JSON array (no other text or markdown)
 
 CRITICAL: The "text" field MUST be an EXACT VERBATIM substring of the user's original text.
 Copy it character-for-character including any Markdown formatting.
@@ -645,18 +659,20 @@ Strategy:
 - Use "uncertain" only when neither source has relevant information to verify""",
         )
         print(f"[{datetime.now().strftime('%H:%M:%S')}] [DEEP] Verifier agent created, invoking...", flush=True)
-        verifier.recursion_limit = 30
 
-        fut = _DEEP_POOL.submit(
-            verifier.invoke, {
-                "messages": [
-                    HumanMessage(
-                        content=f"Verify this text and return a JSON array:\n\n{text}"
-                    )
-                ]
-            }
-        )
-        result = fut.result(timeout=180)
+        TIMEOUT = 300
+
+        def _run_verifier():
+            try:
+                return verifier.invoke(
+                    {"messages": [HumanMessage(content=f"Verify this text and return a JSON array:\n\n{text}")]},
+                    {"recursion_limit": 15}
+                )
+            except Exception as e:
+                return {"messages": [AIMessage(content=f'[verifier error: {e}]')]}
+
+        fut = _DEEP_POOL.submit(_run_verifier)
+        result = fut.result(timeout=TIMEOUT)
 
         final_msgs = result.get("messages", [])
         content = final_msgs[-1].content if final_msgs else ""
@@ -691,11 +707,11 @@ Strategy:
         _unload_ollama_model(scan_model, upstream)
         return None
     except ImportError as e:
-        print(f"[{datetime.now().strftime('%H:%M:%S')}] [DEEP] deepagents not available: {e}", flush=True)
+        print(f"[{datetime.now().strftime('%H:%M:%S')}] [DEEP] langgraph not available: {e}", flush=True)
         _unload_ollama_model(scan_model, upstream)
-        return [{"text": text, "factual": "uncertain", "reason": "Deep scan requires 'deepagents' package — pip install deepagents"}]
+        return [{"text": text, "factual": "uncertain", "reason": "Deep scan requires langgraph — pip install langgraph"}]
     except concurrent.futures.TimeoutError:
-        print(f"[{datetime.now().strftime('%H:%M:%S')}] [DEEP] Timed out after 120s", flush=True)
+        print(f"[{datetime.now().strftime('%H:%M:%S')}] [DEEP] Timed out after {TIMEOUT}s", flush=True)
         _unload_ollama_model(scan_model, upstream)
         return [{"text": text, "factual": "uncertain", "reason": "Deep scan timed out"}]
     except Exception as e:
