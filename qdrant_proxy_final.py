@@ -3163,15 +3163,15 @@ function setSendStop() {{
 
 function linkCitations(text) {{
   return text
-    .replace(/\\[\\s*\\]/g, '')
-    .replace(/\\[(?!https?:\\/\\/|\\w+\\.(?:md|pdf|docx|xlsx|txt)\\])/g, '')
-    .replace(/\\[([^\\]]*)\\]\\((?!https?:\\/\\/)[^)]*\\)/g, '')
-    .replace(/\\[\\]\\(\\)/g, '')
-    .replace(/(\\b)(\\d[\\d.-]{8,})(\\b)/g,
+    .replace(/\\\\[\\\\s*\\\\]/g, '')
+    .replace(/\\\\[(?!https?:\\/\\/|\\w+\\.(?:md|pdf|docx|xlsx|txt)\\])/g, '')
+    .replace(/\\\\[([^\\]]*)\\]\\((?!https?:\\/\\/)[^)]*\\)/g, '')
+    .replace(/\\\\[\\\\]\\(\\)/g, '')
+    .replace(/(\\\\b)(\\\\d[\\\\d.-]{8,})(\\\\b)/g,
       '<a href="/knowledge/$2" target="_blank" style="text-decoration:none" title="$2">🔗</a>')
-    .replace(/(\\b)([\\w\\-.]+\\.(?:md|pdf|docx|xlsx|txt))(\\b)/g,
+    .replace(/(\\\\b)([\\\\w\\\\-.]+\\.(?:md|pdf|docx|xlsx|txt))(\\\\b)/g,
       '<a href="/knowledge/$2" target="_blank" style="text-decoration:none" title="$2">🔗</a>')
-    .replace(/\\[([\\w\\-.]+\\.(?:md|pdf|docx|xlsx|txt))\\]/g,
+    .replace(/\\\\[([\\\\w\\\\-.]+\\.(?:md|pdf|docx|xlsx|txt))\\\\]/g,
       '<a href="/knowledge/$1" target="_blank" style="text-decoration:none" title="$1">🔗</a>');
 }}
 
@@ -3181,7 +3181,7 @@ function _loadKbFiles(data) {{
   _kbFiles = new Set(data.files.map(f => f.name));
   _kbStems = [];
   for (const f of data.files) {{
-    let stem = f.name.replace(/\.[^.]+$/, '').toLowerCase().replace(/[-_\s]+/g, ' ');
+    let stem = f.name.replace(/\\.[^.]+$/, '').toLowerCase().replace(/[-_\\s]+/g, ' ');
     if (stem.length > 2) _kbStems.push([stem, f.name]);
   }}
   _kbStems.sort((a,b) => b[0].length - a[0].length);
@@ -3206,7 +3206,7 @@ function stripDeadKnowledgeLinks(html) {{
     return html;
   }}
   if (_kbFiles instanceof Promise) return html;
-  html = html.replace(/<a\s+href="\/knowledge\/([^"]+)"[^>]*>🔗<\/a>/g, (m, fname) =>
+  html = html.replace(/<a\\s+href="\\/knowledge\\/([^"]+)"[^>]*>🔗<\\/a>/g, (m, fname) =>
     _kbFiles.has(fname) ? m : '');
   return html.replace(/🔗(?![^<]*>)/g, '');
 }}
