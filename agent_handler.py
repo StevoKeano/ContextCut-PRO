@@ -651,7 +651,9 @@ def _deep_confidence_scan(
                     print(f"[{datetime.now().strftime('%H:%M:%S')}] [DEEP] Web result ({len(result)} chars): {result[:200]!r}", flush=True)
                     if result and not result.startswith("web_search error") and result != "No results found.":
                         urls = re.findall(r'https?://[^\s\n]+', result)
-                        ws_parts.append(f"Query: {q[:80]}\n{result[:1500]}")
+                        # Extract first URL for labeling
+                        first_url = urls[0] if urls else "(no URL)"
+                        ws_parts.append(f"[Web: {q[:60]}]\nSource: {first_url}\n{result[:1200]}")
                         seen_urls.update(urls)
                 except Exception as exc:
                     print(f"[{datetime.now().strftime('%H:%M:%S')}] [DEEP] Web search exception: {exc}", flush=True)
@@ -688,7 +690,9 @@ Each object in the array:
 - "text": EXACT VERBATIM substring from the user's text (copy character-for-character, do not paraphrase)
 - "factual": "correct", "incorrect", or "uncertain"
 - "reason": what the context says and whether it supports or contradicts
-- "source_url": the title/URL of the source, or "unverifiable"
+- "source_url": the URL that supports this specific claim, or "unverifiable"
+
+CRITICAL: source_url must be set to "unverifiable" unless you can DIRECTLY match the claim to a specific source URL from the context. Do NOT guess or reuse a URL across multiple claims — each claim that has evidence must cite its OWN URL. If uncertain, set source_url to "unverifiable".
 
 Use "correct" for claims clearly supported by context.
 Use "incorrect" for claims clearly contradicted by context.
