@@ -404,6 +404,10 @@ def _init_db():
         db.execute("ALTER TABLE sessions ADD COLUMN task_id TEXT DEFAULT ''")
     except sqlite3.OperationalError:
         pass  # column already exists
+    try:
+        db.execute("ALTER TABLE messages ADD COLUMN scan_html TEXT DEFAULT NULL")
+    except sqlite3.OperationalError:
+        pass  # column already exists
     db.commit()
     db.close()
 
@@ -2586,7 +2590,45 @@ async function runScan(text, assistantDiv, bubble, signal) {{
         }}
       }}
     }}
-    if (bubble) bubble.innerHTML = stripDeadKnowledgeLinks(linkCitations(highlighted));
+    // Update conversation history with scan-corrected text (deep mode only)
+    if (deepMode && allMods.length > 0) {{
+      let correctedText = text;
+      for (const p of allMods) {{
+        const before = correctedText.slice(0, p.start);
+        const match = correctedText.slice(p.start, p.end);
+        const after = correctedText.slice(p.end);
+        if (p._isCorrect) {{
+          if (p.source_url && p.source_url !== 'unverifiable' && p.source_url.startsWith('http')) {{
+            correctedText = before + match + ' [source: ' + p.source_url + ']' + after;
+          }} else {{
+            correctedText = before + match + after;
+          }}
+        }} else {{
+          const tag = p.factual === 'incorrect' ? '⚠incorrect' : '⚡uncertain';
+          const reason = p.reason ? ': ' + p.reason : '';
+          correctedText = before + '[' + tag + reason + ': ' + match + ']' + after;
+        }}
+      }}
+      if (conversationHistory.length > 0) {{
+        const last = conversationHistory[conversationHistory.length - 1];
+        if (last.role === 'assistant') {{
+          last.content = correctedText;
+        }}
+      }}
+    }}
+    // Persist scan display HTML to server session (always, even if no passages matched)
+    if (bubble) {{
+      const finalHtml = stripDeadKnowledgeLinks(linkCitations(highlighted));
+      bubble.innerHTML = finalHtml;
+      if (sessionId && conversationHistory.length > 0) {{
+        const idx = conversationHistory.length - 1;
+        fetch('/api/session/scan/' + sessionId, {{
+          method: 'POST',
+          headers: {{'Content-Type': 'application/json'}},
+          body: JSON.stringify({{index: idx, html: finalHtml}})
+        }}).catch(e => console.warn('scan persist:', e));
+      }}
+    }}
     const summary = document.createElement('div');
     summary.style.cssText = 'font-size:10px;color:var(--muted);padding:2px 6px;border-top:1px solid var(--border);margin-top:4px';
     let parts = [];
@@ -2965,7 +3007,7 @@ function getGenerationParams() {{
 async function clearConversation() {{
   if (!sessionId) return;
   try {{
-    await fetch('/api/session/' + sessionId, {{method: 'DELETE'}});
+    await fetch('/api/session/delete/' + sessionId, {{method: 'POST'}});
     conversationHistory = [];
     const msgs = document.getElementById('messages');
     msgs.innerHTML = '<div class="msg assistant"><div class="bubble">Conversation cleared. Starting fresh.</div></div>';
@@ -2980,7 +3022,7 @@ async function clearConversation() {{
 
 async function clearContext() {{
   if (sessionId) {{
-    try {{ await fetch('/api/session/' + sessionId, {{method: 'DELETE'}}); }} catch(e) {{}}
+    try {{ await fetch('/api/session/delete/' + sessionId, {{method: 'POST'}}); }} catch(e) {{}}
     conversationHistory = [];
     const msgs = document.getElementById('messages');
     msgs.innerHTML = '<div class="msg assistant"><div class="bubble">Context cleared. Starting fresh.</div></div>';
@@ -3116,6 +3158,10 @@ function setSendStop() {{
 
 function linkCitations(text) {{
   return text
+    .replace(/\\[([^\\]]*)\\]\\((?!https?:\\/\\/)[^)]*\\)/g, '')
+    .replace(/\\[\\]\\(\\)/g, '')
+    .replace(/(\\b)(\\d[\\d.-]{8,})(\\b)/g,
+      '<a href="/knowledge/$2" target="_blank" style="text-decoration:none" title="$2">🔗</a>')
     .replace(/(\\b)([\\w\\-.]+\\.(?:md|pdf|docx|xlsx|txt))(\\b)/g,
       '<a href="/knowledge/$2" target="_blank" style="text-decoration:none" title="$2">🔗</a>')
     .replace(/\\[([\\w\\-.]+\\.(?:md|pdf|docx|xlsx|txt))\\]/g,
@@ -3375,7 +3421,7 @@ async function sendMessage(taskIdOverride) {{
   let fullText = '';
   let usage = {{}};
   let agentTimeout = setTimeout(() => {{
-    abortController.abort();
+    if (abortController) abortController.abort();
   }}, 310000);
   setSendStop();
   appendMsg('user', text, '');
@@ -3861,7 +3907,7 @@ async function recallSession(sid) {{
     const s = data.session;
     if (!s.history || !s.history.length) return;
     if (s.ctx_limit_reached && !confirm('This session reached the context limit (' + s.total_tokens + ' tokens). Continuing may produce degraded responses.\\n\\nLoad anyway?')) return;
-    await fetch('/api/session/' + sessionId, {{method: 'DELETE'}});
+    await fetch('/api/session/delete/' + sessionId, {{method: 'POST'}});
     await fetch('/api/session/recall/' + s.id);
     sessionId = s.id;
     updateSessionBadge();
@@ -3872,7 +3918,12 @@ async function recallSession(sid) {{
     conversationHistory = s.history.map(m => ({{role: m.role, content: m.content}}));
     const msgs = document.getElementById('messages');
     if (msgs) {{
-      msgs.innerHTML = s.history.map(m => '<div class="msg ' + m.role + '"><div class="bubble">' + (m.role === 'assistant' ? stripDeadKnowledgeLinks(linkCitations(esc(m.content))) : esc(m.content)) + '</div></div>').join('');
+      msgs.innerHTML = s.history.map(m => {{
+        if (m.role === 'assistant' && m.scan_html) {{
+          return '<div class="msg assistant"><div class="bubble">' + stripDeadKnowledgeLinks(m.scan_html) + '</div></div>';
+        }}
+        return '<div class="msg ' + m.role + '"><div class="bubble">' + (m.role === 'assistant' ? stripDeadKnowledgeLinks(linkCitations(esc(m.content))) : esc(m.content)) + '</div></div>';
+      }}).join('');
       msgs.querySelector('.bubble:last-of-type')?.scrollIntoView({{behavior:'instant', block:'end'}});
     }}
     document.querySelectorAll('[style*="z-index:1000"]').forEach(el => el.remove());
@@ -4184,12 +4235,15 @@ class DashboardHandler(_SuppressBrokenPipe, BaseHTTPRequestHandler):
                         row = cur.fetchone()
                         if row:
                             mcur = db.execute(
-                                "SELECT role, content FROM messages WHERE session_id=? ORDER BY position",
+                                "SELECT role, content, scan_html FROM messages WHERE session_id=? ORDER BY position",
                                 (sid,),
                             )
-                            history = [
-                                {"role": r, "content": c} for r, c in mcur.fetchall()
-                            ]
+                            history = []
+                            for row in mcur.fetchall():
+                                entry = {"role": row[0], "content": row[1]}
+                                if row[2]:
+                                    entry["scan_html"] = row[2]
+                                history.append(entry)
                             global _current_sid
                             _current_sid = sid
                             _sessions[sid] = {
@@ -5538,6 +5592,57 @@ class DashboardHandler(_SuppressBrokenPipe, BaseHTTPRequestHandler):
                 self.wfile.write(err)
             return
 
+        if self.path.startswith("/api/session/delete/"):
+            sid = self.path.split("/api/session/delete/")[-1].split("?")[0]
+            if sid:
+                with _lock:
+                    clear_session(sid)
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json")
+            self.end_headers()
+            self.wfile.write(b'{"ok":true}')
+            return
+
+        if self.path.startswith("/api/session/scan/"):
+            try:
+                body = json.loads(raw_body)
+                sid = self.path.split("/api/session/scan/")[-1].split("?")[0]
+                msg_pos = body.get("index", -1)
+                scan_html = body.get("html", "")
+                print(f"[{datetime.now().strftime('%H:%M:%S')}] [Scan] Persist sid={sid!r} pos={msg_pos} html_len={len(scan_html)}", flush=True)
+                if msg_pos >= 0 and scan_html:
+                    with _lock:
+                        s = _sessions.get(sid)
+                        print(f"[{datetime.now().strftime('%H:%M:%S')}] [Scan] Session found={s is not None} history_len={len(s['history']) if s else 0}", flush=True)
+                        if s and 0 <= msg_pos < len(s["history"]):
+                            s["history"][msg_pos]["scan_html"] = scan_html
+                            print(f"[{datetime.now().strftime('%H:%M:%S')}] [Scan] Stored in-memory", flush=True)
+                    try:
+                        db = _get_db()
+                        db.execute(
+                            "UPDATE messages SET scan_html=? WHERE session_id=? AND position=?",
+                            (scan_html, sid, msg_pos),
+                        )
+                        db.commit()
+                        db.close()
+                        print(f"[{datetime.now().strftime('%H:%M:%S')}] [Scan] Persisted to DB", flush=True)
+                    except Exception as e:
+                        print(f"[{datetime.now().strftime('%H:%M:%S')}] [Scan] DB error: {e}", flush=True)
+                resp = json.dumps({"ok": True}).encode()
+                self.send_response(200)
+                self.send_header("Content-Type", "application/json")
+                self.send_header("Content-Length", str(len(resp)))
+                self.end_headers()
+                self.wfile.write(resp)
+            except Exception as e:
+                err = json.dumps({"error": str(e)}).encode()
+                self.send_response(400)
+                self.send_header("Content-Type", "application/json")
+                self.send_header("Content-Length", str(len(err)))
+                self.end_headers()
+                self.wfile.write(err)
+            return
+
         if self.path == "/api/swarm/research":
             try:
                 body = json.loads(raw_body)
@@ -6034,6 +6139,21 @@ class DashboardHandler(_SuppressBrokenPipe, BaseHTTPRequestHandler):
             self.send_response(502)
             self.end_headers()
             self.wfile.write(str(e).encode())
+
+    def do_DELETE(self):
+        if self.path.startswith("/api/session/"):
+            sid = self.path.split("/api/session/")[-1].split("?")[0]
+            if sid:
+                with _lock:
+                    clear_session(sid)
+                self.send_response(200)
+                self.send_header("Content-Type", "application/json")
+                self.end_headers()
+                self.wfile.write(b'{"ok":true}')
+                return
+        self.send_response(404)
+        self.end_headers()
+        self.wfile.write(b'{"error":"Not found"}')
 
 
 # ── Main ──────────────────────────────────────────────────────────────────────
