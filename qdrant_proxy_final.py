@@ -3158,6 +3158,9 @@ function setSendStop() {{
 
 function linkCitations(text) {{
   return text
+    .replace(/🔗/g, '')
+    .replace(/\\[\\s*\\]/g, '')
+    .replace(/\\[(?!https?:\\/\\/|\\w+\\.(?:md|pdf|docx|xlsx|txt)\\])/g, '')
     .replace(/\\[([^\\]]*)\\]\\((?!https?:\\/\\/)[^)]*\\)/g, '')
     .replace(/\\[\\]\\(\\)/g, '')
     .replace(/(\\b)(\\d[\\d.-]{8,})(\\b)/g,
