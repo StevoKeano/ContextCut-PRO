@@ -692,7 +692,7 @@ Each object in the array:
 - "reason": what the context says and whether it supports or contradicts
 - "source_url": the URL that supports this specific claim, or "unverifiable"
 
-CRITICAL: source_url must be set to "unverifiable" unless you can DIRECTLY match the claim to a specific source URL from the context. Do NOT guess or reuse a URL across multiple claims — each claim that has evidence must cite its OWN URL. If uncertain, set source_url to "unverifiable".
+CRITICAL: source_url must be an actual URL (starting with http:// or https://) extracted verbatim from the context. Do NOT make up text descriptions of sources — only use real URLs you see in the context. If you cannot find a specific URL for a claim, set source_url to "unverifiable". Each claim must cite its OWN URL — never reuse the same URL across claims unless they share the exact same source.
 
 Use "correct" for claims clearly supported by context.
 Use "incorrect" for claims clearly contradicted by context.

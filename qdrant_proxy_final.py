@@ -2560,11 +2560,16 @@ async function runScan(text, assistantDiv, bubble, signal) {{
         const after = highlighted.slice(p.end);
         const icon = p.factual === 'incorrect' ? '\\u26a0\\ufe0f ' : '\\u26a1 ';
         const title = esc('factual=' + p.factual + ': ' + (p.reason || ''));
-        let link = '';
-        if (p.source_url && p.source_url !== 'unverifiable' && p.source_url.startsWith('http')) {{
-          link = ' <a href="' + esc(p.source_url) + '" target="_blank" rel="noopener" style="font-size:9px;color:#3b82f6;text-decoration:underline;white-space:nowrap">source</a>';
+        let src = '';
+        if (p.source_url && p.source_url !== 'unverifiable') {{
+          const label = esc(p.source_url);
+          if (p.source_url.startsWith('http')) {{
+            src = ' <a href="' + label + '" target="_blank" rel="noopener" style="font-size:9px;color:#3b82f6;text-decoration:underline;white-space:nowrap">source</a>';
+          }} else {{
+            src = ' <span style="font-size:9px;color:var(--muted);font-style:italic">' + label + '</span>';
+          }}
         }}
-        highlighted = before + '<span class=\\"suspect\\" title=\\"' + title + '\\">' + icon + esc(match) + '</span>' + link + after;
+        highlighted = before + '<span class=\\"suspect\\" title=\\"' + title + '\\">' + icon + esc(match) + '</span>' + src + after;
       }}
     }}
     if (bubble) bubble.innerHTML = linkCitations(highlighted);
@@ -2621,11 +2626,16 @@ async function testScan() {{
           const after = highlighted.slice(p.end);
           const icon = p.factual === 'incorrect' ? '\\u26a0\\ufe0f ' : '\\u26a1 ';
           const title = esc('factual=' + p.factual + ': ' + (p.reason || ''));
-          let link = '';
-          if (p.source_url && p.source_url !== 'unverifiable' && p.source_url.startsWith('http')) {{
-            link = ' <a href="' + esc(p.source_url) + '" target="_blank" rel="noopener" style="font-size:9px;color:#3b82f6;text-decoration:underline;white-space:nowrap">source</a>';
+          let src = '';
+          if (p.source_url && p.source_url !== 'unverifiable') {{
+            const label = esc(p.source_url);
+            if (p.source_url.startsWith('http')) {{
+              src = ' <a href="' + label + '" target="_blank" rel="noopener" style="font-size:9px;color:#3b82f6;text-decoration:underline;white-space:nowrap">source</a>';
+            }} else {{
+              src = ' <span style="font-size:9px;color:var(--muted);font-style:italic">' + label + '</span>';
+            }}
           }}
-          highlighted = before + '<span class=\\"suspect\\" title=\\"' + title + '\\">' + icon + esc(match) + '</span>' + link + after;
+          highlighted = before + '<span class=\\"suspect\\" title=\\"' + title + '\\">' + icon + esc(match) + '</span>' + src + after;
         }}
       }}
     }}
