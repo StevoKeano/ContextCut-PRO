@@ -2542,9 +2542,16 @@ async function runScan(text, assistantDiv, bubble, signal) {{
     let highlighted = text;
     let flags = {{incorrect:0, uncertain:0, correct:0}};
     let flagged = [];
+    let correctWithSrc = [];
     for (const p of sd.passages) {{
       const factual = p.factual;
-      if (factual === 'correct') {{ flags.correct++; continue; }}
+      if (factual === 'correct') {{
+        flags.correct++;
+        if (p.source_url && p.source_url !== 'unverifiable' && p.start != null && p.end != null && p.start >= 0 && p.end <= text.length && p.text && p.text.length > 5) {{
+          correctWithSrc.push(p);
+        }}
+        continue;
+      }}
       if (factual === 'incorrect' || factual === 'uncertain') {{
         flags[factual]++;
         if (p.text && p.text.length > 5 && p.start != null && p.end != null && p.start >= 0 && p.end <= text.length) {{
@@ -2552,14 +2559,14 @@ async function runScan(text, assistantDiv, bubble, signal) {{
         }}
       }}
     }}
-    if (flagged.length > 0) {{
-      flagged.sort((a,b) => b.start - a.start);
-      for (const p of flagged) {{
+    // Combine and sort all passages that need modification (reverse order by start)
+    const allMods = [...flagged, ...correctWithSrc.map(p => ({{...p, _isCorrect: true}}))];
+    if (allMods.length > 0) {{
+      allMods.sort((a,b) => b.start - a.start);
+      for (const p of allMods) {{
         const before = highlighted.slice(0, p.start);
         const match = highlighted.slice(p.start, p.end);
         const after = highlighted.slice(p.end);
-        const icon = p.factual === 'incorrect' ? '\\u26a0\\ufe0f ' : '\\u26a1 ';
-        const title = esc('factual=' + p.factual + ': ' + (p.reason || ''));
         let suffix = '';
         if (p.source_url && p.source_url !== 'unverifiable') {{
           const label = esc(p.source_url);
@@ -2569,7 +2576,14 @@ async function runScan(text, assistantDiv, bubble, signal) {{
             suffix = ' <span style="font-size:9px;color:var(--muted);font-style:italic">' + label + '</span>';
           }}
         }}
-        highlighted = before + '<span class=\\"suspect\\" title=\\"' + title + '\\">' + icon + esc(match) + '</span>' + suffix + after;
+        if (p._isCorrect) {{
+          // Correct passage: no highlight/icon, just append source link
+          highlighted = before + esc(match) + suffix + after;
+        }} else {{
+          const icon = p.factual === 'incorrect' ? '\\u26a0\\ufe0f ' : '\\u26a1 ';
+          const title = esc('factual=' + p.factual + ': ' + (p.reason || ''));
+          highlighted = before + '<span class=\\"suspect\\" title=\\"' + title + '\\">' + icon + esc(match) + '</span>' + suffix + after;
+        }}
       }}
     }}
     if (bubble) bubble.innerHTML = linkCitations(highlighted);
