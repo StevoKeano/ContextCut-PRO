@@ -1,7 +1,5 @@
 #!/usr/bin/env python3
 # Version: fbe5ec4 — grep for this to verify you're on the latest commit
-import warnings
-warnings.filterwarnings('ignore', category=SyntaxWarning)
 """
 ContextCut-PRO — Qdrant-enriching reverse proxy for any local LLM endpoint.
 
@@ -3183,7 +3181,7 @@ function _loadKbFiles(data) {{
   _kbFiles = new Set(data.files.map(f => f.name));
   _kbStems = [];
   for (const f of data.files) {{
-    let stem = f.name.replace(/\.[^.]+$/, '').toLowerCase().replace(/[-_\s]+/g, ' ');
+    let stem = f.name.replace(/\\.[^.]+$/, '').toLowerCase().replace(/[-_\\s]+/g, ' ');
     if (stem.length > 2) _kbStems.push([stem, f.name]);
   }}
   _kbStems.sort((a,b) => b[0].length - a[0].length);
@@ -3208,7 +3206,7 @@ function stripDeadKnowledgeLinks(html) {{
     return html;
   }}
   if (_kbFiles instanceof Promise) return html;
-  html = html.replace(/<a\s+href="\/knowledge\/([^"]+)"[^>]*>🔗<\/a>/g, (m, fname) =>
+  html = html.replace(/<a\\s+href="\\/knowledge\\/([^"]+)"[^>]*>🔗<\\/a>/g, (m, fname) =>
     _kbFiles.has(fname) ? m : '');
   return html.replace(/🔗(?![^<]*>)/g, '');
 }}
@@ -5833,6 +5831,14 @@ class DashboardHandler(_SuppressBrokenPipe, BaseHTTPRequestHandler):
                 input_messages = chat_history + [HumanMessage(content=message)]
                 if resume_context:
                     input_messages.insert(0, SystemMessage(content=resume_context))
+
+                ctx, hits_meta = qdrant_context(message)
+                session["_kb_context"] = ctx
+                if ctx:
+                    input_messages.insert(0, SystemMessage(
+                        content="## Relevant context (semantic search):\n\n" + ctx + "\n\n---"
+                    ))
+
                 shell_mode = session.get("shell_confirm_mode", "always")
 
                 import asyncio
