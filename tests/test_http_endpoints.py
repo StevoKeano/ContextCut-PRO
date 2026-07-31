@@ -5,6 +5,7 @@ Uses the ``make_handler`` fixture to construct handlers without a running server
 """
 
 import json
+import urllib.error
 from pathlib import Path
 from unittest.mock import patch
 
@@ -180,3 +181,114 @@ class TestProxyHandler:
         status, raw = make_handler("/api/session/test123", "DELETE", handler_cls=ProxyHandler)
         assert status == 200
         assert b"cleared" in raw
+
+    # ── Upstream retry (POST-only) ──────────────────────────────────────────
+
+    @staticmethod
+    def _fake_resp(status=200, body=b'{"choices":[{"message":{"content":"hi"}}]}'):
+        import io as _io
+
+        class _FakeResp:
+            def __init__(self):
+                self.status = status
+
+            def getheaders(self):
+                return [("Content-Type", "application/json")]
+
+            def read(self, n=None):
+                return body
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *a):
+                return False
+
+            def close(self):
+                pass
+
+        return _FakeResp()
+
+    @staticmethod
+    def _fake_http_error(code):
+        import io as _io
+
+        return urllib.error.HTTPError(
+            "http://upstream", code, "err", None, _io.BytesIO(b"boom")
+        )
+
+    @patch("qdrant_proxy_final.qdrant_context", return_value=("", []))
+    @patch("qdrant_proxy_final.add_to_history")
+    @patch("qdrant_proxy_final.time.sleep")
+    def test_post_retries_then_succeeds(self, mock_sleep, mock_history, mock_qd, make_handler):
+        """Network error twice, then success — should retry and return 200."""
+        from qdrant_proxy_final import ProxyHandler
+
+        fail = urllib.error.URLError("connection reset")
+        ok = TestProxyHandler._fake_resp()
+        with patch(
+            "qdrant_proxy_final.urllib.request.urlopen",
+            side_effect=[fail, fail, ok],
+        ) as m_urlopen:
+            status, _ = make_handler(
+                "/v1/chat/completions", "POST",
+                b'{"messages":[{"role":"user","content":"hi"}],"model":"m"}',
+                handler_cls=ProxyHandler,
+            )
+        assert status == 200
+        assert m_urlopen.call_count == 3
+
+    @patch("qdrant_proxy_final.qdrant_context", return_value=("", []))
+    @patch("qdrant_proxy_final.add_to_history")
+    @patch("qdrant_proxy_final.time.sleep")
+    def test_post_5xx_retries_then_passthrough(self, mock_sleep, mock_history, mock_qd, make_handler):
+        """Three 5xx responses — retries then returns the last 5xx code."""
+        from qdrant_proxy_final import ProxyHandler
+
+        with patch(
+            "qdrant_proxy_final.urllib.request.urlopen",
+            side_effect=[
+                TestProxyHandler._fake_http_error(502),
+                TestProxyHandler._fake_http_error(503),
+                TestProxyHandler._fake_http_error(504),
+            ],
+        ) as m_urlopen:
+            status, raw = make_handler(
+                "/v1/chat/completions", "POST",
+                b'{"messages":[{"role":"user","content":"hi"}],"model":"m"}',
+                handler_cls=ProxyHandler,
+            )
+        assert status == 504
+        assert m_urlopen.call_count == 3
+
+    @patch("qdrant_proxy_final.qdrant_context", return_value=("", []))
+    @patch("qdrant_proxy_final.add_to_history")
+    @patch("qdrant_proxy_final.time.sleep")
+    def test_post_4xx_no_retry(self, mock_sleep, mock_history, mock_qd, make_handler):
+        """400 — client error, no retry, single call."""
+        from qdrant_proxy_final import ProxyHandler
+
+        with patch(
+            "qdrant_proxy_final.urllib.request.urlopen",
+            side_effect=[TestProxyHandler._fake_http_error(400)],
+        ) as m_urlopen:
+            status, _ = make_handler(
+                "/v1/chat/completions", "POST",
+                b'{"messages":[{"role":"user","content":"hi"}],"model":"m"}',
+                handler_cls=ProxyHandler,
+            )
+        assert status == 400
+        assert m_urlopen.call_count == 1
+
+    @patch("qdrant_proxy_final.time.sleep")
+    def test_get_no_retry(self, mock_sleep, make_handler):
+        """GET requests are NOT retried (POST-only policy)."""
+        from qdrant_proxy_final import ProxyHandler
+
+        with patch(
+            "qdrant_proxy_final.urllib.request.urlopen",
+            side_effect=urllib.error.URLError("down"),
+        ) as m_urlopen:
+            status, _ = make_handler("/v1/models", "GET", handler_cls=ProxyHandler)
+        assert status == 502
+        assert m_urlopen.call_count == 1

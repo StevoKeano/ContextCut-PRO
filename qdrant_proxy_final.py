@@ -214,6 +214,8 @@ TOP_K = int(os.getenv("CONTEXTCUT_TOP_K", "5"))
 MIN_SCORE = float(os.getenv("CONTEXTCUT_MIN_SCORE", "0.50"))
 MAX_CTX_CHARS = int(os.getenv("CONTEXTCUT_MAX_CTX_CHARS", str(CTX_LIMIT * 3)))
 DEFAULT_MODEL = os.getenv("CONTEXTCUT_MODEL", "qwen3:14b-q8_0")
+PROXY_RETRIES = int(os.getenv("CONTEXTCUT_RETRIES", "2"))
+PROXY_RETRY_BACKOFF = float(os.getenv("CONTEXTCUT_RETRY_BACKOFF", "1.0"))
 
 # ── Dynamic Provider Settings ────────────────────────────────────────────────
 PROVIDERS = {
@@ -1206,8 +1208,53 @@ class ProxyHandler(_SuppressBrokenPipe, BaseHTTPRequestHandler):
                 req.add_header(k, v)
         if raw_body:
             req.add_header("Content-Length", str(len(raw_body)))
+
+        # ── Retryable upstream call (POST only) ────────────────────────────────
+        attempt = 0
+        while True:
+            try:
+                resp = urllib.request.urlopen(req, timeout=120)
+                break
+            except urllib.error.HTTPError as e:
+                if method == "POST" and e.code >= 500 and attempt < PROXY_RETRIES:
+                    attempt += 1
+                    _slog(
+                        f"[contextcut] retry {attempt}/{PROXY_RETRIES} on HTTP {e.code} for {self.path}"
+                    )
+                    time.sleep(PROXY_RETRY_BACKOFF * attempt)
+                    continue
+                err_body = e.read()
+                self.send_response(e.code)
+                self.send_header("Content-Type", "text/plain")
+                self.send_header("Content-Length", str(len(err_body)))
+                self.end_headers()
+                self.wfile.write(err_body)
+                return
+            except (
+                urllib.error.URLError,
+                ConnectionError,
+                socket.timeout,
+                TimeoutError,
+            ) as e:
+                if method == "POST" and attempt < PROXY_RETRIES:
+                    attempt += 1
+                    _slog(
+                        f"[contextcut] retry {attempt}/{PROXY_RETRIES} on {type(e).__name__}: {e}"
+                    )
+                    time.sleep(PROXY_RETRY_BACKOFF * attempt)
+                    continue
+                self.send_response(502)
+                self.end_headers()
+                self.wfile.write(str(e).encode())
+                return
+            except Exception as e:
+                self.send_response(502)
+                self.end_headers()
+                self.wfile.write(str(e).encode())
+                return
+
         try:
-            with urllib.request.urlopen(req, timeout=120) as resp:
+            with resp:
                 self.send_response(resp.status)
                 for k, v in resp.getheaders():
                     if k.lower() not in ("transfer-encoding", "content-length"):
@@ -1263,13 +1310,6 @@ class ProxyHandler(_SuppressBrokenPipe, BaseHTTPRequestHandler):
                                 add_to_history(session_id, "assistant", assistant_msg)
                         except Exception:
                             pass
-        except urllib.error.HTTPError as e:
-            err_body = e.read()
-            self.send_response(e.code)
-            self.send_header("Content-Type", "text/plain")
-            self.send_header("Content-Length", str(len(err_body)))
-            self.end_headers()
-            self.wfile.write(err_body)
         except Exception as e:
             self.send_response(502)
             self.end_headers()
@@ -6082,7 +6122,7 @@ class DashboardHandler(_SuppressBrokenPipe, BaseHTTPRequestHandler):
                             "tokens_after": tok,
                             "ctx_limit": CTX_LIMIT,
                             "pct": round(tok / CTX_LIMIT * 100, 1),
-                            "hits": [],
+                            "hits": hits_meta,
                             "type": "agent",
                         }
                     )
@@ -6120,7 +6160,7 @@ class DashboardHandler(_SuppressBrokenPipe, BaseHTTPRequestHandler):
                             "tokens_after": tok,
                             "ctx_limit": CTX_LIMIT,
                             "pct": round(tok / CTX_LIMIT * 100, 1),
-                            "hits": [],
+                            "hits": hits_meta,
                             "type": "agent",
                         }
                     )
@@ -6312,6 +6352,7 @@ if __name__ == "__main__":
     print(f"[contextcut] Proxy      → http://127.0.0.1:{LISTEN_PORT} → {UPSTREAM}")
     print(f"[contextcut] Qdrant     → {QDRANT_HOST}:{QDRANT_PORT} / {COLLECTION}")
     print(f"[contextcut] Min score  → {MIN_SCORE}  Top-K → {TOP_K}  CTX → {CTX_LIMIT}")
+    print(f"[contextcut] Retries    → {PROXY_RETRIES} (POST, {PROXY_RETRY_BACKOFF}s backoff)")
     print(f"[contextcut] Tokens     → {TOKEN_METHOD}")
     print(
         f"[contextcut] Params     → temp={DEFAULT_TEMP} top_p={DEFAULT_TOP_P} max_tokens={DEFAULT_MAX_TK}"
