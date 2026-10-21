@@ -294,8 +294,7 @@ def knowledge_stats() -> dict:
 def ingest_file(filename: str) -> str:
     """Ingest a single file (by name, relative to KB_DIR) into the Qdrant vector store. Re-embeds all chunks."""
     path = (KB_DIR / filename).resolve()
-    kb_resolved = KB_DIR.resolve()
-    if not str(path).startswith(str(kb_resolved)):
+    if not path.is_relative_to(KB_DIR.resolve()):
         return f"ERROR: path must be under {KB_DIR}"
     if not path.exists():
         return f"ERROR: file not found: {path}"

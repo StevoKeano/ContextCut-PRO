@@ -42,6 +42,7 @@ from pathlib import Path
 from datetime import datetime
 from http.server import HTTPServer, BaseHTTPRequestHandler
 from socketserver import ThreadingMixIn
+from html.parser import HTMLParser
 
 _VOYAGE_AVAILABLE = False
 _voyage_mod = None
@@ -216,6 +217,91 @@ MAX_CTX_CHARS = int(os.getenv("CONTEXTCUT_MAX_CTX_CHARS", str(CTX_LIMIT * 3)))
 DEFAULT_MODEL = os.getenv("CONTEXTCUT_MODEL", "qwen3:14b-q8_0")
 PROXY_RETRIES = int(os.getenv("CONTEXTCUT_RETRIES", "2"))
 PROXY_RETRY_BACKOFF = float(os.getenv("CONTEXTCUT_RETRY_BACKOFF", "1.0"))
+
+
+def _in_kb_dir(path) -> bool:
+    try:
+        return Path(path).resolve().is_relative_to(KB_DIR.resolve())
+    except (OSError, ValueError):
+        return False
+
+
+class _ScanHTMLSanitizer(HTMLParser):
+    """Allowlist sanitizer for scan-display HTML persisted from the dashboard.
+
+    Only the tags/attributes the scan UI legitimately produces are kept;
+    everything else (scripts, event handlers, external URLs, data: URIs) is
+    stripped, so a persisted blob can never execute script or load a new
+    resource on recall."""
+
+    _ALLOWED_TAGS = {"div", "span", "a", "br", "p", "strong", "em", "b", "i", "code", "pre", "ul", "ol", "li"}
+    _ALLOWED_ATTRS = {"class", "href", "title", "target", "rel", "style"}
+    _VOID = {"br"}
+    _SAFE_STYLE = re.compile(r"^[a-zA-Z0-9#%(),.\-\s:;]+$")
+    _BAD_STYLE = re.compile(r"url\s*\(|expression|javascript:|@import", re.I)
+
+    def __init__(self):
+        super().__init__(convert_charrefs=True)
+        self.parts: list[str] = []
+        self._suppress_depth = 0
+
+    def handle_starttag(self, tag, attrs):
+        if tag in ("script", "style"):
+            self._suppress_depth += 1
+            return
+        if self._suppress_depth or tag not in self._ALLOWED_TAGS:
+            return
+        out = []
+        for k, v in attrs:
+            if k not in self._ALLOWED_ATTRS:
+                continue
+            if k == "href":
+                if not (v or "").startswith("/knowledge/"):
+                    continue
+            elif k == "style":
+                if not v or not self._SAFE_STYLE.match(v) or self._BAD_STYLE.search(v):
+                    continue
+            elif k == "target":
+                v = "_blank"
+            elif k == "rel":
+                v = "noopener noreferrer"
+            elif v is None:
+                continue
+            out.append(f' {k}="{html.escape(v, quote=True)}"')
+        self.parts.append(f"<{tag}{''.join(out)}>")
+
+    def handle_startendtag(self, tag, attrs):
+        if tag in ("script", "style") or self._suppress_depth:
+            return
+        self.handle_starttag(tag, attrs)
+
+    def handle_endtag(self, tag):
+        if tag in ("script", "style"):
+            if self._suppress_depth:
+                self._suppress_depth -= 1
+            return
+        if self._suppress_depth:
+            return
+        if tag in self._ALLOWED_TAGS and tag not in self._VOID:
+            self.parts.append(f"</{tag}>")
+
+    def handle_data(self, data):
+        if data and not self._suppress_depth:
+            self.parts.append(html.escape(data, quote=False))
+
+    def result(self) -> str:
+        return "".join(self.parts)
+
+
+def sanitize_scan_html(raw: str) -> str:
+    p = _ScanHTMLSanitizer()
+    try:
+        p.feed(raw or "")
+        p.close()
+    except Exception:
+        return ""
+    return p.result()
+
 
 # ── Dynamic Provider Settings ────────────────────────────────────────────────
 PROVIDERS = {
@@ -2750,7 +2836,7 @@ async function testScan() {{
 }}
 
 function esc(s) {{
-  return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/\\n/g,'<br>');
+  return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;').replace(/'/g,'&#39;').replace(/\\n/g,'<br>');
 }}
 
 async function shellConfirm(btn, allow) {{
@@ -4604,10 +4690,7 @@ class DashboardHandler(_SuppressBrokenPipe, BaseHTTPRequestHandler):
             fpath = Path(fp)
             if (
                 not fpath.suffix.lower() in ALLOWED_EXT
-                or not fpath.resolve()
-                .absolute()
-                .as_posix()
-                .startswith(KB_DIR.resolve().absolute().as_posix())
+                or not _in_kb_dir(fpath)
             ):
                 body = json.dumps({"error": "Forbidden"}).encode()
                 self.send_response(403)
@@ -4900,9 +4983,8 @@ class DashboardHandler(_SuppressBrokenPipe, BaseHTTPRequestHandler):
         if self.path.startswith("/knowledge/"):
             filename = self.path.split("/knowledge/")[-1]
             fpath = (KB_DIR / filename).resolve()
-            kb_resolved = KB_DIR.resolve()
             ext = fpath.suffix.lower()
-            if not str(fpath).startswith(str(kb_resolved)) or ext not in ALLOWED_EXT:
+            if not _in_kb_dir(fpath) or ext not in ALLOWED_EXT:
                 self.send_response(403)
                 self.end_headers()
                 self.wfile.write(b"Forbidden")
@@ -5472,10 +5554,7 @@ class DashboardHandler(_SuppressBrokenPipe, BaseHTTPRequestHandler):
                 fpath = Path(fp)
                 if (
                     not fpath.suffix.lower() in ALLOWED_EXT
-                    or not fpath.resolve()
-                    .absolute()
-                    .as_posix()
-                    .startswith(KB_DIR.resolve().absolute().as_posix())
+                    or not _in_kb_dir(fpath)
                 ):
                     resp = json.dumps({"error": "Forbidden"}).encode()
                     self.send_response(403)
@@ -5564,10 +5643,7 @@ class DashboardHandler(_SuppressBrokenPipe, BaseHTTPRequestHandler):
                 fpath = Path(fp)
                 if (
                     not fpath.suffix.lower() in ALLOWED_EXT
-                    or not fpath.resolve()
-                    .absolute()
-                    .as_posix()
-                    .startswith(KB_DIR.resolve().absolute().as_posix())
+                    or not _in_kb_dir(fpath)
                 ):
                     resp = json.dumps({"error": "Forbidden"}).encode()
                     self.send_response(403)
@@ -5686,7 +5762,7 @@ class DashboardHandler(_SuppressBrokenPipe, BaseHTTPRequestHandler):
                 body = json.loads(raw_body)
                 sid = self.path.split("/api/session/scan/")[-1].split("?")[0]
                 msg_pos = body.get("index", -1)
-                scan_html = body.get("html", "")
+                scan_html = sanitize_scan_html(body.get("html", ""))
                 print(f"[{datetime.now().strftime('%H:%M:%S')}] [Scan] Persist sid={sid!r} pos={msg_pos} html_len={len(scan_html)}", flush=True)
                 if msg_pos >= 0 and scan_html:
                     with _lock:
@@ -5826,7 +5902,7 @@ class DashboardHandler(_SuppressBrokenPipe, BaseHTTPRequestHandler):
                     CheckpointManager,
                     SystemMessage,
                 )
-                from langchain_core.messages import HumanMessage
+                from langchain_core.messages import HumanMessage, AIMessage
 
                 # ── Task ID & Resume ────────────────────────────────────────────
                 ckpt_mgr = CheckpointManager()
