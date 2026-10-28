@@ -260,7 +260,7 @@ def ingest_file(path: Path):
     processing_queue.add(path.name)
     
     try:
-        if not path.exists():
+        if not path.exists:
             return
         raw_text = extract_text(path)
         if not raw_text:
@@ -371,7 +371,7 @@ def ingest_all():
 # ── Query ─────────────────────────────────────────────────────────────────────
 def query(q: str, top_k: int = 5):
     ensure_collection()
-    result = safe_embed([q], model=VOYAGE_MODEL, input_type="query")
+    result = vc.embed([q], model=VOYAGE_MODEL, input_type="query")
     vector = result.embeddings[0]
     hits   = qc.query_points(collection_name=COLLECTION, query=vector, limit=top_k).points
     print(f"\nTop {top_k} results for: \"{q}\"\n")

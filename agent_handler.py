@@ -1183,7 +1183,8 @@ def ingest_file(filename: str) -> str:
         from pathlib import Path
 
         fpath = (Path(KB_DIR) / filename).resolve()
-        if not fpath.is_relative_to(Path(KB_DIR).resolve()):
+        kb_resolved = Path(KB_DIR).resolve()
+        if not str(fpath).startswith(str(kb_resolved)):
             return f"Access denied: file must be under KB_DIR ({KB_DIR})"
         if not fpath.exists():
             return f"File not found: {fpath}"
