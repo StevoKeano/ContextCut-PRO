@@ -22,5 +22,6 @@ ollama==0.6.2
 uvicorn==0.48.0
 fastmcp==3.4.2
 deepagents==0.6.11
+rank-bm25==0.2.2
 pytest==9.0.3
 pytest-mock==3.15.1

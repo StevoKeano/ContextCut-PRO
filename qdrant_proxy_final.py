@@ -63,6 +63,17 @@ from qdrant_client.models import (
     MatchValue,
 )
 
+# BM25 hybrid search
+try:
+    from bm25_store import BM25Index, BM25_AVAILABLE
+except Exception as e:
+    print(f"[contextcut] BM25 import failed: {e}")
+    BM25_AVAILABLE = False
+    BM25Index = None
+
+_bm25_index = None
+_bm25_lock = threading.Lock()
+
 EMBED_DIM_MAP = {
     "nomic-embed-text": 768,
     "nomic-embed-text-v1.5": 768,
@@ -1045,6 +1056,26 @@ def ensure_collection_dim():
         print(f"[contextcut] Collection dimension check warning: {e}")
 
 
+def _get_bm25_index(qclient):
+    global _bm25_index
+    if not BM25_AVAILABLE or BM25Index is None:
+        return None
+    with _bm25_lock:
+        if _bm25_index is None:
+            try:
+                _bm25_index = BM25Index(qclient, COLLECTION, ttl_seconds=30)
+                _bm25_index.ensure_fresh()
+            except Exception as e:
+                _slog(f"[contextcut] BM25 index init error: {e}")
+                _bm25_index = None
+        else:
+            try:
+                _bm25_index.ensure_fresh()
+            except Exception:
+                pass
+        return _bm25_index
+
+
 def qdrant_context(query: str) -> tuple[str, list[dict]]:
     try:
         emb = _safe_embed(query, input_type="query")
@@ -1054,6 +1085,8 @@ def qdrant_context(query: str) -> tuple[str, list[dict]]:
             )
             return "", []
         vc, qclient = get_clients()
+
+        # Dense (vector) results
         response = qclient.query_points(
             collection_name=COLLECTION,
             query=emb,
@@ -1061,7 +1094,8 @@ def qdrant_context(query: str) -> tuple[str, list[dict]]:
             with_payload=True,
             with_vectors=False,
         )
-        chunks, meta, seen_ids = [], [], set()
+        chunks_out, meta_out, seen_ids = [], [], set()
+        dense_map = {}
         for h in response.points:
             score = round(h.score, 3)
             if score < MIN_SCORE:
@@ -1070,48 +1104,112 @@ def qdrant_context(query: str) -> tuple[str, list[dict]]:
                 )
                 continue
             seen_ids.add(h.id)
+            dense_map[h.id] = {
+                "score": score,
+                "payload": h.payload,
+                "rank": len(dense_map),  # order by query_points results
+            }
             src = h.payload.get("filename", h.payload.get("source", "?"))
             text = h.payload.get("text", "")
-            chunks.append(f"[{src} | relevance={score}]\n{text}")
-            meta.append({"source": src, "score": score, "chars": len(text)})
+            chunks_out.append(f"[{src} | relevance={score}]\n{text}")
+            meta_out.append({"source": src, "score": score, "chars": len(text), "src": "vector"})
 
-        # keyword fallback: proper nouns from query → substring match in Python
-        query_words = query.split()
-        proper_nouns = [w for w in query_words if len(w) > 2 and w[0].isupper()]
-        if proper_nouns:
+        # Try hybrid BM25 if enabled via header/env heuristic? We'll also check a global flag
+        use_hybrid = os.getenv("CONTEXTCUT_HYBRID", "1").strip().lower() not in ("0", "false", "no", "off")
+        if use_hybrid and BM25_AVAILABLE:
             try:
-                all_points = qclient.scroll(COLLECTION, limit=500, with_payload=True)[0]
-                for kw in proper_nouns:
-                    kw_lower = kw.lower()
-                    matched = 0
-                    for h in all_points:
-                        if matched >= 3:
-                            break
-                        if h.id in seen_ids:
-                            continue
-                        txt = (h.payload.get("text", "") or "").lower()
-                        fn = (h.payload.get("filename", "") or "").lower()
-                        if kw_lower in txt or kw_lower in fn:
-                            seen_ids.add(h.id)
-                            src = h.payload.get("filename", "?")
-                            text = h.payload.get("text", "")
-                            chunks.append(f"[{src} | keyword:{kw}]\n{text}")
-                            meta.append({"source": src, "score": 0.0, "chars": len(text), "keyword": kw})
-                            matched += 1
-            except Exception:
-                pass
+                idx = _get_bm25_index(qclient)
+                if idx is not None:
+                    bm25_res = idx.search(query, limit=TOP_K * 2)
+                    if bm25_res:
+                        k = 60
+                        rrf = {}
+                        # score dense
+                        for pid, d in dense_map.items():
+                            rrf[pid] = rrf.get(pid, 0.0) + 1.0 / (k + d.get("rank", 0) + 1)
+                        # score bm25
+                        for br, b in enumerate(bm25_res):
+                            pid = b["id"]
+                            rrf[pid] = rrf.get(pid, 0.0) + 1.0 / (k + br + 1)
+                        # build fused list
+                        fused = []
+                        # have payloads for dense
+                        for pid, val in rrf.items():
+                            payload = None
+                            if pid in dense_map:
+                                payload = dense_map[pid]["payload"]
+                            else:
+                                # need to fetch? we have from bm25 docs cache? bm25_store has text but not full payload; easier to get from qdrant by id is expensive
+                                # try to find in dense_map only; if not present, skip or fetch
+                                payload = None
+                            if payload is None:
+                                # try to locate via scroll small? skip for now if only in bm25
+                                continue
+                            fused.append((pid, val, payload))
+                        fused.sort(key=lambda x: x[1], reverse=True)
+                        # rebuild chunks/meta
+                        chunks_out, meta_out, seen_ids = [], [], set()
+                        for pid, rrfv, payload in fused[:TOP_K * 2]:
+                            if pid in seen_ids:
+                                continue
+                            score = dense_map.get(pid, {}).get("score")
+                            src = payload.get("filename", payload.get("source", "?"))
+                            text = payload.get("text", "")
+                            if score is not None and score < MIN_SCORE:
+                                # still allow if strong rrf? be lenient for hybrid
+                                pass
+                            if score is not None and score < MIN_SCORE and rrfv < 0.02:
+                                continue
+                            seen_ids.add(pid)
+                            if score is not None:
+                                chunks_out.append(f"[{src} | relevance={score} | hybrid={rrfv:.4f}]\n{text}")
+                                meta_out.append({"source": src, "score": score, "chars": len(text), "src": "hybrid"})
+                            else:
+                                chunks_out.append(f"[{src} | hybrid={rrfv:.4f}]\n{text}")
+                                meta_out.append({"source": src, "score": 0.0, "chars": len(text), "src": "bm25"})
+                        # if we got results from hybrid fusion, we're good
+            except Exception as he:
+                _slog(f"[contextcut] hybrid bm25 error: {he}")
+                # fall through to existing chunks_out/meta_out
 
-        if meta:
+        # keyword fallback: proper nouns from query → substring match in Python (keep as last resort)
+        if not meta_out:
+            query_words = query.split()
+            proper_nouns = [w for w in query_words if len(w) > 2 and w[0].isupper()]
+            if proper_nouns:
+                try:
+                    all_points = qclient.scroll(COLLECTION, limit=500, with_payload=True)[0]
+                    for kw in proper_nouns:
+                        kw_lower = kw.lower()
+                        matched = 0
+                        for h in all_points:
+                            if matched >= 3:
+                                break
+                            if h.id in seen_ids:
+                                continue
+                            txt = (h.payload.get("text", "") or "").lower()
+                            fn = (h.payload.get("filename", "") or "").lower()
+                            if kw_lower in txt or kw_lower in fn:
+                                seen_ids.add(h.id)
+                                src = h.payload.get("filename", "?")
+                                text = h.payload.get("text", "")
+                                chunks_out.append(f"[{src} | keyword:{kw}]\n{text}")
+                                meta_out.append({"source": src, "score": 0.0, "chars": len(text), "keyword": kw})
+                                matched += 1
+                except Exception:
+                    pass
+
+        if meta_out:
             _slog(
-                f"[contextcut] qdrant_context: {len(meta)} hits for query={query[:60]!r}"
+                f"[contextcut] qdrant_context: {len(meta_out)} hits for query={query[:60]!r} (hybrid={use_hybrid and BM25_AVAILABLE})"
             )
         else:
             _slog(f"[contextcut] qdrant_context: 0 hits for query={query[:60]!r}")
-        ctx_str = "\n\n---\n\n".join(chunks)
+        ctx_str = "\n\n---\n\n".join(chunks_out)
         if len(ctx_str) > MAX_CTX_CHARS:
             _slog(f"[contextcut] truncating context {len(ctx_str)} → {MAX_CTX_CHARS} chars")
             ctx_str = ctx_str[:MAX_CTX_CHARS] + "\n\n[...truncated...]"
-        return ctx_str, meta
+        return ctx_str, meta_out
     except Exception as e:
         _slog(f"[contextcut] Qdrant error: {e}")
         import traceback
@@ -2353,6 +2451,7 @@ tr.cloud-off td{{background:#0a1a2e!important;color:#22c55e!important;border-top
               <input type="range" class="param-slider" id="retrySlider" min="1" max="5" step="1" value="3" oninput="updateRetry()" style="width:40px">
               <span class="param-val" id="retryVal">3</span>
             </span>
+            <button class="hybrid-toggle" id="hybridToggle" onclick="toggleHybridMode()" title="Combine vector search + BM25 keyword search (hybrid retrieval)" style="background:transparent;border:1px solid var(--border);color:var(--muted);border-radius:3px;padding:4px 8px;font-size:10px;cursor:pointer;font-family:'JetBrains Mono',monospace">🔍 Hybrid ON</button>
             <button class="clear-btn" id="defaultBtn" onclick="resetDefaults()" title="Reset all settings to defaults" style="font-size:9px;padding:4px 8px;margin-left:auto">Default</button>
           </div>
           <div style="font-size:9px;color:var(--muted);margin-top:6px;border-top:1px solid var(--border);padding-top:6px">
@@ -2387,6 +2486,7 @@ let maxRetries = 3;
 let abortController = null;
 let lastEsc = 0;
 let lastTaskId = null;
+let hybridMode = true;
 
 function saveState() {{
   localStorage.setItem('cc_agentMode', agentMode ? '1' : '0');
@@ -2394,6 +2494,8 @@ function saveState() {{
   localStorage.setItem('cc_deepMode', deepMode ? '1' : '0');
   localStorage.setItem('cc_loopMode', loopMode ? '1' : '0');
   localStorage.setItem('cc_maxRetries', String(maxRetries));
+  localStorage.setItem('cc_hybridMode', hybridMode ? '1' : '0');
+  try { fetch('/api/settings', {method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({hybrid: hybridMode})}); } catch(e){}
   const uc = document.getElementById('unattendedChk');
   if (uc) localStorage.setItem('cc_unattended', uc.checked ? '1' : '0');
   const mi = document.getElementById('modelInput');
@@ -2434,6 +2536,8 @@ function loadState() {{
   if (dm !== null) deepMode = dm === '1';
   const lm = ls.getItem('cc_loopMode');
   if (lm !== null) loopMode = lm === '1';
+  const hm = ls.getItem('cc_hybridMode');
+  if (hm !== null) hybridMode = hm === '1';
   const mr = ls.getItem('cc_maxRetries');
   if (mr !== null) maxRetries = parseInt(mr, 10) || 3;
   setChk('unattendedChk', 'cc_unattended');
@@ -2463,6 +2567,15 @@ function loadState() {{
     loopBtn.textContent = loopMode ? '🔄 Loop ON' : '🔄 Loop OFF';
     loopBtn.classList.toggle('loop-on', loopMode);
   }}
+  const hybridBtn = document.getElementById('hybridToggle');
+  if (hybridBtn) {{
+    hybridBtn.textContent = hybridMode ? '🔍 Hybrid ON' : '🔍 Hybrid OFF';
+    hybridBtn.style.background = hybridMode ? 'var(--accent)' : 'transparent';
+    hybridBtn.style.color = hybridMode ? '#000' : 'var(--muted)';
+    hybridBtn.style.borderColor = hybridMode ? 'var(--accent)' : 'var(--border)';
+    hybridBtn.style.fontWeight = hybridMode ? '600' : '400';
+  }}
+  try { fetch('/api/settings', {method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({hybrid: hybridMode})}); } catch(e){}
   const rg = document.getElementById('retryGroup');
   if (rg) rg.classList.toggle('show', loopMode);
   const rs = document.getElementById('retrySlider');
@@ -2542,6 +2655,19 @@ function toggleLoopMode() {{
   }}
   const rg = document.getElementById('retryGroup');
   if (rg) rg.classList.toggle('show', loopMode);
+  saveState();
+}}
+
+function toggleHybridMode() {{
+  hybridMode = !hybridMode;
+  const btn = document.getElementById('hybridToggle');
+  if (btn) {{
+    btn.textContent = hybridMode ? '🔍 Hybrid ON' : '🔍 Hybrid OFF';
+    btn.style.background = hybridMode ? 'var(--accent)' : 'transparent';
+    btn.style.color = hybridMode ? '#000' : 'var(--muted)';
+    btn.style.borderColor = hybridMode ? 'var(--accent)' : 'var(--border)';
+    btn.style.fontWeight = hybridMode ? '600' : '400';
+  }}
   saveState();
 }}
 
@@ -5242,6 +5368,20 @@ class DashboardHandler(_SuppressBrokenPipe, BaseHTTPRequestHandler):
                         TOP_K = int(body["top_k"])
                     print(f"[contextcut] Top-K updated live: {TOP_K}")
                     resp = json.dumps({"ok": True, "top_k": TOP_K}).encode()
+                    self.send_response(200)
+                    self.send_header("Content-Type", "application/json")
+                    self.send_header("Content-Length", str(len(resp)))
+                    self.end_headers()
+                    self.wfile.write(resp)
+                    return
+                if "hybrid" in body:
+                    val = body.get("hybrid")
+                    if isinstance(val, bool):
+                        os.environ["CONTEXTCUT_HYBRID"] = "1" if val else "0"
+                    else:
+                        os.environ["CONTEXTCUT_HYBRID"] = "1" if str(val).strip().lower() in ("1","true","yes","on") else "0"
+                    print(f"[contextcut] Hybrid search set to {os.environ.get('CONTEXTCUT_HYBRID')}")
+                    resp = json.dumps({"ok": True, "hybrid": os.environ.get("CONTEXTCUT_HYBRID") == "1"}).encode()
                     self.send_response(200)
                     self.send_header("Content-Type", "application/json")
                     self.send_header("Content-Length", str(len(resp)))
