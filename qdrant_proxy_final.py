@@ -1133,17 +1133,25 @@ def qdrant_context(query: str) -> tuple[str, list[dict]]:
                             rrf[pid] = rrf.get(pid, 0.0) + 1.0 / (k + br + 1)
                         # build fused list
                         fused = []
+                        # build lookup from bm25 docs by id
+                        bm25_by_id = {}
+                        try:
+                            if idx is not None and hasattr(idx, '_docs'):
+                                for d in getattr(idx, '_docs', []):
+                                    bm25_by_id[d.get('id')] = d
+                        except Exception:
+                            pass
                         # have payloads for dense
                         for pid, val in rrf.items():
                             payload = None
                             if pid in dense_map:
                                 payload = dense_map[pid]["payload"]
+                            elif pid in bm25_by_id:
+                                bd = bm25_by_id[pid]
+                                payload = {"filename": bd.get("filename"), "text": bd.get("text")}
                             else:
-                                # need to fetch? we have from bm25 docs cache? bm25_store has text but not full payload; easier to get from qdrant by id is expensive
-                                # try to find in dense_map only; if not present, skip or fetch
                                 payload = None
                             if payload is None:
-                                # try to locate via scroll small? skip for now if only in bm25
                                 continue
                             fused.append((pid, val, payload))
                         fused.sort(key=lambda x: x[1], reverse=True)
@@ -1156,7 +1164,6 @@ def qdrant_context(query: str) -> tuple[str, list[dict]]:
                             src = payload.get("filename", payload.get("source", "?"))
                             text = payload.get("text", "")
                             if score is not None and score < MIN_SCORE:
-                                # still allow if strong rrf? be lenient for hybrid
                                 pass
                             if score is not None and score < MIN_SCORE and rrfv < 0.02:
                                 continue
@@ -2495,7 +2502,9 @@ function saveState() {{
   localStorage.setItem('cc_loopMode', loopMode ? '1' : '0');
   localStorage.setItem('cc_maxRetries', String(maxRetries));
   localStorage.setItem('cc_hybridMode', hybridMode ? '1' : '0');
-  try { fetch('/api/settings', {method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({hybrid: hybridMode})}); } catch(e){}
+  try {{
+    fetch('/api/settings', {{method:'POST', headers:{{'Content-Type':'application/json'}}, body: JSON.stringify({{hybrid: hybridMode}})}});
+  }} catch(e){{}}
   const uc = document.getElementById('unattendedChk');
   if (uc) localStorage.setItem('cc_unattended', uc.checked ? '1' : '0');
   const mi = document.getElementById('modelInput');
@@ -2575,7 +2584,9 @@ function loadState() {{
     hybridBtn.style.borderColor = hybridMode ? 'var(--accent)' : 'var(--border)';
     hybridBtn.style.fontWeight = hybridMode ? '600' : '400';
   }}
-  try { fetch('/api/settings', {method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({hybrid: hybridMode})}); } catch(e){}
+  try {{
+    fetch('/api/settings', {{method:'POST', headers:{{'Content-Type':'application/json'}}, body: JSON.stringify({{hybrid: hybridMode}})}});
+  }} catch(e){{}}
   const rg = document.getElementById('retryGroup');
   if (rg) rg.classList.toggle('show', loopMode);
   const rs = document.getElementById('retrySlider');

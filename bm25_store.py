@@ -48,6 +48,11 @@ class BM25Index:
         tokens = re.findall(r"[a-z0-9_\-]+", text)
         result = []
         for t in tokens:
+            # Be more lenient with numbers (IDs, reservation numbers etc)
+            if t.isdigit():
+                if len(t) >= 4:
+                    result.append(t)
+                continue
             if len(t) <= 2:
                 continue
             if t in _STOPWORDS:
