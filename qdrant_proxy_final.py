@@ -1163,9 +1163,7 @@ def qdrant_context(query: str) -> tuple[str, list[dict]]:
                             score = dense_map.get(pid, {}).get("score")
                             src = payload.get("filename", payload.get("source", "?"))
                             text = payload.get("text", "")
-                            if score is not None and score < MIN_SCORE:
-                                pass
-                            if score is not None and score < MIN_SCORE and rrfv < 0.02:
+                            if score is not None and score < MIN_SCORE and rrfv < 0.01:
                                 continue
                             seen_ids.add(pid)
                             if score is not None:
@@ -1173,7 +1171,7 @@ def qdrant_context(query: str) -> tuple[str, list[dict]]:
                                 meta_out.append({"source": src, "score": score, "chars": len(text), "src": "hybrid"})
                             else:
                                 chunks_out.append(f"[{src} | hybrid={rrfv:.4f}]\n{text}")
-                                meta_out.append({"source": src, "score": 0.0, "chars": len(text), "src": "bm25"})
+                                meta_out.append({"source": src, "score": 0.5, "chars": len(text), "src": "bm25"})
                         # if we got results from hybrid fusion, we're good
             except Exception as he:
                 _slog(f"[contextcut] hybrid bm25 error: {he}")
@@ -2411,8 +2409,8 @@ tr.cloud-off td{{background:#0a1a2e!important;color:#22c55e!important;border-top
       <div class="model-row">
         <span class="model-label">Model:</span>
         <div class="model-combo">
-          <input class="model-input" id="modelInput" type="text" value="{DEFAULT_MODEL}" placeholder="e.g. qwen3:14b-q8_0">
-          <select class="model-select" id="modelSelect" title="Available models" onchange="if(this.value){{document.getElementById('modelInput').value=this.value;this.value=\'\';}}">
+          <input class="model-input" id="modelInput" type="text" value="{DEFAULT_MODEL}" placeholder="e.g. qwen3:14b-q8_0" onchange="onModelInputChange()">
+          <select class="model-select" id="modelSelect" title="Available models" onchange="if(this.value){{setChatModel(this.value);this.value=\'\';}}">
             <option value="">▾</option>
           </select>
         </div>
@@ -3462,6 +3460,50 @@ async function fetchModels() {{
   }} catch(e) {{}}
 }}
 
+let _prevModel = null;
+
+async function unloadIfLoaded(name) {{
+  if (!name) return;
+  try {{
+    const pr = await fetch('/api/ollama-ps');
+    const pd = await pr.json();
+    const loaded = (pd.models || []).map(m => m.name);
+    const norm = n => (n || '').includes(':') ? n : n + ':latest';
+    const match = loaded.find(n => n === name || n === norm(name));
+    if (!match) return;
+    await fetch('/api/generate', {{
+      method: 'POST',
+      headers: {{'Content-Type':'application/json'}},
+      body: JSON.stringify({{model: match, keep_alive: 0}})
+    }});
+    setTimeout(pollGpu, 300);
+  }} catch(e) {{}}
+}}
+
+async function setChatModel(name) {{
+  const inp = document.getElementById('modelInput');
+  if (!inp || !name) return;
+  const old = _prevModel === null ? inp.value.trim() : _prevModel;
+  if (old === name) {{ _prevModel = name; return; }}
+  inp.value = name;
+  _prevModel = name;
+  saveState();
+  await unloadIfLoaded(old);
+}}
+
+async function onModelInputChange() {{
+  const inp = document.getElementById('modelInput');
+  if (!inp) return;
+  const name = inp.value.trim();
+  if (!name) return;
+  if (_prevModel === null) {{ _prevModel = name; return; }}
+  if (_prevModel === name) return;
+  const old = _prevModel;
+  _prevModel = name;
+  saveState();
+  await unloadIfLoaded(old);
+}}
+
 let _lastTs = null;
 
 async function pollStats() {{
@@ -3616,6 +3658,14 @@ async function sendMessage(taskIdOverride) {{
   if (!text) return;
   if (!model) {{ alert('Enter a model name first.'); return; }}
   if (!taskIdOverride && handleCommand(text)) {{ input.value = ''; return; }}
+  if (_prevModel === null) {{
+    _prevModel = model;
+  }} else if (_prevModel !== model) {{
+    const _oldModel = _prevModel;
+    _prevModel = model;
+    saveState();
+    await unloadIfLoaded(_oldModel);
+  }}
   inputHistory.unshift(text);
   if (inputHistory.length > 50) inputHistory.pop();
   inputHistoryIdx = -1;
@@ -6375,6 +6425,15 @@ class DashboardHandler(_SuppressBrokenPipe, BaseHTTPRequestHandler):
                     self.send_header("Content-Length", str(len(rb)))
                     self.end_headers()
                     self.wfile.write(rb)
+        except urllib.error.HTTPError as e:
+            err_body = e.read()
+            self.send_response(e.code)
+            self.send_header(
+                "Content-Type", e.headers.get("Content-Type", "application/json")
+            )
+            self.send_header("Content-Length", str(len(err_body)))
+            self.end_headers()
+            self.wfile.write(err_body)
         except Exception as e:
             self.send_response(502)
             self.end_headers()
