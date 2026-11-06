@@ -1799,11 +1799,19 @@ def apply_harness(tools: list, user_message: str = None) -> list:
 
 def build_agent(model_name: str = None, upstream: str = None,
                 api_key: str = None, task_id: str = None, goal: str = None,
-                user_message: str = None):
+                user_message: str = None, provider: str = None,
+                reasoning_effort: str = None, max_tokens: int = None):
 
     extra = {}
-    if _SCAN_MODEL:
-        extra["extra_body"] = {"keep_alive": 0}
+    extra_body = {}
+    if _SCAN_MODEL and provider in (None, "Ollama"):
+        extra_body["keep_alive"] = 0
+    if reasoning_effort and reasoning_effort != "default":
+        extra_body["reasoning_effort"] = reasoning_effort
+    if extra_body:
+        extra["extra_body"] = extra_body
+    if max_tokens and max_tokens > 0:
+        extra["max_tokens"] = max_tokens
 
     llm = ChatOpenAI(
         model=model_name or "qwen3:14b-q8_0",

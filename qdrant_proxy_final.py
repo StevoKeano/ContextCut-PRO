@@ -33,6 +33,7 @@ import threading
 import platform
 import hashlib
 import base64
+import codecs
 import urllib.request
 import urllib.error
 import urllib.parse
@@ -273,10 +274,17 @@ def load_saved_credentials():
         _LOCAL_EMBED = saved_model
 
 
+def normalize_custom_base(url: str) -> str:
+    url = (url or "").strip().rstrip("/")
+    if url.endswith("/v1"):
+        url = url[:-3].rstrip("/")
+    return url
+
+
 def get_current_upstream():
     global _provider_name, _custom_base_url, _ollama_url
     if _provider_name == "Custom":
-        return _custom_base_url
+        return normalize_custom_base(_custom_base_url)
     if _provider_name == "Ollama":
         return _ollama_url if _ollama_url else UPSTREAM
     return PROVIDERS.get(_provider_name, {}).get("url", "")
@@ -288,8 +296,11 @@ def get_current_api_key():
 
 load_saved_credentials()
 DEFAULT_TEMP = float(os.getenv("CONTEXTCUT_TEMP", "0.7"))
-DEFAULT_MAX_TK = int(os.getenv("CONTEXTCUT_MAX_TOKENS", "0"))
+DEFAULT_MAX_TK = int(os.getenv("CONTEXTCUT_MAX_TOKENS", "32768"))
 DEFAULT_TOP_P = float(os.getenv("CONTEXTCUT_TOP_P", "1.0"))
+CLIENT_TIMEOUT_MS = int(os.getenv("CONTEXTCUT_CLIENT_TIMEOUT", "900")) * 1000
+UPSTREAM_TIMEOUT = int(os.getenv("CONTEXTCUT_UPSTREAM_TIMEOUT", "600"))
+AGENT_TIMEOUT = int(os.getenv("CONTEXTCUT_AGENT_TIMEOUT", "900"))
 
 # ── Token estimation ──────────────────────────────────────────────────────────
 try:
@@ -307,6 +318,29 @@ except ImportError:
         return int(len(text.split()) * 1.35)
 
     TOKEN_METHOD = "estimate ±5%"
+
+
+def extract_reasoning(chunk) -> str:
+    ak = getattr(chunk, "additional_kwargs", None) or {}
+    for key in ("reasoning_content", "reasoning"):
+        val = ak.get(key)
+        if isinstance(val, str) and val:
+            return val
+    meta = getattr(chunk, "response_metadata", None) or {}
+    for key in ("reasoning_content", "reasoning"):
+        val = meta.get(key)
+        if isinstance(val, str) and val:
+            return val
+    content = getattr(chunk, "content", None)
+    if isinstance(content, list):
+        parts = []
+        for block in content:
+            if isinstance(block, dict) and block.get("type") in ("reasoning", "thinking"):
+                parts.append(block.get("reasoning") or block.get("text") or "")
+        if parts:
+            return "".join(parts)
+    return ""
+
 
 # ── Shared state ──────────────────────────────────────────────────────────────
 _lock = threading.Lock()
@@ -1307,8 +1341,17 @@ class ProxyHandler(_SuppressBrokenPipe, BaseHTTPRequestHandler):
             req.add_header("Authorization", f"Bearer {api_key}")
 
         for k, v in self.headers.items():
-            if k.lower() not in ("host", "content-length"):
+            if k.lower() not in (
+                "host",
+                "content-length",
+                "origin",
+                "referer",
+                "cookie",
+                "authorization",
+                "accept-encoding",
+            ):
                 req.add_header(k, v)
+        req.add_header("Accept-Encoding", "identity")
         if raw_body:
             req.add_header("Content-Length", str(len(raw_body)))
 
@@ -1316,7 +1359,7 @@ class ProxyHandler(_SuppressBrokenPipe, BaseHTTPRequestHandler):
         attempt = 0
         while True:
             try:
-                resp = urllib.request.urlopen(req, timeout=120)
+                resp = urllib.request.urlopen(req, timeout=UPSTREAM_TIMEOUT)
                 break
             except urllib.error.HTTPError as e:
                 if method == "POST" and e.code >= 500 and attempt < PROXY_RETRIES:
@@ -1356,9 +1399,11 @@ class ProxyHandler(_SuppressBrokenPipe, BaseHTTPRequestHandler):
                 self.wfile.write(str(e).encode())
                 return
 
+        started = False
         try:
             with resp:
                 self.send_response(resp.status)
+                started = True
                 for k, v in resp.getheaders():
                     if k.lower() not in ("transfer-encoding", "content-length"):
                         self.send_header(k, v)
@@ -1367,8 +1412,11 @@ class ProxyHandler(_SuppressBrokenPipe, BaseHTTPRequestHandler):
                     self.send_header("Cache-Control", "no-cache")
                     self.end_headers()
                     full_response = []
+                    read_chunk = getattr(resp, "read1", resp.read)
+                    decoder = codecs.getincrementaldecoder("utf-8")("ignore")
+                    text_buf = ""
                     while True:
-                        chunk = resp.read(4096)
+                        chunk = read_chunk(4096)
                         if not chunk:
                             self.wfile.write(b"0\r\n\r\n")
                             if session_id and full_response:
@@ -1380,8 +1428,9 @@ class ProxyHandler(_SuppressBrokenPipe, BaseHTTPRequestHandler):
                         self.wfile.write(size + chunk + b"\r\n")
                         self.wfile.flush()
                         try:
-                            text = chunk.decode("utf-8", errors="ignore")
-                            for line in text.split("\n"):
+                            text_buf += decoder.decode(chunk)
+                            while "\n" in text_buf:
+                                line, text_buf = text_buf.split("\n", 1)
                                 line = line.strip()
                                 if line.startswith("data: ") and line != "data: [DONE]":
                                     try:
@@ -1414,9 +1463,24 @@ class ProxyHandler(_SuppressBrokenPipe, BaseHTTPRequestHandler):
                         except Exception:
                             pass
         except Exception as e:
-            self.send_response(502)
-            self.end_headers()
-            self.wfile.write(str(e).encode())
+            if started:
+                if streaming:
+                    try:
+                        err_payload = json.dumps(
+                            {"error": (str(e) or "upstream connection lost")[:500]}
+                        ).encode()
+                        self.wfile.write(b"data: " + err_payload + b"\n\n")
+                        self.wfile.write(b"0\r\n\r\n")
+                        self.wfile.flush()
+                    except Exception:
+                        pass
+            else:
+                try:
+                    self.send_response(502)
+                    self.end_headers()
+                    self.wfile.write(str(e).encode())
+                except Exception:
+                    pass
 
     def _write_error(self, msg: str):
         try:
@@ -1556,6 +1620,10 @@ class ProxyHandler(_SuppressBrokenPipe, BaseHTTPRequestHandler):
                         "hits": hits_meta,
                     }
                 )
+
+            if isinstance(body, dict) and _provider_name == "Ollama":
+                if body.pop("reasoning_effort", None) is not None:
+                    raw_body = json.dumps(body).encode()
 
             is_streaming = isinstance(body, dict) and body.get("stream", False)
             if self.path in (
@@ -1750,7 +1818,7 @@ body{{background:var(--bg);color:var(--text);font-family:'JetBrains Mono',monosp
 
     <div class="form-group hidden" id="customUrlGroup">
       <label>Base URL</label>
-      <input type="text" id="customUrl" placeholder="https://api.example.com/v1">
+      <input type="text" id="customUrl" placeholder="http://localhost:8080">
     </div>
 
     <div class="form-group">
@@ -2252,6 +2320,13 @@ tr:hover td{{background:var(--surf2)}}
 .msg-stat{{display:inline-flex;gap:6px;align-items:center;flex-wrap:wrap}}
 .stat-pill{{background:var(--surf);border:1px solid var(--border);border-radius:3px;padding:1px 6px;font-size:10px}}
 .stat-pill.ctx{{color:var(--accent)}}.stat-pill.save{{color:var(--green)}}.stat-pill.hit{{color:var(--muted)}}
+/* reasoning / thinking */
+.thinking-block{{margin:4px 0 6px;border:1px solid var(--border);border-radius:6px;background:rgba(99,102,241,.06);max-width:100%}}
+.thinking-block summary{{cursor:pointer;padding:5px 8px;font-size:10px;color:var(--muted);font-family:'JetBrains Mono',monospace;user-select:none;list-style:none}}
+.thinking-block summary::-webkit-details-marker{{display:none}}
+.thinking-block summary::before{{content:'▸ ';color:var(--accent)}}
+.thinking-block[open] summary::before{{content:'▾ '}}
+.thinking-content{{max-height:220px;overflow:auto;padding:6px 10px 8px;font-size:10.5px;line-height:1.5;color:var(--muted);white-space:pre-wrap;word-break:break-word;border-top:1px solid var(--border)}}
 /* typing */
 .typing{{display:flex;gap:4px;padding:9px 13px;background:var(--surf2);border:1px solid var(--border);border-radius:var(--r);width:fit-content}}
 .typing span{{width:6px;height:6px;border-radius:50%;background:var(--muted);animation:blink 1.2s infinite}}
@@ -2434,6 +2509,16 @@ tr.cloud-off td{{background:#0a1a2e!important;color:#22c55e!important;border-top
             <span class="param-val" id="maxTokVal">{DEFAULT_MAX_TK}</span>
           </div>
           <div class="param-group">
+            <span class="param-label">Thinking:</span>
+            <select id="reasoningSelect" onchange="saveState()" style="background:var(--bg);border:1px solid var(--border);border-radius:2px;padding:2px 4px;color:var(--accent);font-size:10px;font-family:'JetBrains Mono',monospace">
+              <option value="default">default</option>
+              <option value="none">none</option>
+              <option value="low" selected>low</option>
+              <option value="medium">medium</option>
+              <option value="high">high</option>
+            </select>
+          </div>
+          <div class="param-group">
             <span class="param-label">Min score:</span>
             <input type="range" class="param-slider" id="minscoreSlider" min="0.0" max="1.0" step="0.05" value="{MIN_SCORE}" oninput="updateMinScore()">
             <span class="param-val" id="minscoreVal">{MIN_SCORE}</span>
@@ -2513,6 +2598,8 @@ function saveState() {{
   if (tp) localStorage.setItem('cc_topp', tp.value);
   const mt = document.getElementById('maxTokInput');
   if (mt) localStorage.setItem('cc_maxTok', mt.value);
+  const rs = document.getElementById('reasoningSelect');
+  if (rs) localStorage.setItem('cc_reasoning', rs.value);
   const ms = document.getElementById('minscoreSlider');
   if (ms) localStorage.setItem('cc_minscore', ms.value);
   const tk = document.getElementById('topkSlider');
@@ -2553,8 +2640,20 @@ function loadState() {{
   updateParamVal('tempSlider', 'tempVal');
   setVal('toppSlider', 'cc_topp');
   updateParamVal('toppSlider', 'toppVal');
-  setVal('maxTokInput', 'cc_maxTok');
+  const mtSaved = ls.getItem('cc_maxTok');
+  if (mtSaved !== null) {{
+    const el = document.getElementById('maxTokInput');
+    if (el) {{
+      if (mtSaved === '0' && {DEFAULT_MAX_TK} > 0 && !ls.getItem('cc_maxTokMigrated')) {{
+        el.value = '{DEFAULT_MAX_TK}';
+        ls.setItem('cc_maxTokMigrated', '1');
+      }} else {{
+        el.value = mtSaved;
+      }}
+    }}
+  }}
   updateParamVal('maxTokInput', 'maxTokVal');
+  setVal('reasoningSelect', 'cc_reasoning');
   setVal('minscoreSlider', 'cc_minscore');
   setVal('topkSlider', 'cc_topk');
   updateMinScore();
@@ -2605,7 +2704,7 @@ function loadState() {{
 
 function resetDefaults() {{
   if (!confirm('Reset all settings to defaults?')) return;
-  const keys = ['cc_agentMode','cc_scanMode','cc_deepMode','cc_unattended','cc_model','cc_temp','cc_topp','cc_maxTok','cc_minscore','cc_topk','cc_loopMode','cc_maxRetries'];
+  const keys = ['cc_agentMode','cc_scanMode','cc_deepMode','cc_unattended','cc_model','cc_temp','cc_topp','cc_maxTok','cc_maxTokMigrated','cc_reasoning','cc_minscore','cc_topk','cc_loopMode','cc_maxRetries'];
   keys.forEach(k => localStorage.removeItem(k));
   location.reload();
 }}
@@ -3181,6 +3280,8 @@ function getGenerationParams() {{
   document.getElementById('maxTokVal').textContent = maxTok || '0';
   const params = {{temperature: temp, top_p: topP, num_ctx: {CTX_LIMIT}}};
   if (maxTok > 0) params.max_tokens = maxTok;
+  const reasoning = (document.getElementById('reasoningSelect') || {{}}).value || 'low';
+  if (reasoning && reasoning !== 'default') params.reasoning_effort = reasoning;
   return params;
 }}
 
@@ -3676,9 +3777,14 @@ async function sendMessage(taskIdOverride) {{
   let bubble = null;
   let fullText = '';
   let usage = {{}};
-  let agentTimeout = setTimeout(() => {{
-    if (abortController) abortController.abort();
-  }}, 310000);
+  let agentTimeout = null;
+  function armAgentTimeout() {{
+    if (agentTimeout) clearTimeout(agentTimeout);
+    agentTimeout = setTimeout(() => {{
+      if (abortController) abortController.abort();
+    }}, {CLIENT_TIMEOUT_MS});
+  }}
+  armAgentTimeout();
   setSendStop();
   appendMsg('user', text, '');
   conversationHistory.push({{role:'user', content:text}});
@@ -3696,14 +3802,36 @@ async function sendMessage(taskIdOverride) {{
     assistantDiv.scrollIntoView({{behavior:'smooth', block:'start'}});
   }}
 
+  let thinkingBlock = null, thinkingText = '', thinkingTokens = 0;
+  function updateThinking(text) {{
+    if (!text) return;
+    thinkingText += text;
+    thinkingTokens = Math.round(thinkingText.length / 4);
+    ensureBubble();
+    if (!thinkingBlock) {{
+      thinkingBlock = document.createElement('details');
+      thinkingBlock.className = 'thinking-block';
+      thinkingBlock.open = true;
+      thinkingBlock.innerHTML = '<summary>🧠 Thinking… ~<span class="think-count">0</span> tokens</summary><div class="thinking-content"></div>';
+      assistantDiv.insertBefore(thinkingBlock, bubble);
+    }}
+    const tc = thinkingBlock.querySelector('.thinking-content');
+    if (tc) tc.textContent = thinkingText;
+    const tk = thinkingBlock.querySelector('.think-count');
+    if (tk) tk.textContent = thinkingTokens;
+    const box = document.getElementById('messages');
+    if (box) box.scrollTop = box.scrollHeight;
+  }}
+
   // ── Agent mode ──
   if (agentMode) {{
     try {{
+      const genParams = getGenerationParams();
       const resp = await fetch('/api/agent', {{
         method: 'POST',
         headers: {{'Content-Type':'application/json'}},
         signal: abortController.signal,
-        body: JSON.stringify({{message: text, session_id: sessionId, model, stream: true, deep: deepMode, scan: scanMode, loop_retries: loopMode ? maxRetries : 0, task_id: taskIdOverride || lastTaskId || ''}})
+        body: JSON.stringify({{message: text, session_id: sessionId, model, stream: true, deep: deepMode, scan: scanMode, loop_retries: loopMode ? maxRetries : 0, task_id: taskIdOverride || lastTaskId || '', reasoning_effort: genParams.reasoning_effort || 'low', max_tokens: genParams.max_tokens || 0}})
       }});
       if (!resp.ok) {{
         removeTyping();
@@ -3740,6 +3868,7 @@ async function sendMessage(taskIdOverride) {{
       while (true) {{
         const {{done, value}} = await reader.read();
         if (done) break;
+        armAgentTimeout();
         buf += decoder.decode(value, {{stream: true}});
         const lines = buf.split('\\n');
         buf = lines.pop();
@@ -3757,7 +3886,10 @@ async function sendMessage(taskIdOverride) {{
                 lastTaskId = data.task_id;
                 updateTaskBadge();
               }}
-              if (data.token) {{
+              if (data.reasoning) {{
+                updateThinking(data.reasoning);
+              }} else if (data.token) {{
+                if (thinkingBlock) thinkingBlock.open = false;
                 fullText += data.token;
                 ensureBubble();
                 bubble.innerHTML = stripDeadKnowledgeLinks(linkCitations(esc(fullText)));
@@ -3800,6 +3932,7 @@ async function sendMessage(taskIdOverride) {{
                 corrDiv.textContent = '\\ud83d\\udd04 Correction: ' + (data.reasons || '');
                 assistantDiv.appendChild(corrDiv);
               }} else if (data.response) {{
+                if (thinkingBlock) thinkingBlock.open = false;
                 fullText = data.response;
                 ensureBubble();
                 bubble.innerHTML = stripDeadKnowledgeLinks(linkCitations(esc(fullText)));
@@ -3812,13 +3945,17 @@ async function sendMessage(taskIdOverride) {{
         }}
       }}
     }} catch(e) {{
-      if (e.name !== 'AbortError') {{
-        removeTyping();
+      removeTyping();
+      if (e.name === 'AbortError') {{
+        if (!fullText) appendMsg('assistant', '⏹ Stopped after ' + Math.round({CLIENT_TIMEOUT_MS}/1000) + 's — no response from model.', '');
+      }} else {{
         appendMsg('assistant', '\u274c Agent network error: ' + e.message, '');
         input.focus();
       }}
     }} finally {{
       clearTimeout(agentTimeout);
+      removeTyping();
+      if (thinkingBlock) thinkingBlock.open = false;
       if (fullText) {{
         conversationHistory.push({{role:'assistant', content:fullText}});
         if (scanMode) {{
@@ -3841,8 +3978,10 @@ async function sendMessage(taskIdOverride) {{
     }});
 
     if (!resp.ok) {{
+      clearTimeout(agentTimeout);
       removeTyping();
       appendMsg('assistant', '\u274c Error ' + resp.status + ': ' + await resp.text(), '');
+      resetSendButton();
       return;
     }}
 
@@ -3853,6 +3992,7 @@ async function sendMessage(taskIdOverride) {{
     while (true) {{
       const {{done, value}} = await reader.read();
       if (done) break;
+      armAgentTimeout();
       buf += decoder.decode(value, {{stream: true}});
       const lines = buf.split('\\n');
       buf = lines.pop();
@@ -3863,16 +4003,27 @@ async function sendMessage(taskIdOverride) {{
         try {{
           const chunk = JSON.parse(trimmed.slice(6));
           if (chunk.usage) usage = chunk.usage;
+          if (chunk.error) {{
+            const em = typeof chunk.error === 'string' ? chunk.error : (chunk.error.message || JSON.stringify(chunk.error));
+            fullText += '\\n\\n\\u26a0 ' + em;
+            ensureBubble();
+            bubble.innerHTML = stripDeadKnowledgeLinks(linkCitations(esc(fullText)));
+            continue;
+          }}
           const delta = chunk.choices && chunk.choices[0] && chunk.choices[0].delta;
           if (!delta) continue;
+          const think = delta.reasoning_content || delta.reasoning;
+          if (think) updateThinking(think);
           const token = delta.content || '';
           if (!token) continue;
+          if (thinkingBlock) thinkingBlock.open = false;
           fullText += token;
           ensureBubble();
           bubble.innerHTML = stripDeadKnowledgeLinks(linkCitations(esc(fullText)));
         }} catch(e) {{}}
       }}
     }}
+    if (thinkingBlock) thinkingBlock.open = false;
 
     const box = document.getElementById('messages');
     const atBottom = box.scrollHeight - box.scrollTop - box.clientHeight < 100;
@@ -3905,15 +4056,21 @@ async function sendMessage(taskIdOverride) {{
     }} catch(e) {{}}
 
     if (scanMode) {{
+      clearTimeout(agentTimeout);
       doScan(fullText, assistantDiv, bubble);
       return;
     }}
 
   }} catch(e) {{
-    if (e.name === 'AbortError') return;
+    clearTimeout(agentTimeout);
     removeTyping();
-    appendMsg('assistant', '\u274c Network error: ' + e.message, '');
+    if (e.name === 'AbortError') {{
+      if (!fullText) appendMsg('assistant', '⏹ Stopped after ' + Math.round({CLIENT_TIMEOUT_MS}/1000) + 's — no response from model.', '');
+    }} else {{
+      appendMsg('assistant', '\u274c Network error: ' + e.message, '');
+    }}
   }}
+  clearTimeout(agentTimeout);
   resetSendButton();
 }}
 
@@ -5222,7 +5379,7 @@ class DashboardHandler(_SuppressBrokenPipe, BaseHTTPRequestHandler):
                     _local_only, \
                     UPSTREAM
                 _provider_name = body.get("provider", "Ollama")
-                _custom_base_url = body.get("custom_url", "").strip()
+                _custom_base_url = normalize_custom_base(body.get("custom_url", ""))
                 incoming_key = body.get("api_key", "").strip()
                 ollama_url = body.get("ollama_url", "").strip()
                 _free_only = body.get("free_only", False)
@@ -5245,7 +5402,7 @@ class DashboardHandler(_SuppressBrokenPipe, BaseHTTPRequestHandler):
                     CredentialManager.save("api_key", _api_key)
 
                 print(
-                    f"[contextcut] Provider switched to {_provider_name} | upstream: {UPSTREAM}"
+                    f"[contextcut] Provider switched to {_provider_name} | upstream: {get_current_upstream()}"
                 )
                 is_cloud = _provider_name != "Ollama" or not _local_only
                 _log.appendleft(
@@ -5261,7 +5418,7 @@ class DashboardHandler(_SuppressBrokenPipe, BaseHTTPRequestHandler):
                     }
                 )
                 resp = json.dumps(
-                    {"ok": True, "upstream": UPSTREAM, "has_key": bool(_api_key)}
+                    {"ok": True, "upstream": get_current_upstream(), "has_key": bool(_api_key)}
                 ).encode()
                 self.send_response(200)
                 self.send_header("Content-Type", "application/json")
@@ -5312,7 +5469,7 @@ class DashboardHandler(_SuppressBrokenPipe, BaseHTTPRequestHandler):
                             ]
                         )
                 elif provider == "Custom" and custom_url:
-                    base = custom_url.rstrip("/")
+                    base = normalize_custom_base(custom_url)
                     req = urllib.request.Request(f"{base}/v1/models", method="GET")
                     if api_key:
                         req.add_header("Authorization", f"Bearer {api_key}")
@@ -6007,6 +6164,8 @@ class DashboardHandler(_SuppressBrokenPipe, BaseHTTPRequestHandler):
                 task_id = body.get("task_id", "").strip()
                 scan = body.get("scan", True)
                 loop_retries = int(body.get("loop_retries", 0))
+                reasoning_effort = body.get("reasoning_effort", "")
+                max_tokens = int(body.get("max_tokens", 0) or 0)
 
                 if not sid or sid not in _sessions:
                     sid = new_session()
@@ -6050,6 +6209,9 @@ class DashboardHandler(_SuppressBrokenPipe, BaseHTTPRequestHandler):
                         task_id=task_id,
                         goal=goal,
                         user_message=message,
+                        provider=_provider_name,
+                        reasoning_effort=reasoning_effort,
+                        max_tokens=max_tokens,
                     )
                 except Exception as e:
                     err_str = str(e)
@@ -6083,8 +6245,6 @@ class DashboardHandler(_SuppressBrokenPipe, BaseHTTPRequestHandler):
                 shell_mode = session.get("shell_confirm_mode", "always")
 
                 import asyncio
-
-                AGENT_TIMEOUT = 300
 
                 async def _run_agent() -> str:
                     result = await asyncio.wait_for(
@@ -6127,6 +6287,10 @@ class DashboardHandler(_SuppressBrokenPipe, BaseHTTPRequestHandler):
                                         kind = event.get("event", "")
                                         if kind == "on_chat_model_stream":
                                             chunk = event.get("data", {}).get("chunk", None)
+                                            if chunk:
+                                                reasoning = extract_reasoning(chunk)
+                                                if reasoning and not capture_only:
+                                                    emit({'reasoning': reasoning})
                                             if (
                                                 chunk
                                                 and hasattr(chunk, "content")
@@ -6400,11 +6564,14 @@ class DashboardHandler(_SuppressBrokenPipe, BaseHTTPRequestHandler):
             f"http://127.0.0.1:{LISTEN_PORT}{self.path}", data=raw_body, method="POST"
         )
         for k, v in self.headers.items():
-            if k.lower() not in ("host",):
+            if k.lower() not in ("host", "accept-encoding"):
                 req.add_header(k, v)
+        req.add_header("Accept-Encoding", "identity")
+        started = False
         try:
-            with urllib.request.urlopen(req, timeout=120) as resp:
+            with urllib.request.urlopen(req, timeout=UPSTREAM_TIMEOUT) as resp:
                 self.send_response(resp.status)
+                started = True
                 for k, v in resp.getheaders():
                     if k.lower() not in ("transfer-encoding", "content-length"):
                         self.send_header(k, v)
@@ -6412,8 +6579,9 @@ class DashboardHandler(_SuppressBrokenPipe, BaseHTTPRequestHandler):
                     self.send_header("Transfer-Encoding", "chunked")
                     self.send_header("Cache-Control", "no-cache")
                     self.end_headers()
+                    read_chunk = getattr(resp, "read1", resp.read)
                     while True:
-                        chunk = resp.read(4096)
+                        chunk = read_chunk(4096)
                         if not chunk:
                             self.wfile.write(b"0\r\n\r\n")
                             break
@@ -6435,9 +6603,24 @@ class DashboardHandler(_SuppressBrokenPipe, BaseHTTPRequestHandler):
             self.end_headers()
             self.wfile.write(err_body)
         except Exception as e:
-            self.send_response(502)
-            self.end_headers()
-            self.wfile.write(str(e).encode())
+            if started:
+                if is_streaming:
+                    try:
+                        err_payload = json.dumps(
+                            {"error": (str(e) or "upstream connection lost")[:500]}
+                        ).encode()
+                        self.wfile.write(b"data: " + err_payload + b"\n\n")
+                        self.wfile.write(b"0\r\n\r\n")
+                        self.wfile.flush()
+                    except Exception:
+                        pass
+            else:
+                try:
+                    self.send_response(502)
+                    self.end_headers()
+                    self.wfile.write(str(e).encode())
+                except Exception:
+                    pass
 
     def do_DELETE(self):
         if self.path.startswith("/api/session/"):
