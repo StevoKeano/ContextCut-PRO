@@ -62,12 +62,13 @@ flowchart LR
 
 ### Dashboard Controls
 
-Five controls affect how the proxy responds:
+Six controls affect how the proxy responds:
 
 | Control | Options | Description |
 |---|---|---|
 | **Scan ON/OFF** | Toggle button | Enables confidence scanning of responses. After each assistant reply, a secondary LLM evaluates factual claims and highlights suspect passages inline. When ON with Agent mode, enables automatic self-correction on LOW-confidence responses |
 | **DEEP** | Checkbox | Uses sub-agent verifier harness with Qdrant KB search for evidence-backed fact-checking, instead of a single LLM pass. Requires Scan ON. Disables the self-correction loop |
+| **🛡 TypeSafe** | Toggle button | Replaces the local scan LLM with the TypeSafe.ai cloud verifier. Requires `TYPESAFE_API_KEY`; only active with Scan ON. See [TypeSafe — Cloud Claim Verifier](#typesafe--cloud-claim-verifier-optional) |
 | **Agent ON/OFF** | Toggle button | Enables tool-use mode — agent can run shell commands, read/write files, search the KB |
 | **Unattended** | Checkbox | Auto-approves shell commands the agent wants to run, skipping the Allow/Deny prompt |
 | **Model** | Text input | The model name to use (e.g. `qwen3:14b-q8_0`, `deepseek-v4-pro:cloud`) |
@@ -156,6 +157,10 @@ open http://localhost:18787
 | `CONTEXTCUT_MIN_SCORE` | `0.50` | Minimum relevance threshold |
 | `CONTEXTCUT_MODEL` | `qwen3:14b-q8_0` | Default model in dashboard |
 | `CONTEXTCUT_SCAN_MODEL` | *(unset)* | Separate model for backend confidence scan. Must differ from agent model. E.g. `qwen3:4b` |
+| `CONTEXTCUT_SCAN_BACKEND` | `llm` | Scan backend: `llm` (local model) or `typesafe` (cloud) |
+| `TYPESAFE_API_KEY` | *(unset)* | TypeSafe.ai API key; required for the `typesafe` backend |
+
+> Additional TypeSafe tuning variables are documented under [TypeSafe — Cloud Claim Verifier](#typesafe--cloud-claim-verifier-optional).
 
 ---
 
@@ -292,7 +297,7 @@ In short: ContextCut-PRO is the proxy + RAG layer you put in front of any model 
 
 ## Scan & DEEP Modes
 
-The dashboard provides two response-verification controls: **Scan ON/OFF** and **DEEP**. They work together or independently.
+The dashboard provides response-verification controls: **Scan ON/OFF**, **DEEP**, and the optional **🛡 TypeSafe** backend. Scan and DEEP work together or independently; TypeSafe changes which engine grades the claims when Scan is on.
 
 ### Scan ON/OFF — Confidence Scan
 
@@ -338,6 +343,56 @@ Replaces the simple LLM scan with a **sub-agent harness** (`_deep_confidence_sca
 2. The verifier has one tool: `search_knowledge_base(query)` — which searches Qdrant for supporting or contradicting evidence.
 3. The verifier parses the text into individual factual claims, spawns parallel sub-agents for independent claims, and returns a JSON array with `text`, `factual`, `reason`, and `source_url`.
 4. Runs with a 120-second timeout. Falls back gracefully if `deepagents` is not installed.
+
+### TypeSafe — Cloud Claim Verifier (optional)
+
+TypeSafe replaces the local scan LLM with [TypeSafe.ai](https://typesafe.ai)'s System One verifier. It is **opt-in and off by default**, and only runs when **Scan ON** is enabled.
+
+| Feature | TypeSafe |
+|---|---|
+| Speed | ~1–3s (one batched cloud request) |
+| Dependencies | `TYPESAFE_API_KEY`, network access |
+| Evidence-backed | ✅ (supplied evidence / retrieved context) |
+| Self-correction loop | ❌ |
+| Cost | Input tokens only — **$0.042 per million**; output free |
+
+**How it works:**
+
+1. The scanned text is split into claims. Claims **and** the evidence bundle are placed in the request `state` exactly once, tagged with stable IDs (`c000`, `c001`, …).
+2. Each question references a claim by ID (no repeated claim text), so many questions are fanned out cheaply in one request. Default per-claim questions: `verdict` (choice), `support`, `contradict`, `sufficient`, `subjective`, `severity`. Globals: `sources_sufficient`, `faithful_overall`.
+3. Answers are combined in code: an explicit contradiction → `incorrect`; a positive verdict/support with no contradiction → `correct`; missing evidence or a low global sufficiency score → `uncertain` (never a silent `correct`). Subjective/opinion claims are not flagged.
+4. Requests are cached in memory (TTL 900s) and bounded by a token/question budget.
+
+**Enable it** with the **🛡 TypeSafe** button under the dashboard parameters, or in `.env`:
+
+```bash
+CONTEXTCUT_SCAN_BACKEND=typesafe
+TYPESAFE_API_KEY=your-key
+```
+
+The toggle requires the key to be present; after editing `.env`, restart the proxy (`./stop.sh && ./start.sh`). Enabling the cloud verifier shows a one-time confirmation because the scanned text and evidence are sent to `api.typesafe.ai`.
+
+**Configuration:**
+
+| Variable | Default | Description |
+|---|---|---|
+| `CONTEXTCUT_SCAN_BACKEND` | `llm` | `llm` (local scan model) or `typesafe` |
+| `TYPESAFE_API_KEY` | *(unset)* | API key; required for `typesafe` |
+| `CONTEXTCUT_TYPESAFE_MODEL` | `jev-latest` | Model id/alias; pin a version for stable results |
+| `CONTEXTCUT_TYPESAFE_TIMEOUT` | `20` | Request timeout (seconds) |
+| `CONTEXTCUT_TYPESAFE_YES` | `0.7` | Probability at/above which support/contradiction counts |
+| `CONTEXTCUT_TYPESAFE_NO` | `0.3` | Probability at/below which a signal is treated as absent |
+| `CONTEXTCUT_TYPESAFE_MIN_SOURCES` | `80` | Minimum evidence characters; below this → `uncertain` |
+| `CONTEXTCUT_TYPESAFE_MAX_SOURCES` | `28000` | Max evidence characters sent |
+| `CONTEXTCUT_TYPESAFE_DIMENSIONS` | `verdict,support,contradict,sufficient,subjective,severity` | Per-claim questions |
+| `CONTEXTCUT_TYPESAFE_GLOBALS` | `sources_sufficient,faithful_overall` | Global questions |
+| `CONTEXTCUT_TYPESAFE_MAX_REQUEST_TOKENS` | `60000` | Request budget (state + questions) |
+| `CONTEXTCUT_TYPESAFE_MAX_QUESTIONS` | `400` | Hard cap on questions per request |
+| `CONTEXTCUT_TYPESAFE_CACHE_TTL` | `900` | Answer cache TTL in seconds (`0` disables) |
+| `CONTEXTCUT_TYPESAFE_CACHE_SIZE` | `128` | Max cached responses |
+| `CONTEXTCUT_TYPESAFE_LONG_CONTEXT` | `0` | Send the 262k long-context header (`1` = on) |
+
+**Testing:** the **🔬 Test** button sends a fixed mixed-claim sample with matching evidence; with TypeSafe ON it exercises the real batched cloud path and should flag the Moon-cheese, Great Wall, and 10%-brain claims while leaving the Canberra and boiling-point claims clean.
 
 ### Practical Guidance
 

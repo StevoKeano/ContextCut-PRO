@@ -503,7 +503,11 @@ def _typesafe_scan_text(text: str, sources: str) -> list[dict] | None:
         offsets = _find_flexible_offsets(text, p.get("text", ""))
         if offsets:
             p["start"], p["end"] = offsets
-    print(f"[{datetime.now().strftime('%H:%M:%S')}] [TypeSafe] verified {len(results)} claims", flush=True)
+    print(
+        f"[{datetime.now().strftime('%H:%M:%S')}] [TypeSafe] verified {len(results)} "
+        "claims (local_llm=skipped)",
+        flush=True,
+    )
     return results
 
 
@@ -628,7 +632,17 @@ def _deep_confidence_scan(
     scan_model = (model or _SCAN_MODEL or os.environ.get("CONTEXTCUT_SCAN_MODEL") or
                   os.environ.get("CONTEXTCUT_MODEL") or "qwen3:14b-q8_0")
 
-    print(f"[{datetime.now().strftime('%H:%M:%S')}] [DEEP] Starting deep scan (model={scan_model!r})", flush=True)
+    _ts_mod = None
+    try:
+        import typesafe_scan as _ts_mod
+        _ts_on = _ts_mod.is_enabled()
+    except Exception:
+        _ts_on = False
+
+    if _ts_on:
+        print(f"[{datetime.now().strftime('%H:%M:%S')}] [DEEP] Starting deep scan (verifier=typesafe, local_llm=skipped)", flush=True)
+    else:
+        print(f"[{datetime.now().strftime('%H:%M:%S')}] [DEEP] Starting deep scan (model={scan_model!r})", flush=True)
     print(f"[{datetime.now().strftime('%H:%M:%S')}] [DEEP] Text length: {len(text)} chars", flush=True)
 
     TIMEOUT = 300
@@ -729,7 +743,12 @@ def _deep_confidence_scan(
             print(f"[{datetime.now().strftime('%H:%M:%S')}] [DEEP] Context length: {len(context_info)} chars", flush=True)
 
         # TypeSafe verifier: replace the local LLM grading when enabled.
-        ts = _typesafe_scan_text(text, context_info)
+        # The KB header below must not mask a "no evidence" sentinel, so gate
+        # the raw KB context before passing it along.
+        ts_sources = context_info
+        if _ts_on and kb_context and not _ts_mod.has_evidence(kb_context):
+            ts_sources = ""
+        ts = _typesafe_scan_text(text, ts_sources)
         if ts is not None:
             return ts
 

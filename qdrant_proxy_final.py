@@ -1054,6 +1054,26 @@ def _sync_env_on_startup():
         print(f"[contextcut] .env sync warning: {e}")
 
 
+def _persist_env_key(key: str, value: str) -> None:
+    """Update or append a single key in the local .env file."""
+    try:
+        env_path = Path(__file__).parent / ".env"
+        lines = env_path.read_text().splitlines() if env_path.exists() else []
+        out = []
+        found = False
+        for line in lines:
+            if line.strip().startswith(key + "="):
+                out.append(f"{key}={value}")
+                found = True
+            else:
+                out.append(line)
+        if not found:
+            out.append(f"{key}={value}")
+        env_path.write_text("\n".join(out) + "\n")
+    except Exception as e:
+        print(f"[contextcut] .env update warning: {e}")
+
+
 def ensure_collection_dim():
     """Check Qdrant collection dimension matches current embed model; recreate if needed."""
     try:
@@ -2197,6 +2217,10 @@ def make_dashboard():
     )
     bc = pct_color(last_pct)
 
+    ts_key_present = bool(os.environ.get("TYPESAFE_API_KEY", "").strip())
+    ts_backend = os.environ.get("CONTEXTCUT_SCAN_BACKEND", "llm").strip().lower()
+    ts_on = ts_backend == "typesafe" and ts_key_present
+
     is_cloud = _provider_name != "Ollama" or not _local_only
 
     cloud_banner = ""
@@ -2542,6 +2566,7 @@ tr.cloud-off td{{background:#0a1a2e!important;color:#22c55e!important;border-top
               <span class="param-val" id="retryVal">3</span>
             </span>
             <button class="hybrid-toggle" id="hybridToggle" onclick="toggleHybridMode()" title="Combine vector search + BM25 keyword search (hybrid retrieval)" style="background:transparent;border:1px solid var(--border);color:var(--muted);border-radius:3px;padding:4px 8px;font-size:10px;cursor:pointer;font-family:'JetBrains Mono',monospace">🔍 Hybrid ON</button>
+            <button class="typesafe-toggle" id="typesafeToggle" onclick="toggleTypesafeMode()" title="Verify claims with TypeSafe.ai (cloud). Requires TYPESAFE_API_KEY in .env." style="background:{'var(--accent)' if ts_on else 'transparent'};border:1px solid {'var(--accent)' if ts_on else 'var(--border)'};color:{'#000' if ts_on else 'var(--muted)'};border-radius:3px;padding:4px 8px;font-size:10px;cursor:pointer;font-family:'JetBrains Mono',monospace;font-weight:{'600' if ts_on else '400'}">🛡 TypeSafe {'ON' if ts_on else 'OFF'}</button>
             <button class="clear-btn" id="defaultBtn" onclick="resetDefaults()" title="Reset all settings to defaults" style="font-size:9px;padding:4px 8px;margin-left:auto">Default</button>
           </div>
           <div style="font-size:9px;color:var(--muted);margin-top:6px;border-top:1px solid var(--border);padding-top:6px">
@@ -2577,6 +2602,8 @@ let abortController = null;
 let lastEsc = 0;
 let lastTaskId = null;
 let hybridMode = true;
+let typesafeMode = {'true' if ts_on else 'false'};
+let typesafeKeyPresent = {'true' if ts_key_present else 'false'};
 
 function saveState() {{
   localStorage.setItem('cc_agentMode', agentMode ? '1' : '0');
@@ -2779,6 +2806,41 @@ function toggleHybridMode() {{
   saveState();
 }}
 
+function renderTypesafeBtn() {{
+  const btn = document.getElementById('typesafeToggle');
+  if (!btn) return;
+  btn.textContent = typesafeMode ? '🛡 TypeSafe ON' : '🛡 TypeSafe OFF';
+  btn.style.background = typesafeMode ? 'var(--accent)' : 'transparent';
+  btn.style.color = typesafeMode ? '#000' : 'var(--muted)';
+  btn.style.borderColor = typesafeMode ? 'var(--accent)' : 'var(--border)';
+  btn.style.fontWeight = typesafeMode ? '600' : '400';
+}}
+
+async function toggleTypesafeMode() {{
+  const want = !typesafeMode;
+  if (want && !typesafeKeyPresent) {{
+    alert('TypeSafe is not configured.\\n\\nAdd TYPESAFE_API_KEY=... to ~/contextcut/.env and restart with ./stop.sh && ./start.sh.');
+    return;
+  }}
+  if (want && !localStorage.getItem('cc_typesafeCloudAck')) {{
+    if (!confirm('TypeSafe is a cloud verifier. The scanned text and retrieved evidence (KB/web context) are sent to api.typesafe.ai.\\n\\nEnable cloud verification?')) return;
+    localStorage.setItem('cc_typesafeCloudAck', '1');
+  }}
+  try {{
+    const resp = await fetch('/api/settings', {{method:'POST', headers:{{'Content-Type':'application/json'}}, body: JSON.stringify({{typesafe: want}})}});
+    const data = await resp.json();
+    if (!data.ok) {{
+      alert(data.error || 'Could not update TypeSafe setting.');
+      return;
+    }}
+    typesafeMode = !!data.typesafe;
+    typesafeKeyPresent = !!data.key_present;
+    renderTypesafeBtn();
+  }} catch(e) {{
+    alert('TypeSafe settings request failed: ' + e);
+  }}
+}}
+
 function updateRetry() {{
   const rs = document.getElementById('retrySlider');
   const rv = document.getElementById('retryVal');
@@ -2914,13 +2976,18 @@ async function runScan(text, assistantDiv, bubble, signal) {{
     if (flags.incorrect) parts.push('<span style=\\"color:#ef4444\\">\\u26a0\\ufe0f ' + flags.incorrect + ' incorrect</span>');
     if (flags.uncertain) parts.push('<span style=\\"color:#f59e0b\\">\\u26a1 ' + flags.uncertain + ' uncertain</span>');
     if (flags.correct) parts.push('<span style=\\"color:#22c55e\\">\\u2713 ' + flags.correct + ' correct</span>');
-    summary.innerHTML = (deepMode ? '🧠 DEEP ' : '') + 'Scan: ' + (parts.length ? parts.join(' | ') : '✅ no issues');
+    const meta = [];
+    if (sd.backend) meta.push('backend: ' + sd.backend);
+    if (sd.evidence) meta.push('evidence: ' + sd.evidence);
+    const metaTxt = meta.length ? ' (' + esc(meta.join(' / ')) + ')' : '';
+    summary.innerHTML = (deepMode ? '🧠 DEEP ' : '') + 'Scan' + metaTxt + ': ' + (parts.length ? parts.join(' | ') : '✅ no issues');
     assistantDiv.appendChild(summary);
     addSelfEvalWarning(sd, assistantDiv);
   }} catch(e) {{ console.warn('Scan failed:', e); indicator.remove(); }}
 }}
 
-const TEST_SCAN_TEXT = `The Moon is made of green cheese. The capital of Australia is Sydney. The Great Wall of China is visible from space with the naked eye. Humans only use ten percent of their brain. DNA is the same as RNA.`;
+const TEST_SCAN_TEXT = `The Moon is made of green cheese. The capital of Australia is Canberra. The Great Wall of China is visible from space with the naked eye. Humans only use ten percent of their brain. At sea level, water boils at 100 degrees Celsius.`;
+const TEST_SCAN_EVIDENCE = `Reference notes: Canberra is the capital city of Australia. The Moon is composed primarily of rock and dust, not cheese. The Great Wall of China is not visible from space with the naked eye; astronauts say it is very difficult to see. Humans use virtually all of their brain, not just ten percent of it. At standard atmospheric pressure at sea level, water boils at 100 degrees Celsius.`;
 
 async function testScan() {{
   const btn = document.getElementById('scanTestBtn');
@@ -2941,7 +3008,7 @@ async function testScan() {{
   try {{
     const resp = await fetch('/api/agent/confidence-scan', {{
       method:'POST', headers:{{'Content-Type':'application/json'}},
-      body: JSON.stringify({{text: TEST_SCAN_TEXT, deep: deepMode}})
+      body: JSON.stringify({{text: TEST_SCAN_TEXT, deep: deepMode, evidence: TEST_SCAN_EVIDENCE}})
     }});
     if (!resp.ok) throw new Error('Scan request failed');
     const data = await resp.json();
@@ -2974,7 +3041,11 @@ async function testScan() {{
         }}
       }}
     }}
-    asstDiv.innerHTML = '<div class="bubble">' + highlighted + '</div>';
+    const meta = [];
+    if (data.backend) meta.push('backend: ' + data.backend);
+    if (data.evidence) meta.push('evidence: ' + data.evidence);
+    const note = meta.length ? '<div style="font-size:9px;color:var(--muted);margin-top:4px">' + esc(meta.join(' / ')) + '</div>' : '';
+    asstDiv.innerHTML = '<div class="bubble">' + highlighted + note + '</div>';
   }} catch(e) {{
     asstDiv.innerHTML = '<div class="bubble">\\u274c Test scan error: ' + esc(e.message) + '</div>';
   }}
@@ -3724,6 +3795,7 @@ pollGpu();
 fetchModels();
 initSession();
 loadState();
+renderTypesafeBtn();
 // Pre-warm knowledge file cache
 fetch('/api/knowledge/files').then(r=>r.json()).then(d=>{{ _kbFiles = new Set(d.files.map(f=>f.name)); }}).catch(()=>{{}});
 document.querySelector('.right')?.classList.add('fullscreen');
@@ -5606,6 +5678,39 @@ class DashboardHandler(_SuppressBrokenPipe, BaseHTTPRequestHandler):
                     self.end_headers()
                     self.wfile.write(resp)
                     return
+                if "typesafe" in body:
+                    val = body.get("typesafe")
+                    enable = val if isinstance(val, bool) else str(val).strip().lower() in ("1", "true", "yes", "on")
+                    key_present = bool(os.environ.get("TYPESAFE_API_KEY", "").strip())
+                    if enable and not key_present:
+                        resp = json.dumps({
+                            "ok": False,
+                            "error": "TYPESAFE_API_KEY not set in .env",
+                            "typesafe": False,
+                            "key_present": False,
+                        }).encode()
+                        self.send_response(200)
+                        self.send_header("Content-Type", "application/json")
+                        self.send_header("Content-Length", str(len(resp)))
+                        self.end_headers()
+                        self.wfile.write(resp)
+                        return
+                    backend = "typesafe" if enable else "llm"
+                    os.environ["CONTEXTCUT_SCAN_BACKEND"] = backend
+                    _persist_env_key("CONTEXTCUT_SCAN_BACKEND", backend)
+                    print(f"[contextcut] Scan backend set to {backend} (typesafe requested={enable})")
+                    resp = json.dumps({
+                        "ok": True,
+                        "typesafe": enable,
+                        "backend": backend,
+                        "key_present": key_present,
+                    }).encode()
+                    self.send_response(200)
+                    self.send_header("Content-Type", "application/json")
+                    self.send_header("Content-Length", str(len(resp)))
+                    self.end_headers()
+                    self.wfile.write(resp)
+                    return
             except Exception as e:
                 err = json.dumps({"error": str(e)}).encode()
                 self.send_response(400)
@@ -5992,11 +6097,20 @@ class DashboardHandler(_SuppressBrokenPipe, BaseHTTPRequestHandler):
                 deep = body.get("deep", False)
                 query = body.get("query", "")
                 sid = body.get("session_id", "")
+                evidence_in = body.get("evidence")
                 kb_context = ""
+                evidence = "none"
                 if sid and sid in _sessions:
                     kb_context = _sessions[sid].get("_kb_context", "")
                     if kb_context:
+                        evidence = "kb"
                         print(f"[{datetime.now().strftime('%H:%M:%S')}] [Scan] Using saved KB context ({len(kb_context)} chars)", flush=True)
+                if isinstance(evidence_in, str) and evidence_in.strip():
+                    kb_context = evidence_in
+                    evidence = "supplied"
+                    print(f"[{datetime.now().strftime('%H:%M:%S')}] [Scan] Using supplied evidence ({len(kb_context)} chars)", flush=True)
+                elif not kb_context and deep:
+                    evidence = "prefetch"
                 from agent_handler import _confidence_scan, _SCAN_MODEL
                 try:
                     from typesafe_scan import is_enabled as _typesafe_enabled
@@ -6005,7 +6119,10 @@ class DashboardHandler(_SuppressBrokenPipe, BaseHTTPRequestHandler):
                     ts_enabled = False
                 backend = "typesafe" if ts_enabled else "llm"
 
-                print(f"[{datetime.now().strftime('%H:%M:%S')}] [Agent] 🔍 Confidence scan (backend={backend}, model={_SCAN_MODEL!r}, deep={deep})", flush=True)
+                if ts_enabled:
+                    print(f"[{datetime.now().strftime('%H:%M:%S')}] [Agent] 🔍 Confidence scan (backend=typesafe, verifier=typesafe, local_llm=skipped, deep={deep})", flush=True)
+                else:
+                    print(f"[{datetime.now().strftime('%H:%M:%S')}] [Agent] 🔍 Confidence scan (backend=llm, model={_SCAN_MODEL!r}, deep={deep})", flush=True)
                 result = _confidence_scan(
                     text,
                     upstream=get_current_upstream(),
@@ -6016,10 +6133,15 @@ class DashboardHandler(_SuppressBrokenPipe, BaseHTTPRequestHandler):
                     query=query,
                     kb_context=kb_context,
                 )
+                if ts_enabled and result and all(
+                    "no evidence" in str(p.get("reason", "")).lower() for p in result
+                ):
+                    evidence = "none"
                 body_resp = json.dumps({
                     "passages": result,
                     "self_eval": not bool(_SCAN_MODEL) and not ts_enabled,
                     "backend": backend,
+                    "evidence": evidence,
                 }).encode()
                 self.send_response(200)
                 self.send_header("Content-Type", "application/json")
