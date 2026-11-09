@@ -482,6 +482,31 @@ def _unload_ollama_model(model_name: str, upstream: str) -> None:
         pass
 
 
+def _typesafe_scan_text(text: str, sources: str) -> list[dict] | None:
+    """Verify claims with TypeSafe and attach span offsets for the dashboard.
+
+    Returns None when the typesafe backend is disabled or unavailable so the
+    caller can fall back to the local LLM scan.
+    """
+    try:
+        import typesafe_scan
+    except Exception as exc:
+        print(f"[{datetime.now().strftime('%H:%M:%S')}] [TypeSafe] import failed: {exc}", flush=True)
+        return None
+    if not typesafe_scan.is_enabled():
+        return None
+    claims = typesafe_scan.split_claims(text)
+    results = typesafe_scan.verify_claims(claims, sources or "")
+    if results is None:
+        return None
+    for p in results:
+        offsets = _find_flexible_offsets(text, p.get("text", ""))
+        if offsets:
+            p["start"], p["end"] = offsets
+    print(f"[{datetime.now().strftime('%H:%M:%S')}] [TypeSafe] verified {len(results)} claims", flush=True)
+    return results
+
+
 def _confidence_scan(
     text: str, upstream: str = None, api_key: str = None,
     detailed: bool = False, model: str = None, deep: bool = False,
@@ -499,7 +524,15 @@ def _confidence_scan(
                 deep = False
             else:
                 raise
-    if not upstream or not text or len(text.strip()) < (10 if detailed else 80):
+    if not text or len(text.strip()) < (10 if detailed else 80):
+        return None
+    # TypeSafe verifier: replaces the local LLM scan when enabled. It does not
+    # need an upstream model, only evidence (kb_context).
+    if detailed:
+        ts = _typesafe_scan_text(text, kb_context or "")
+        if ts is not None:
+            return ts
+    if not upstream:
         return None
     scan_model = (_SCAN_MODEL or model or
                   os.environ.get("CONTEXTCUT_SCAN_MODEL") or
@@ -583,7 +616,14 @@ def _deep_confidence_scan(
     model: str = None, query: str = "", kb_context: str = ""
 ) -> list[dict] | None:
     """Deep scan: extract claims from text, verify each via KB + web search, return JSON array."""
-    if not upstream or not text or len(text.strip()) < 80:
+    if not text or len(text.strip()) < 80:
+        return None
+    if not upstream:
+        # TypeSafe can verify without a local model, using saved KB context.
+        if kb_context:
+            ts = _typesafe_scan_text(text, kb_context)
+            if ts is not None:
+                return ts
         return None
     scan_model = (model or _SCAN_MODEL or os.environ.get("CONTEXTCUT_SCAN_MODEL") or
                   os.environ.get("CONTEXTCUT_MODEL") or "qwen3:14b-q8_0")
@@ -687,6 +727,11 @@ def _deep_confidence_scan(
             print(f"[{datetime.now().strftime('%H:%M:%S')}] [DEEP] Pre-fetching context...", flush=True)
             context_info = _prefetch_context(text)
             print(f"[{datetime.now().strftime('%H:%M:%S')}] [DEEP] Context length: {len(context_info)} chars", flush=True)
+
+        # TypeSafe verifier: replace the local LLM grading when enabled.
+        ts = _typesafe_scan_text(text, context_info)
+        if ts is not None:
+            return ts
 
         llm = ChatOpenAI(
             model=scan_model,
@@ -1681,6 +1726,12 @@ CRITICAL — NEVER overcomplicate:
 - For file reads/writes: use **read_file** / **write_file** tools, NOT shell_exec with cat/echo.
 - For system info (CPU, RAM, disk, GPU): use **system_info** tool, NOT shell_exec with free/df/nvidia-smi.
 - Only use shell_exec when you truly need a system operation (git, compilation, background process, package install via apt).
+- NEVER loop on tool failures. If a web fetch or code parser returns empty or complex nested structures
+  twice, STOP writing custom iteration/parsing scripts and fall back to a direct natural language
+  search query (e.g. web_search) instead. Two failed attempts at the same approach means change approach.
+- NEVER guess JSON/HTML key names. When parsing structured data, FIRST print the actual keys or a
+  small sample (e.g. `print(list(node.keys()))`) to learn the real schema. A walk() that yields zero
+  results almost always means the key name is wrong — inspect the data, do not re-run the same parser.
 
 Rules:
 1. For shell_exec, briefly state the command then run it. Do NOT ask for permission — the user has a separate Allow/Deny mechanism.

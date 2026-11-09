@@ -2793,7 +2793,7 @@ function addSelfEvalWarning(sd, parent) {{
   if (!sd || !sd.self_eval || !parent) return;
   const w = document.createElement('div');
   w.style.cssText = 'font-size:9px;color:#f59e0b;padding:2px 6px;margin-top:1px;border-top:1px solid var(--border)';
-  w.innerHTML = '⚠ Self-evaluating (no separate scan model). Set <code>CONTEXTCUT_SCAN_MODEL</code> in <code>~/contextcut/.env</code> to a small model like <code>qwen3:4b</code> then <code>./stop.sh && ./start.sh</code> for independent verification.';
+  w.innerHTML = '⚠ Self-evaluating (no independent verifier). Set <code>CONTEXTCUT_SCAN_MODEL</code> to a small model, or <code>CONTEXTCUT_SCAN_BACKEND=typesafe</code> + <code>TYPESAFE_API_KEY</code>, in <code>~/contextcut/.env</code> then <code>./stop.sh && ./start.sh</code>.';
   parent.appendChild(w);
 }}
 
@@ -5998,8 +5998,14 @@ class DashboardHandler(_SuppressBrokenPipe, BaseHTTPRequestHandler):
                     if kb_context:
                         print(f"[{datetime.now().strftime('%H:%M:%S')}] [Scan] Using saved KB context ({len(kb_context)} chars)", flush=True)
                 from agent_handler import _confidence_scan, _SCAN_MODEL
+                try:
+                    from typesafe_scan import is_enabled as _typesafe_enabled
+                    ts_enabled = _typesafe_enabled()
+                except Exception:
+                    ts_enabled = False
+                backend = "typesafe" if ts_enabled else "llm"
 
-                print(f"[{datetime.now().strftime('%H:%M:%S')}] [Agent] 🔍 Confidence scan (model={_SCAN_MODEL!r}, deep={deep})", flush=True)
+                print(f"[{datetime.now().strftime('%H:%M:%S')}] [Agent] 🔍 Confidence scan (backend={backend}, model={_SCAN_MODEL!r}, deep={deep})", flush=True)
                 result = _confidence_scan(
                     text,
                     upstream=get_current_upstream(),
@@ -6012,7 +6018,8 @@ class DashboardHandler(_SuppressBrokenPipe, BaseHTTPRequestHandler):
                 )
                 body_resp = json.dumps({
                     "passages": result,
-                    "self_eval": not bool(_SCAN_MODEL),
+                    "self_eval": not bool(_SCAN_MODEL) and not ts_enabled,
+                    "backend": backend,
                 }).encode()
                 self.send_response(200)
                 self.send_header("Content-Type", "application/json")
@@ -6276,12 +6283,10 @@ class DashboardHandler(_SuppressBrokenPipe, BaseHTTPRequestHandler):
                         local_tools = set()
                         collected = []
                         try:
-                            stream_agent = agent.with_config(
-                                {"recursion_limit": 50}
-                            )
                             async with asyncio.timeout(AGENT_TIMEOUT):
-                                    async for event in stream_agent.astream_events(
+                                    async for event in agent.astream_events(
                                         {"messages": msgs},
+                                        config={"recursion_limit": 50},
                                         version="v2",
                                     ):
                                         kind = event.get("event", "")
