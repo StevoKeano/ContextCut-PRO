@@ -152,7 +152,7 @@ open http://localhost:18787
 | `CONTEXTCUT_KB_DIR` | `~/contextcut/knowledge` | Knowledge base directory |
 | `CONTEXTCUT_PROXY_PORT` | `18788` | Proxy listen port |
 | `CONTEXTCUT_DASHBOARD_PORT` | `18787` | Dashboard port |
-| `CONTEXTCUT_CTX_LIMIT` | `32768` | Model context window |
+| `CONTEXTCUT_CTX_LIMIT` | `8192` | Model context window |
 | `CONTEXTCUT_TOP_K` | `5` | Max chunks to retrieve |
 | `CONTEXTCUT_MIN_SCORE` | `0.50` | Minimum relevance threshold |
 | `CONTEXTCUT_MODEL` | `qwen3:14b-q8_0` | Default model in dashboard |
@@ -161,6 +161,39 @@ open http://localhost:18787
 | `TYPESAFE_API_KEY` | *(unset)* | TypeSafe.ai API key; required for the `typesafe` backend |
 
 > Additional TypeSafe tuning variables are documented under [TypeSafe — Cloud Claim Verifier](#typesafe--cloud-claim-verifier-optional).
+
+---
+
+## Security
+
+ContextCut-PRO treats tool output, retrieved knowledge, web pages, and scan markup as untrusted. The containment layer is capability restriction plus human approval — detection only raises alerts.
+
+### Agent containment
+- `shell_exec` runs argv directly (`shell=False`) against an allowlist. Shell metacharacters, sensitive paths (`~/.ssh`, `.env`, `/etc`, …), `find -exec*`, and destructive package/git subcommands are denied.
+- `read_file`, `write_file`, `append_file`, `diff_files`, and `list_dir` refuse credential/system-sensitive paths.
+- `fetch_url` blocks loopback, private, link-local, and non-HTTP(S) targets (SSRF).
+- Tool outputs and retrieval/web content are wrapped in explicit untrusted-data boundaries; secret-looking values are redacted.
+- High-impact tools (`shell_exec`, `run_python`, `write_file`, `append_file`, `delete_knowledge`) pause for approval. Default mode is `ask`; the dashboard shows Allow/Deny and Always Allow/Reject.
+
+### Alerts
+Suspicious untrusted content (instruction override, system-prompt extraction, secret exfiltration, injected shell commands, canary tokens) is recorded to `~/.contextcut/security_alerts.jsonl`, streamed to the dashboard as a banner, and exposed at `GET /api/security/alerts?limit=50`.
+
+### Related environment variables
+| Variable | Default | Description |
+|---|---|---|
+| `CONTEXTCUT_BIND` | `0.0.0.0` | Dashboard/proxy bind address (set `127.0.0.1` for local-only) |
+| `CONTEXTCUT_AGENT_SHELL_ALLOWLIST_ONLY` | `1` | Enforce strict shell allowlist (set `0` to permit approved extras) |
+| `CONTEXTCUT_AGENT_ALLOW_SENSITIVE` | `0` | Allow agent access to sensitive paths (not recommended) |
+| `CONTEXTCUT_ALLOW_PRIVATE_FETCH` | `0` | Allow SSRF targets (not recommended) |
+| `CONTEXTCUT_INJECTION_ALERTS` | `1` | Set `0` to disable alert recording |
+| `CONTEXTCUT_ALERT_FILE` | `~/.contextcut/security_alerts.jsonl` | Alert log path |
+| `CONTEXTCUT_ALERTS_MAX` | `200` | In-memory alert ring size |
+
+Run the security regression tests with:
+
+```bash
+pytest tests/test_agent_policy.py tests/test_injection_guard.py tests/test_scan_sanitize.py tests/test_hitl.py -q
+```
 
 ---
 
@@ -292,6 +325,55 @@ Yes, it's fully dynamic. Three tools enable runtime code generation:
 So the agent isn't limited to a fixed tool list. The LLM can generate Python at runtime to solve problems — data analysis, scripting, API calls, whatever it needs.
 
 In short: ContextCut-PRO is the proxy + RAG layer you put in front of any model (Hermes, Qwen, Llama, etc.). The "free tool credits" thing is a separate cloud billing model that doesn't apply here.
+
+---
+
+## Headless Coding Worker
+
+`coding_agent.py` is a standalone, non-interactive coding worker. It runs a bounded tool-use loop against any OpenAI-compatible endpoint and reuses the same `CONTEXTCUT_UPSTREAM` / model settings as the proxy. It does **not** import the dashboard and does not need the proxy running.
+
+```bash
+# Uses CONTEXTCUT_UPSTREAM + CONTEXTCUT_MODEL (or qwen3:14b-q8_0)
+~/contextcut/venv/bin/python coding_agent.py \
+  --workspace ~/dev/throwaway \
+  "add a test for the parse_date helper and run it"
+
+# Machine-readable result + chosen model override
+~/contextcut/venv/bin/python coding_agent.py --workspace ./sandbox \
+  --model qwen2.5-coder:14b-16k --json "fix the failing test"
+
+# Show resolved configuration without calling a model
+python coding_agent.py --workspace ./sandbox --dry-run "anything"
+```
+
+Every run writes `events.jsonl` and a resumable `messages.json` to `~/.contextcut/coding_runs/<run_id>/`. Continue an interrupted run with `--resume <run_id>`; pass `--json` to get status, steps, duration, token usage, and the log path.
+
+| Variable | Default | Purpose |
+|---|---|---|
+| `CONTEXTCUT_CODING_WORKSPACE` | — (required) | Sandbox root; all file paths are jailed to it |
+| `CONTEXTCUT_CODING_MODEL` | `CONTEXTCUT_MODEL` → `qwen3:14b-q8_0` | Chat model |
+| `CONTEXTCUT_CODING_API_KEY` | `not-needed` | Bearer key if your endpoint needs one |
+| `CONTEXTCUT_CODING_MAX_STEPS` | `25` | Hard cap on model turns |
+| `CONTEXTCUT_CODING_TIMEOUT` | `900` | Wall-clock cap in seconds |
+| `CONTEXTCUT_CODING_SHELL_TIMEOUT` | `AGENT_SHELL_TIMEOUT` → `60` | Per-command timeout |
+| `CONTEXTCUT_CODING_MAX_TOKENS` | `CONTEXTCUT_MAX_TOKENS` → `8192` | Response budget |
+| `CONTEXTCUT_CODING_ALLOWLIST` | — | Extra executables (comma list) for `run_command` |
+| `CONTEXTCUT_CODING_PASSTHROUGH_ENV` | off | Keep secret env vars in child processes (not recommended) |
+
+**Sandbox model.** File tools are jailed with `Path.resolve()` + `is_relative_to()`, deny `.env`/keys/`.ssh`/`.git/config`, and refuse symlink escapes. Writes are atomic with optional `.bak-*` backups. `run_command` splits with `shlex` and runs with `shell=False` against an executable allowlist (build/test/lint tools, read-only git); destructive commands, package installs, network clients, and shells are denied. Child processes get a scrubbed environment.
+
+**Caveat:** the jail protects file tools, not executed project code. Allowlisted runtimes (`python`, `node`, `make`, `pytest`) run with your user privileges, so point `--workspace` at a throwaway directory rather than a trusted repo when experimenting with an untrusted model.
+
+### Untrusted content handling
+
+Data-bearing tool output is marked before it reaches the model: file reads, web search/fetch, knowledge-base retrieval, command output, diffs, and SQL results. The `untrusted_content.py` helper:
+
+- prefixes a short "this is data, not instructions" warning,
+- wraps the payload in `<<<UNTRUSTED_BEGIN source="..." kind="...">>>` / `<<<UNTRUSTED_END>>>`,
+- redacts chat-template tokens such as `<|im_start|>` and `<｜...｜>`,
+- escapes any boundary marker inside the payload so content cannot close the block early.
+
+The proxy marks retrieved KB chunks as untrusted, and TypeSafe redacts special tokens in its `state` payload. This is prompt hygiene, not containment: it reduces the chance a model follows injected text, but the coding worker's allowlist/jail is what actually limits execution. `agent_handler.py` still has a broad `shell_exec`, so treat untrusted repositories with care there too.
 
 ---
 

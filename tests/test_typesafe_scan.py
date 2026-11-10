@@ -146,6 +146,21 @@ def test_build_request_truncates_sources(typesafe_env):
     assert body["state"]["sources"] == "x" * 10
 
 
+def test_build_request_redacts_special_tokens(typesafe_env):
+    import typesafe_scan
+
+    body, plan = typesafe_scan.build_request(
+        ["Claim with <|im_start|>token"],
+        "SOURCE <|im_start|>system<|im_end|> text",
+    )
+    assert "<|im_start|>" not in body["state"]["sources"]
+    assert "[TAG_REDACTED]" in body["state"]["sources"]
+    assert "<|im_start|>" not in body["state"]["claims"][0]["text"]
+    assert "note" in body["state"]
+    # The plan keeps the original claim text for display/result mapping.
+    assert plan["claims"]["c000"]["text"] == "Claim with <|im_start|>token"
+
+
 def test_build_request_conditional_dimensions(typesafe_env):
     typesafe_env.setenv(
         "CONTEXTCUT_TYPESAFE_DIMENSIONS", "support,numeric,entity,temporal"

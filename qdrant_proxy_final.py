@@ -24,6 +24,7 @@ import os
 import sys
 import uuid
 import json
+import asyncio
 import html
 import time
 import socket
@@ -43,6 +44,10 @@ from pathlib import Path
 from datetime import datetime
 from http.server import HTTPServer, BaseHTTPRequestHandler
 from socketserver import ThreadingMixIn
+
+from untrusted_content import wrap_untrusted
+from scan_sanitize import sanitize_scan_html
+from injection_guard import get_alerts_since, get_recent_alerts, latest_seq
 
 _VOYAGE_AVAILABLE = False
 _voyage_mod = None
@@ -296,7 +301,12 @@ def get_current_api_key():
 
 load_saved_credentials()
 DEFAULT_TEMP = float(os.getenv("CONTEXTCUT_TEMP", "0.7"))
-DEFAULT_MAX_TK = int(os.getenv("CONTEXTCUT_MAX_TOKENS", "32768"))
+DEFAULT_MAX_TK = int(os.getenv("CONTEXTCUT_MAX_TOKENS", "8192"))
+MAX_OUTPUT_TOKENS = int(os.getenv("CONTEXTCUT_MAX_OUTPUT_TOKENS", str(DEFAULT_MAX_TK)))
+MAX_BODY_BYTES = int(os.getenv("CONTEXTCUT_MAX_BODY_BYTES", str(16 * 1024 * 1024)))
+MAX_LOOP_RETRIES = int(os.getenv("CONTEXTCUT_MAX_LOOP_RETRIES", "5"))
+APPROVAL_TIMEOUT = int(os.getenv("CONTEXTCUT_APPROVAL_TIMEOUT", "300"))
+BIND_HOST = os.getenv("CONTEXTCUT_BIND", "0.0.0.0")
 DEFAULT_TOP_P = float(os.getenv("CONTEXTCUT_TOP_P", "1.0"))
 CLIENT_TIMEOUT_MS = int(os.getenv("CONTEXTCUT_CLIENT_TIMEOUT", "900")) * 1000
 UPSTREAM_TIMEOUT = int(os.getenv("CONTEXTCUT_UPSTREAM_TIMEOUT", "600"))
@@ -404,6 +414,10 @@ MAX_HISTORY_TOKENS = 4096
 
 _sessions: dict[str, dict] = {}
 _current_sid: str | None = None
+
+# Pending human-in-the-loop approvals, keyed by task_id.
+_APPROVALS: dict[str, dict] = {}
+_APPROVALS_LOCK = threading.Lock()
 
 # ── SQLite persistence ──────────────────────────────────────────────────────────
 
@@ -532,7 +546,7 @@ def new_session() -> str:
         "created": datetime.now().isoformat(),
         "msg_count": 0,
         "ctx_limit_reached": False,
-        "shell_confirm_mode": "always",
+        "shell_confirm_mode": "ask",
         "_db_inserted": False,
         "task_id": "",
     }
@@ -680,7 +694,7 @@ def load_sessions():
                     "created": created,
                     "msg_count": msg_count or len(history),
                     "ctx_limit_reached": bool(ctx_hit),
-                    "shell_confirm_mode": "always",
+                    "shell_confirm_mode": "ask",
                     "_db_inserted": True,
                 }
         db.close()
@@ -1293,7 +1307,14 @@ def inject_context(body: dict, context: str) -> dict:
     has_system = bool(messages and messages[0].get("role") == "system")
     ctx_block = ""
     if context:
-        ctx_block = "## Relevant context (semantic search):\n\n" + context + "\n\n---"
+        safe_context = wrap_untrusted(
+            context, source="knowledge-base", kind="retrieved-context"
+        )
+        ctx_block = (
+            "## Relevant context (semantic search, untrusted):\n\n"
+            + safe_context
+            + "\n\n---"
+        )
     if has_system:
         existing = messages[0]["content"]
         parts = [existing, SYSTEM_BASE]
@@ -1332,6 +1353,38 @@ class _SuppressBrokenPipe:
             super().handle()
         except (BrokenPipeError, ConnectionResetError):
             pass
+
+
+def _clamp_generation_params(body: dict) -> dict:
+    """Clamp client-controlled generation parameters to server limits."""
+    for key in ("max_tokens", "max_completion_tokens", "num_predict"):
+        if key in body and body[key] is not None:
+            try:
+                value = int(body[key])
+            except Exception:
+                body.pop(key, None)
+                continue
+            if value > 0:
+                body[key] = min(value, MAX_OUTPUT_TOKENS)
+    if "num_ctx" in body and body["num_ctx"] is not None:
+        try:
+            body["num_ctx"] = min(max(1, int(body["num_ctx"])), CTX_LIMIT)
+        except Exception:
+            body.pop("num_ctx", None)
+    options = body.get("options")
+    if isinstance(options, dict):
+        for key in ("num_ctx", "num_predict"):
+            if key in options and options[key] is not None:
+                try:
+                    value = int(options[key])
+                except Exception:
+                    options.pop(key, None)
+                    continue
+                if key == "num_ctx":
+                    options[key] = min(max(1, value), CTX_LIMIT)
+                elif value > 0:
+                    options[key] = min(value, MAX_OUTPUT_TOKENS)
+    return body
 
 
 # ── Proxy ─────────────────────────────────────────────────────────────────────
@@ -1527,12 +1580,29 @@ class ProxyHandler(_SuppressBrokenPipe, BaseHTTPRequestHandler):
 
     def do_POST(self):
         try:
-            length = int(self.headers.get("Content-Length", 0))
+            try:
+                length = int(self.headers.get("Content-Length", 0))
+            except Exception:
+                length = 0
+            if length < 0 or length > MAX_BODY_BYTES:
+                resp = json.dumps(
+                    {"error": f"request body too large (max {MAX_BODY_BYTES} bytes)"}
+                ).encode()
+                self.send_response(413)
+                self.send_header("Content-Type", "application/json")
+                self.send_header("Content-Length", str(len(resp)))
+                self.end_headers()
+                self.wfile.write(resp)
+                self.close_connection = True
+                return
             raw_body = self.rfile.read(length)
             try:
                 body = json.loads(raw_body)
             except Exception:
                 body = None
+            if isinstance(body, dict):
+                body = _clamp_generation_params(body)
+                raw_body = json.dumps(body).encode()
 
             query = ""
             hits_meta = []
@@ -1881,6 +1951,8 @@ body{{background:var(--bg);color:var(--text);font-family:'JetBrains Mono',monosp
 <script>
 let selectedModelName = null;
 
+function escAttr(s) {{ return (s||'').replace(/&/g,'&amp;').replace(/"/g,'&quot;').replace(/'/g,'&#39;').replace(/</g,'&lt;').replace(/>/g,'&gt;'); }}
+
 function onProviderChange() {{
   const p = document.getElementById('providerSelect').value;
   const o = document.getElementById('ollamaUrlGroup');
@@ -1941,7 +2013,7 @@ async function fetchModels() {{
     }}
     const list = document.getElementById('modelList');
     if (data.models && data.models.length) {{
-      list.innerHTML = data.models.map(m => `<div onclick="selectModel('${{m}}')">${{m}}</div>`).join('');
+      list.innerHTML = data.models.map(m => `<div onclick="selectModel('${{escAttr(m)}}')">${{esc(m)}}</div>`).join('');
       list.classList.add('show');
       status.textContent = `${{data.models.length}} models found`;
       status.className = 'status ok';
@@ -2430,11 +2502,13 @@ tr:hover td{{background:var(--surf2)}}
 #tourTip .tc button.prim{{background:var(--accent);border-color:var(--accent);color:#000;font-weight:700}}
 .cloud-banner{{display:flex;align-items:center;gap:12px;background:#2a0a0a;border-bottom:2px solid #dc2626;padding:10px 20px;color:#fca5a5;font-size:13px;flex-shrink:0}}
 .cloud-banner strong{{color:#ef4444}}
+.sec-alert{{position:fixed;top:0;left:0;right:0;z-index:5000;background:#7f1d1d;color:#fecaca;border-bottom:2px solid #ef4444;padding:8px 16px;font-size:12px;font-family:'JetBrains Mono',monospace;box-shadow:0 2px 10px rgba(0,0,0,.4)}}
 tr.cloud-on td{{background:#2a0a0a!important;color:#fca5a5!important;border-top-color:#dc2626!important}}
 tr.cloud-off td{{background:#0a1a2e!important;color:#22c55e!important;border-top-color:#22c55e!important}}
 </style>
 </head>
 <body>
+<div id="secAlert" class="sec-alert" style="display:none"></div>
 
 <div class="header">
   <div class="logo">ContextCut<span>-PRO</span></div>
@@ -2959,7 +3033,7 @@ async function runScan(text, assistantDiv, bubble, signal) {{
     }}
     // Persist scan display HTML to server session (always, even if no passages matched)
     if (bubble) {{
-      const finalHtml = stripDeadKnowledgeLinks(linkCitations(highlighted));
+      const finalHtml = sanitizeScanHtml(stripDeadKnowledgeLinks(linkCitations(highlighted)));
       bubble.innerHTML = finalHtml;
       if (sessionId && conversationHistory.length > 0) {{
         const idx = conversationHistory.length - 1;
@@ -3045,7 +3119,7 @@ async function testScan() {{
     if (data.backend) meta.push('backend: ' + data.backend);
     if (data.evidence) meta.push('evidence: ' + data.evidence);
     const note = meta.length ? '<div style="font-size:9px;color:var(--muted);margin-top:4px">' + esc(meta.join(' / ')) + '</div>' : '';
-    asstDiv.innerHTML = '<div class="bubble">' + highlighted + note + '</div>';
+    asstDiv.innerHTML = '<div class="bubble">' + sanitizeScanHtml(highlighted) + note + '</div>';
   }} catch(e) {{
     asstDiv.innerHTML = '<div class="bubble">\\u274c Test scan error: ' + esc(e.message) + '</div>';
   }}
@@ -3055,16 +3129,110 @@ async function testScan() {{
 }}
 
 function esc(s) {{
-  return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/\\n/g,'<br>');
+  return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;')
+    .replace(/"/g,'&quot;').replace(/'/g,'&#39;').replace(/\\n/g,'<br>');
+}}
+
+function sanitizeScanHtml(html) {{
+  if (!html) return '';
+  try {{
+    const parsed = new DOMParser().parseFromString('<div>' + html + '</div>', 'text/html');
+    const root = parsed.body.firstElementChild;
+    if (!root) return '';
+    const allowed = new Set(['A','SPAN','BR','DIV','P']);
+    const attrs = {{A:['href','title','target','rel'],SPAN:['class','title','style'],DIV:['class','style'],P:['class','style'],BR:[]}};
+    const safeProps = ['font-size','text-decoration','color','font-style','margin-top','padding','border-top','display','width'];
+    const safeStyle = (v) => String(v||'').split(';').filter(d => {{
+      const p = d.split(':')[0].trim().toLowerCase();
+      return safeProps.includes(p);
+    }}).join(';');
+    function walk(node) {{
+      if (node.nodeType === 3) return document.createTextNode(node.nodeValue);
+      if (node.nodeType !== 1) return document.createDocumentFragment();
+      const tag = node.tagName;
+      const frag = document.createDocumentFragment();
+      if (!allowed.has(tag)) {{
+        node.childNodes.forEach(c => frag.appendChild(walk(c)));
+        return frag;
+      }}
+      const el = document.createElement(tag.toLowerCase());
+      for (const a of node.attributes) {{
+        const name = a.name.toLowerCase();
+        if (!(attrs[tag]||[]).includes(name)) continue;
+        if (name === 'href') {{
+          const v = a.value || '';
+          if (v.startsWith('/knowledge/') || v.startsWith('http://') || v.startsWith('https://')) el.setAttribute('href', v);
+          continue;
+        }}
+        if (name === 'style') {{ el.setAttribute('style', safeStyle(a.value)); continue; }}
+        el.setAttribute(name, a.value);
+      }}
+      node.childNodes.forEach(c => el.appendChild(walk(c)));
+      return el;
+    }}
+    const out = document.createElement('div');
+    root.childNodes.forEach(c => out.appendChild(walk(c)));
+    return out.innerHTML;
+  }} catch(e) {{ return esc(html); }}
+}}
+
+let pendingApproval = null;
+let lastAlertSeq = 0;
+
+function showSecurityAlert(alert) {{
+  const el = document.getElementById('secAlert');
+  if (!el || !alert) return;
+  if (alert.seq && alert.seq <= lastAlertSeq) return;
+  if (alert.seq) lastAlertSeq = alert.seq;
+  const cats = (alert.categories || []).join(', ');
+  el.textContent = '⚠ Security alert [' + (alert.severity||'?') + '] ' + cats + ' — ' + (alert.source||'unknown');
+  el.style.display = 'block';
+  clearTimeout(window._secAlertTimer);
+  window._secAlertTimer = setTimeout(() => {{ el.style.display = 'none'; }}, 15000);
+}}
+
+function renderApproval(data) {{
+  pendingApproval = data;
+  const box = document.getElementById('messages');
+  if (!box) return;
+  const div = document.createElement('div');
+  div.className = 'msg assistant';
+  const actions = data.actions || [];
+  const rows = actions.map(a => {{
+    const row = document.createElement('div');
+    row.style.cssText = 'font-family:monospace;font-size:11px;margin:3px 0;color:var(--muted)';
+    row.textContent = a.name + '(' + JSON.stringify(a.args || {{}}) + ')';
+    return row.outerHTML;
+  }}).join('');
+  div.innerHTML = '<div class="bubble"><strong>🔐 Approval required</strong>' + rows +
+    '<div class="shell-btns"><button class="allow" onclick="shellConfirm(this, true)">Allow</button>' +
+    '<button class="deny" onclick="shellConfirm(this, false)">Deny</button>' +
+    '<button class="allow" onclick="shellAlways()">Always Allow</button>' +
+    '<button class="deny" onclick="shellReject()">Always Reject</button></div></div>';
+  box.appendChild(div);
+  div.scrollIntoView({{behavior:'smooth', block:'start'}});
+}}
+
+async function submitApproval(allow) {{
+  if (!pendingApproval) return;
+  const taskId = pendingApproval.task_id;
+  const count = (pendingApproval.actions || []).length || 1;
+  const decisions = Array.from({{length: count}}, () => allow
+    ? {{type:'approve'}}
+    : {{type:'reject', message:'Denied by user.'}});
+  pendingApproval = null;
+  try {{
+    await fetch('/api/agent/approve', {{
+      method: 'POST',
+      headers: {{'Content-Type':'application/json'}},
+      body: JSON.stringify({{task_id: taskId, decisions: decisions}})
+    }});
+  }} catch(e) {{ console.warn('approval:', e); }}
+  document.querySelectorAll('.shell-btns').forEach(el => el.innerHTML = allow ? '🟢 Allowed' : '🔴 Denied');
 }}
 
 async function shellConfirm(btn, allow) {{
-  const btns = btn.parentElement;
-  const cmd = btns.dataset.cmd || '';
-  btns.innerHTML = allow ? '🟢 Allowed' : '🔴 Denied';
-  // Send the decision back via a tool_result or similar mechanism
-  // For now we just visually show the decision; in a full impl we'd
-  // notify the server to continue/reject the pending tool.
+  await submitApproval(allow);
 }}
 
 async function shellAlways() {{
@@ -3074,7 +3242,7 @@ async function shellAlways() {{
       headers: {{'Content-Type':'application/json'}},
       body: JSON.stringify({{session_id: sessionId, mode: 'always'}})
     }});
-    document.querySelectorAll('.shell-btns').forEach(el => el.innerHTML = '🟢 Always Allow');
+    await submitApproval(true);
   }} catch(e) {{}}
 }}
 
@@ -3085,7 +3253,7 @@ async function shellReject() {{
       headers: {{'Content-Type':'application/json'}},
       body: JSON.stringify({{session_id: sessionId, mode: 'reject'}})
     }});
-    document.querySelectorAll('.shell-btns').forEach(el => el.innerHTML = '🔴 Always Reject');
+    await submitApproval(false);
   }} catch(e) {{}}
 }}
 
@@ -3958,7 +4126,11 @@ async function sendMessage(taskIdOverride) {{
                 lastTaskId = data.task_id;
                 updateTaskBadge();
               }}
-              if (data.reasoning) {{
+              if (data.alert) {{
+                showSecurityAlert(data.alert);
+              }} else if (data.approval) {{
+                renderApproval(data);
+              }} else if (data.reasoning) {{
                 updateThinking(data.reasoning);
               }} else if (data.token) {{
                 if (thinkingBlock) thinkingBlock.open = false;
@@ -3971,23 +4143,6 @@ async function sendMessage(taskIdOverride) {{
                 div.className = 'tool-call-entry';
                 div.innerHTML = '<span style="color:var(--yellow)">\u2699 ' + esc(data.name) + '</span>' +
                   '<div class="tool-input">' + esc(typeof data.input === 'string' ? data.input : JSON.stringify(data.input, null, 2)) + '</div>';
-                if (data.name === 'shell_exec' && data.shell_mode === 'ask') {{
-                  td.open = true;
-                  const rightEl = document.querySelector('.right.fullscreen');
-                  if (rightEl) {{
-                    rightEl.classList.remove('fullscreen');
-                  }}
-                  div.innerHTML += '<div class="shell-btns" data-cmd="' + esc(data.input) + '">' +
-                    '<button class="allow" onclick="shellConfirm(this, true)">Allow</button>' +
-                    '<button class="deny" onclick="shellConfirm(this, false)">Deny</button>' +
-                    '<button class="allow" onclick="shellAlways()">Always Allow</button>' +
-                    '<button class="deny" onclick="shellReject()">Always Reject</button>' +
-                    '</div>';
-                  setTimeout(() => {{
-                    const mb = document.getElementById('messages');
-                    if (mb) mb.scrollTop = mb.scrollHeight;
-                  }}, 50);
-                }}
                 td.appendChild(div);
               }} else if (data.name && data.result) {{
                 const existing = assistantDiv ? assistantDiv.querySelector('.tool-call-entry:last-child') : null;
@@ -4405,7 +4560,7 @@ async function recallSession(sid) {{
     if (msgs) {{
       msgs.innerHTML = s.history.map(m => {{
         if (m.role === 'assistant' && m.scan_html) {{
-          return '<div class="msg assistant"><div class="bubble">' + stripDeadKnowledgeLinks(m.scan_html) + '</div></div>';
+          return '<div class="msg assistant"><div class="bubble">' + sanitizeScanHtml(stripDeadKnowledgeLinks(m.scan_html)) + '</div></div>';
         }}
         return '<div class="msg ' + m.role + '"><div class="bubble">' + (m.role === 'assistant' ? stripDeadKnowledgeLinks(linkCitations(esc(m.content))) : esc(m.content)) + '</div></div>';
       }}).join('');
@@ -4657,6 +4812,14 @@ function fbUploadFile() {{
   }})
   .catch(e => {{ alert('Network error: '+e.message); }});
 }}
+setInterval(async function() {{
+  try {{
+    const r = await fetch('/api/security/alerts?limit=1');
+    if (!r.ok) return;
+    const d = await r.json();
+    (d.alerts || []).forEach(showSecurityAlert);
+  }} catch(e) {{}}
+}}, 15000);
 (function(){{
   var t=localStorage.getItem('ccTheme');
   if(!t)t=window.matchMedia('(prefers-color-scheme:dark)').matches?'dark':'light';
@@ -4676,11 +4839,140 @@ document.getElementById('togBtn').addEventListener('click',togTheme);
 
 
 # ── Dashboard handler ─────────────────────────────────────────────────────────
+def _agent_config(task_id: str) -> dict:
+    return {
+        "recursion_limit": 50,
+        "configurable": {"thread_id": task_id or "default"},
+    }
+
+
+def _action_to_dict(action) -> dict:
+    if isinstance(action, dict):
+        return {
+            "name": action.get("name", ""),
+            "args": action.get("args", {}),
+            "description": action.get("description", ""),
+        }
+    return {
+        "name": getattr(action, "name", ""),
+        "args": getattr(action, "args", {}) or {},
+        "description": getattr(action, "description", ""),
+    }
+
+
+def _extract_interrupt_requests(state) -> list[dict]:
+    """Return normalized interrupt payloads from a LangGraph state snapshot."""
+    requests = []
+    for task in getattr(state, "tasks", ()) or ():
+        for intr in getattr(task, "interrupts", ()) or ():
+            value = getattr(intr, "value", intr)
+            if not isinstance(value, dict):
+                continue
+            actions = value.get("action_requests", []) or []
+            configs = value.get("review_configs", []) or []
+            requests.append(
+                {
+                    "actions": [_action_to_dict(a) for a in actions],
+                    "review_configs": configs,
+                }
+            )
+    return requests
+
+
+def _reject_decisions(count: int, message: str = "Approval denied or timed out.") -> list[dict]:
+    return [{"type": "reject", "message": message} for _ in range(max(0, count))]
+
+
+async def _resolve_approval_requests(
+    requests: list[dict],
+    *,
+    mode: str,
+    task_id: str,
+    sid: str,
+    emit=None,
+) -> list[dict]:
+    """Resolve interrupt action requests into HITL decisions."""
+    count = sum(len(r.get("actions", [])) for r in requests)
+    if count <= 0:
+        return []
+    if mode == "always":
+        return [{"type": "approve"} for _ in range(count)]
+    if mode == "reject" or emit is None:
+        return _reject_decisions(count, "Rejected by policy or non-streaming request.")
+
+    gate = {
+        "event": threading.Event(),
+        "decisions": None,
+        "created": time.time(),
+    }
+    with _APPROVALS_LOCK:
+        _APPROVALS[task_id] = gate
+    try:
+        actions = []
+        for req in requests:
+            actions.extend(req.get("actions", []))
+        emit(
+            {
+                "type": "approval_required",
+                "approval": True,
+                "task_id": task_id,
+                "session_id": sid,
+                "actions": actions,
+                "timeout": APPROVAL_TIMEOUT,
+            }
+        )
+        try:
+            await asyncio.get_running_loop().run_in_executor(
+                None, gate["event"].wait, APPROVAL_TIMEOUT
+            )
+        except Exception:
+            pass
+        decisions = gate.get("decisions")
+        if not isinstance(decisions, list) or len(decisions) != count:
+            return _reject_decisions(count, "Approval denied or timed out.")
+        normalized = []
+        for decision in decisions:
+            if not isinstance(decision, dict):
+                normalized.append({"type": "reject", "message": "Invalid decision."})
+                continue
+            kind = decision.get("type", "reject")
+            if kind not in ("approve", "reject"):
+                kind = "reject"
+            item = {"type": kind}
+            if decision.get("message"):
+                item["message"] = str(decision["message"])[:1000]
+            normalized.append(item)
+        return normalized
+    finally:
+        with _APPROVALS_LOCK:
+            if _APPROVALS.get(task_id) is gate:
+                _APPROVALS.pop(task_id, None)
+
+
 class DashboardHandler(_SuppressBrokenPipe, BaseHTTPRequestHandler):
     def log_message(self, fmt, *args):
         pass
 
     def do_GET(self):
+        if self.path.startswith("/api/security/alerts"):
+            try:
+                parsed = urllib.parse.urlparse(self.path)
+                qs = urllib.parse.parse_qs(parsed.query)
+                limit = int((qs.get("limit") or ["50"])[0])
+            except Exception:
+                limit = 50
+            body = json.dumps(
+                {
+                    "alerts": get_recent_alerts(limit),
+                    "latest_seq": latest_seq(),
+                }
+            ).encode()
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+            return
         if self.path == "/log":
             with _lock:
                 rows = list(_log)
@@ -4698,11 +4990,17 @@ class DashboardHandler(_SuppressBrokenPipe, BaseHTTPRequestHandler):
                 if sid in _sessions:
                     s = _sessions[sid]
                     total_tok = sum(count_tokens(m["content"]) for m in s["history"])
+                    safe_history = []
+                    for m in s["history"]:
+                        entry = dict(m)
+                        if entry.get("scan_html"):
+                            entry["scan_html"] = sanitize_scan_html(entry["scan_html"])
+                        safe_history.append(entry)
                     data = {
                         "ok": True,
                         "session": {
                             "id": sid,
-                            "history": s["history"],
+                            "history": safe_history,
                             "msg_count": s["msg_count"],
                             "created": s["created"],
                             "total_tokens": total_tok,
@@ -4727,7 +5025,7 @@ class DashboardHandler(_SuppressBrokenPipe, BaseHTTPRequestHandler):
                             for row in mcur.fetchall():
                                 entry = {"role": row[0], "content": row[1]}
                                 if row[2]:
-                                    entry["scan_html"] = row[2]
+                                    entry["scan_html"] = sanitize_scan_html(row[2])
                                 history.append(entry)
                             global _current_sid
                             _current_sid = sid
@@ -5435,7 +5733,21 @@ class DashboardHandler(_SuppressBrokenPipe, BaseHTTPRequestHandler):
                 "<hr><p style='color:#64748b;font-size:12px'><a href='/'>Back to dashboard</a></p></body></html>").encode("utf-8")
 
     def do_POST(self):
-        length = int(self.headers.get("Content-Length", 0))
+        try:
+            length = int(self.headers.get("Content-Length", 0))
+        except Exception:
+            length = 0
+        if length < 0 or length > MAX_BODY_BYTES:
+            resp = json.dumps(
+                {"error": f"request body too large (max {MAX_BODY_BYTES} bytes)"}
+            ).encode()
+            self.send_response(413)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Length", str(len(resp)))
+            self.end_headers()
+            self.wfile.write(resp)
+            self.close_connection = True
+            return
         raw_body = self.rfile.read(length)
 
         # ── Settings endpoints ──
@@ -6058,6 +6370,39 @@ class DashboardHandler(_SuppressBrokenPipe, BaseHTTPRequestHandler):
                 return
 
         # ── Agent endpoints ──
+        if self.path == "/api/agent/approve":
+            try:
+                body = json.loads(raw_body)
+                task_id = str(body.get("task_id", "")).strip()
+                decisions = body.get("decisions")
+                if not task_id or not isinstance(decisions, list):
+                    raise ValueError("task_id and decisions[] are required")
+                with _APPROVALS_LOCK:
+                    gate = _APPROVALS.get(task_id)
+                    if gate:
+                        gate["decisions"] = decisions
+                        gate["event"].set()
+                if not gate:
+                    resp = json.dumps(
+                        {"ok": False, "error": "no pending approval for task_id"}
+                    ).encode()
+                    self.send_response(404)
+                else:
+                    resp = json.dumps({"ok": True}).encode()
+                    self.send_response(200)
+                self.send_header("Content-Type", "application/json")
+                self.send_header("Content-Length", str(len(resp)))
+                self.end_headers()
+                self.wfile.write(resp)
+            except Exception as e:
+                err = json.dumps({"error": str(e)}).encode()
+                self.send_response(400)
+                self.send_header("Content-Type", "application/json")
+                self.send_header("Content-Length", str(len(err)))
+                self.end_headers()
+                self.wfile.write(err)
+            return
+
         if self.path == "/api/agent/shell-mode":
             try:
                 body = json.loads(raw_body)
@@ -6173,8 +6518,9 @@ class DashboardHandler(_SuppressBrokenPipe, BaseHTTPRequestHandler):
                 body = json.loads(raw_body)
                 sid = self.path.split("/api/session/scan/")[-1].split("?")[0]
                 msg_pos = body.get("index", -1)
-                scan_html = body.get("html", "")
-                print(f"[{datetime.now().strftime('%H:%M:%S')}] [Scan] Persist sid={sid!r} pos={msg_pos} html_len={len(scan_html)}", flush=True)
+                raw_html = body.get("html", "")
+                scan_html = sanitize_scan_html(raw_html)
+                print(f"[{datetime.now().strftime('%H:%M:%S')}] [Scan] Persist sid={sid!r} pos={msg_pos} html_len={len(raw_html)}->{len(scan_html)}", flush=True)
                 if msg_pos >= 0 and scan_html:
                     with _lock:
                         s = _sessions.get(sid)
@@ -6292,9 +6638,23 @@ class DashboardHandler(_SuppressBrokenPipe, BaseHTTPRequestHandler):
                 deep = body.get("deep", False)
                 task_id = body.get("task_id", "").strip()
                 scan = body.get("scan", True)
-                loop_retries = int(body.get("loop_retries", 0))
+                try:
+                    loop_retries = max(0, min(int(body.get("loop_retries", 0)), MAX_LOOP_RETRIES))
+                except Exception:
+                    loop_retries = 0
                 reasoning_effort = body.get("reasoning_effort", "")
-                max_tokens = int(body.get("max_tokens", 0) or 0)
+                try:
+                    max_tokens = min(max(0, int(body.get("max_tokens", 0) or 0)), MAX_OUTPUT_TOKENS)
+                except Exception:
+                    max_tokens = 0
+                if len(message) > 200_000:
+                    resp = json.dumps({"error": "message too large"}).encode()
+                    self.send_response(413)
+                    self.send_header("Content-Type", "application/json")
+                    self.send_header("Content-Length", str(len(resp)))
+                    self.end_headers()
+                    self.wfile.write(resp)
+                    return
 
                 if not sid or sid not in _sessions:
                     sid = new_session()
@@ -6367,21 +6727,55 @@ class DashboardHandler(_SuppressBrokenPipe, BaseHTTPRequestHandler):
                 ctx, hits_meta = qdrant_context(message)
                 session["_kb_context"] = ctx
                 if ctx:
+                    safe_ctx = wrap_untrusted(
+                        ctx,
+                        source="knowledge-base",
+                        kind="retrieved-context",
+                    )
                     input_messages.insert(0, SystemMessage(
-                        content="## Relevant context (semantic search):\n\n" + ctx + "\n\n---"
+                        content=(
+                            "## Relevant context (semantic search, untrusted):\n\n"
+                            + safe_ctx
+                            + "\n\n---"
+                        )
                     ))
 
-                shell_mode = session.get("shell_confirm_mode", "always")
+                shell_mode = session.get("shell_confirm_mode", "ask")
 
                 import asyncio
 
                 async def _run_agent() -> str:
+                    from langgraph.types import Command
+
+                    config = _agent_config(task_id)
                     result = await asyncio.wait_for(
                         agent.with_config({"recursion_limit": 50}).ainvoke(
-                            {"messages": input_messages}
+                            {"messages": input_messages}, config=config
                         ),
                         timeout=AGENT_TIMEOUT,
                     )
+                    for _ in range(10):
+                        try:
+                            state = await agent.aget_state(config)
+                        except Exception:
+                            break
+                        reqs = _extract_interrupt_requests(state)
+                        if not reqs:
+                            break
+                        decisions = await _resolve_approval_requests(
+                            reqs,
+                            mode=shell_mode,
+                            task_id=task_id,
+                            sid=sid,
+                            emit=None,
+                        )
+                        result = await asyncio.wait_for(
+                            agent.with_config({"recursion_limit": 50}).ainvoke(
+                                Command(resume={"decisions": decisions}),
+                                config=config,
+                            ),
+                            timeout=AGENT_TIMEOUT,
+                        )
                     final_msgs = result.get("messages", [])
                     return final_msgs[-1].content if final_msgs else ""
 
@@ -6389,9 +6783,13 @@ class DashboardHandler(_SuppressBrokenPipe, BaseHTTPRequestHandler):
                     pass
 
                 async def _run_agent_stream(write):
+                    from langgraph.types import Command
+
                     called_tools = set()
                     full_output = ""
                     step_counter = 0
+                    config = _agent_config(task_id)
+                    alert_seq = latest_seq()
 
                     def emit(data):
                         try:
@@ -6400,15 +6798,26 @@ class DashboardHandler(_SuppressBrokenPipe, BaseHTTPRequestHandler):
                         except Exception:
                             raise _AgentAbort()
 
+                    def emit_alerts():
+                        nonlocal alert_seq
+                        for alert in get_alerts_since(alert_seq):
+                            alert_seq = max(alert_seq, int(alert.get("seq", 0)))
+                            emit({"type": "security_alert", "alert": alert})
+
                     async def _invoke_and_stream(msgs, capture_only=False):
                         nonlocal full_output, step_counter
                         local_tools = set()
                         collected = []
                         try:
                             async with asyncio.timeout(AGENT_TIMEOUT):
+                                    stream_input = (
+                                        msgs
+                                        if isinstance(msgs, Command)
+                                        else {"messages": msgs}
+                                    )
                                     async for event in agent.astream_events(
-                                        {"messages": msgs},
-                                        config={"recursion_limit": 50},
+                                        stream_input,
+                                        config=config,
                                         version="v2",
                                     ):
                                         kind = event.get("event", "")
@@ -6462,6 +6871,7 @@ class DashboardHandler(_SuppressBrokenPipe, BaseHTTPRequestHandler):
                                             )
                                             print(f"[{datetime.now().strftime('%H:%M:%S')}] [Agent] \u2705 {tool_name} -> {output_str[:80]}", flush=True)
                                             emit({'name': tool_name, 'result': output_str, 'type': 'tool_result'})
+                                            emit_alerts()
                                             # Save streaming checkpoint
                                             try:
                                                 step_counter += 1
@@ -6496,6 +6906,30 @@ class DashboardHandler(_SuppressBrokenPipe, BaseHTTPRequestHandler):
                     # First pass: stream + track tools
                     try:
                         called_tools = await _invoke_and_stream(input_messages)
+                    except _AgentAbort:
+                        return full_output
+
+                    # Human-in-the-loop approvals: the agent graph pauses at
+                    # high-impact tool calls; resolve decisions and resume.
+                    try:
+                        for _ in range(10):
+                            try:
+                                state = await agent.aget_state(config)
+                            except Exception:
+                                break
+                            reqs = _extract_interrupt_requests(state)
+                            if not reqs:
+                                break
+                            decisions = await _resolve_approval_requests(
+                                reqs,
+                                mode=shell_mode,
+                                task_id=task_id,
+                                sid=sid,
+                                emit=emit,
+                            )
+                            called_tools |= await _invoke_and_stream(
+                                Command(resume={"decisions": decisions})
+                            )
                     except _AgentAbort:
                         return full_output
 
@@ -6593,6 +7027,7 @@ class DashboardHandler(_SuppressBrokenPipe, BaseHTTPRequestHandler):
                         except Exception as scan_e:
                             emit({'error': str(scan_e), 'type': 'correction'})
 
+                    emit_alerts()
                     tok_count = len(full_output.split())
                     print(f"[{datetime.now().strftime('%H:%M:%S')}] [Agent] \U0001f3af Done ({tok_count} words, {len(called_tools)} tools)", flush=True)
                     try:
@@ -6863,7 +7298,7 @@ if __name__ == "__main__":
     _READY_FILE = Path(__file__).parent / ".proxy_ready"
     _READY_FILE.write_text("ready\n")
 
-    dash = ReusableHTTPServer(("0.0.0.0", DASHBOARD_PORT), DashboardHandler)
+    dash = ReusableHTTPServer((BIND_HOST, DASHBOARD_PORT), DashboardHandler)
     threading.Thread(target=dash.serve_forever, daemon=True).start()
 
     print(
@@ -6880,4 +7315,4 @@ if __name__ == "__main__":
     if DEFAULT_MODEL:
         print(f"[contextcut] Model      → {DEFAULT_MODEL}")
 
-    ReusableHTTPServer(("0.0.0.0", LISTEN_PORT), ProxyHandler).serve_forever()
+    ReusableHTTPServer((BIND_HOST, LISTEN_PORT), ProxyHandler).serve_forever()

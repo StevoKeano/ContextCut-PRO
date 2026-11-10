@@ -123,3 +123,43 @@ class TestDiffFiles:
         mock_subprocess.side_effect = FileNotFoundError("diff not found")
         result = diff_files.invoke({"path_a": "a", "path_b": "b"})
         assert "error" in result.lower()
+
+
+class TestUntrustedBoundaries:
+    def test_shell_output_is_wrapped(self, mock_subprocess):
+        from agent_handler import shell_exec
+        from untrusted_content import END_MARKER, SAFETY_WARNING
+
+        mock_subprocess.return_value = subprocess.CompletedProcess(
+            args=["echo", "hi"], returncode=0, stdout="hello\n", stderr=""
+        )
+        result = shell_exec.invoke({"command": "echo hello"})
+        assert result.startswith(SAFETY_WARNING)
+        assert result.rstrip().endswith(END_MARKER)
+
+    def test_run_python_output_is_wrapped(self, mock_subprocess):
+        from agent_handler import run_python
+        from untrusted_content import SAFETY_WARNING
+
+        mock_subprocess.return_value = subprocess.CompletedProcess(
+            args=["python3", "-c", "print('hi')"], returncode=0, stdout="hi\n", stderr=""
+        )
+        result = run_python.invoke({"code": "print('hi')", "timeout": 30})
+        assert result.startswith(SAFETY_WARNING)
+
+    def test_diff_output_is_wrapped(self, mock_subprocess):
+        from agent_handler import diff_files
+        from untrusted_content import SAFETY_WARNING
+
+        mock_subprocess.return_value = subprocess.CompletedProcess(
+            args=["diff", "-u", "a", "b"], returncode=0, stdout="--- a\n+++ b\n", stderr=""
+        )
+        result = diff_files.invoke({"path_a": "a", "path_b": "b"})
+        assert result.startswith(SAFETY_WARNING)
+
+    def test_blocked_command_is_not_wrapped(self, mock_subprocess):
+        from agent_handler import shell_exec
+        from untrusted_content import SAFETY_WARNING
+
+        result = shell_exec.invoke({"command": "rm -rf /"})
+        assert not result.startswith(SAFETY_WARNING)
