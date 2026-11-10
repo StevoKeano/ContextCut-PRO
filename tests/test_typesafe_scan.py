@@ -92,22 +92,19 @@ def test_enabled_with_backend_and_key(typesafe_env):
 # ── request construction ─────────────────────────────────────────────────────
 
 
-def test_build_request_puts_sources_and_claims_in_state(typesafe_env):
+def test_build_request_state_holds_shared_sources_only(typesafe_env):
     import typesafe_scan
 
     claims = ["Paris is in France.", "The sky is green."]
     body, plan = typesafe_scan.build_request(claims, "SOURCE TEXT")
 
     assert body["model"] == "jev-latest"
-    assert body["state"]["sources"] == "SOURCE TEXT"
-    assert body["state"]["claims"] == [
-        {"id": "c000", "text": "Paris is in France."},
-        {"id": "c001", "text": "The sky is green."},
-    ]
+    assert body["state"] == {"sources": "SOURCE TEXT"}
     assert plan["claims"]["c000"] == {"index": 0, "text": "Paris is in France."}
+    assert plan["claims"]["c001"] == {"index": 1, "text": "The sky is green."}
 
 
-def test_build_request_questions_reference_claim_ids_not_text(typesafe_env):
+def test_build_request_questions_include_claim_text(typesafe_env):
     import typesafe_scan
 
     body, plan = typesafe_scan.build_request(["Paris is in France."], "SOURCE TEXT")
@@ -128,9 +125,9 @@ def test_build_request_questions_reference_claim_ids_not_text(typesafe_env):
     assert questions["c000_verdict"]["type"] == "choice"
     assert questions["c000_severity"]["type"] == "score"
     assert questions["c000_support"]["type"] == "noul"
-    # Claim text lives in state only; questions reference the ID.
-    assert "Paris is in France." not in questions["c000_support"]["instructions"]
-    assert "c000" in questions["c000_support"]["instructions"]
+    # Per TypeSafe guidance, name the claim directly instead of an ID lookup.
+    assert "Paris is in France." in questions["c000_support"]["instructions"]
+    assert "c000" not in questions["c000_support"]["instructions"]
     assert plan["questions"]["c000_support"] == {
         "claim_id": "c000",
         "dim": "support",
@@ -155,10 +152,22 @@ def test_build_request_redacts_special_tokens(typesafe_env):
     )
     assert "<|im_start|>" not in body["state"]["sources"]
     assert "[TAG_REDACTED]" in body["state"]["sources"]
-    assert "<|im_start|>" not in body["state"]["claims"][0]["text"]
-    assert "note" in body["state"]
+    assert "<|im_start|>" not in body["questions"]["c000_support"]["instructions"]
     # The plan keeps the original claim text for display/result mapping.
     assert plan["claims"]["c000"]["text"] == "Claim with <|im_start|>token"
+
+
+def test_build_request_redacts_secrets_before_cloud(typesafe_env):
+    import typesafe_scan
+
+    secret = "sk-abcdefghijklmnopqrstuvwxyz012345"
+    body, _ = typesafe_scan.build_request(
+        [f"Use token {secret} to call the API."],
+        f"Evidence includes {secret} and a password.",
+    )
+    serialized = str(body)
+    assert secret not in serialized
+    assert "[REDACTED" in serialized or "REDACTED" in serialized
 
 
 def test_build_request_conditional_dimensions(typesafe_env):
@@ -359,6 +368,25 @@ def test_verify_claims_global_insufficiency_vetoes(typesafe_env):
     assert "insufficient evidence" in results[0]["reason"]
 
 
+def test_verify_claims_per_claim_sufficiency_overrides_global_pessimism(typesafe_env):
+    import typesafe_scan
+
+    payload = {
+        "model": "jev-1.14.0",
+        "answers": {
+            **_answers("c000", verdict="correct", sufficient=0.99),
+            **_answers("c001", verdict="incorrect", sufficient=0.96),
+            "g_sources_sufficient": _noul(0.3),
+        },
+        "usage": {},
+    }
+    with patch("typesafe_scan.requests.post", return_value=_fake_response(payload)):
+        results = typesafe_scan.verify_claims(["a claim", "b claim"], EVIDENCE)
+
+    assert [r["factual"] for r in results] == ["correct", "incorrect"]
+    assert all("insufficient evidence" not in r["reason"] for r in results)
+
+
 def test_verify_claims_severity_score_is_surfaced(typesafe_env):
     import typesafe_scan
 
@@ -422,6 +450,109 @@ def test_verify_claims_missing_answer_is_uncertain(typesafe_env):
 
     assert results[0]["factual"] == "uncertain"
     assert "no answer" in results[0]["reason"].lower()
+
+
+def test_verify_claims_low_confidence_verdict_requires_review(typesafe_env):
+    import typesafe_scan
+
+    payload = {
+        "model": "jev-1.14.0",
+        "answers": {
+            "c000_verdict": {
+                "type": "choice",
+                "choice": "correct",
+                "confidence": 0.4,
+                "probabilities": {"correct": 0.4, "incorrect": 0.35},
+            },
+            "g_sources_sufficient": _noul(0.9),
+        },
+        "usage": {},
+    }
+    with patch("typesafe_scan.requests.post", return_value=_fake_response(payload)):
+        results = typesafe_scan.verify_claims(["claim"], EVIDENCE)
+
+    # Low confidence is not trusted for the decision, so it cannot prove support.
+    assert results[0]["factual"] == "uncertain"
+    assert results[0]["review"] is True
+    assert results[0]["confidence"] == 0.4
+    assert results[0]["probabilities"]["verdict"]["correct"] == 0.4
+    assert "review recommended" in results[0]["reason"]
+
+
+def test_verify_claims_low_confidence_verdict_ignored_but_score_decides(typesafe_env):
+    import typesafe_scan
+
+    payload = {
+        "model": "jev-1.14.0",
+        "answers": {
+            "c000_verdict": {
+                "type": "choice",
+                "choice": "incorrect",
+                "confidence": 0.3,
+            },
+            "c000_support": _noul(0.9),
+            "c000_contradict": _noul(0.05),
+            "g_sources_sufficient": _noul(0.9),
+        },
+        "usage": {},
+    }
+    with patch("typesafe_scan.requests.post", return_value=_fake_response(payload)):
+        results = typesafe_scan.verify_claims(["claim"], EVIDENCE)
+
+    assert results[0]["factual"] == "correct"
+    assert results[0]["review"] is True
+
+
+def test_verify_claims_high_confidence_choice_is_trusted(typesafe_env):
+    import typesafe_scan
+
+    payload = {
+        "model": "jev-1.14.0",
+        "answers": {
+            "c000_verdict": {
+                "type": "choice",
+                "choice": "incorrect",
+                "confidence": 0.95,
+                "probabilities": {"incorrect": 0.95, "correct": 0.05},
+            },
+            "g_sources_sufficient": _noul(0.9),
+        },
+        "usage": {},
+    }
+    with patch("typesafe_scan.requests.post", return_value=_fake_response(payload)):
+        results = typesafe_scan.verify_claims(["claim"], EVIDENCE)
+
+    assert results[0]["factual"] == "incorrect"
+    assert results[0]["review"] is False
+    assert results[0]["confidence"] == 0.95
+
+
+def test_verify_claims_retries_429(typesafe_env):
+    typesafe_env.setenv("CONTEXTCUT_TYPESAFE_MAX_RETRIES", "2")
+    typesafe_env.setenv("CONTEXTCUT_TYPESAFE_RETRY_BACKOFF", "0")
+    import typesafe_scan
+
+    rate_limited = MagicMock()
+    rate_limited.status_code = 429
+    rate_limited.headers = {"retry-after": "0"}
+    payload = {
+        "model": "jev-1.14.0",
+        "answers": {
+            **_answers("c000", verdict="correct"),
+            "g_sources_sufficient": _noul(0.9),
+        },
+        "usage": {},
+    }
+    ok = _fake_response(payload)
+    ok.status_code = 200
+
+    with patch(
+        "typesafe_scan.requests.post", side_effect=[rate_limited, ok]
+    ) as post:
+        results = typesafe_scan.verify_claims(["claim"], EVIDENCE)
+
+    assert post.call_count == 2
+    assert results[0]["factual"] == "correct"
 
 
 # ── caching ──────────────────────────────────────────────────────────────────

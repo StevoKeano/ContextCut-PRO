@@ -440,10 +440,11 @@ TypeSafe replaces the local scan LLM with [TypeSafe.ai](https://typesafe.ai)'s S
 
 **How it works:**
 
-1. The scanned text is split into claims. Claims **and** the evidence bundle are placed in the request `state` exactly once, tagged with stable IDs (`c000`, `c001`, …).
-2. Each question references a claim by ID (no repeated claim text), so many questions are fanned out cheaply in one request. Default per-claim questions: `verdict` (choice), `support`, `contradict`, `sufficient`, `subjective`, `severity`. Globals: `sources_sufficient`, `faithful_overall`.
-3. Answers are combined in code: an explicit contradiction → `incorrect`; a positive verdict/support with no contradiction → `correct`; missing evidence or a low global sufficiency score → `uncertain` (never a silent `correct`). Subjective/opinion claims are not flagged.
-4. Requests are cached in memory (TTL 900s) and bounded by a token/question budget.
+1. The scanned text is split into claims. Only the shared evidence bundle is placed in the request `state`; each question names its claim directly, as TypeSafe recommends, instead of making Jev look up an ID in shared state. Stable IDs (`c000`, `c001`, …) are kept internally for mapping answers back to claims.
+2. Default per-claim questions: `verdict` (choice), `support`, `contradict`, `sufficient`, `subjective`, `severity`. Globals: `sources_sufficient`, `faithful_overall`.
+3. Secrets and chat-template special tokens are redacted from both the evidence and the claim text before anything is sent to the cloud.
+4. Answers are combined in code: an explicit contradiction → `incorrect`; a positive verdict/support with no contradiction → `correct`; missing evidence, or a low global sufficiency score when the per-claim sufficiency question is also weak → `uncertain` (never a silent `correct`). Subjective/opinion claims are not flagged. Choice verdicts below `CONTEXTCUT_TYPESAFE_MIN_CONFIDENCE` are not trusted for the decision and are marked `review: true`; ambiguous Noul probability bands are also routed to review. Jev's raw `confidence` and `probabilities` are surfaced on each result.
+5. Requests are cached in memory (TTL 900s), retried with backoff on HTTP 429, and bounded by per-question (32k), per-request (64k), token, and question budgets.
 
 **Enable it** with the **🛡 TypeSafe** button under the dashboard parameters, or in `.env`:
 
@@ -460,7 +461,7 @@ The toggle requires the key to be present; after editing `.env`, restart the pro
 |---|---|---|
 | `CONTEXTCUT_SCAN_BACKEND` | `llm` | `llm` (local scan model) or `typesafe` |
 | `TYPESAFE_API_KEY` | *(unset)* | API key; required for `typesafe` |
-| `CONTEXTCUT_TYPESAFE_MODEL` | `jev-latest` | Model id/alias; pin a version for stable results |
+| `CONTEXTCUT_TYPESAFE_MODEL` | `jev-1.14.0` | Pinned model id; override to change versions deliberately |
 | `CONTEXTCUT_TYPESAFE_TIMEOUT` | `20` | Request timeout (seconds) |
 | `CONTEXTCUT_TYPESAFE_YES` | `0.7` | Probability at/above which support/contradiction counts |
 | `CONTEXTCUT_TYPESAFE_NO` | `0.3` | Probability at/below which a signal is treated as absent |
@@ -468,11 +469,14 @@ The toggle requires the key to be present; after editing `.env`, restart the pro
 | `CONTEXTCUT_TYPESAFE_MAX_SOURCES` | `28000` | Max evidence characters sent |
 | `CONTEXTCUT_TYPESAFE_DIMENSIONS` | `verdict,support,contradict,sufficient,subjective,severity` | Per-claim questions |
 | `CONTEXTCUT_TYPESAFE_GLOBALS` | `sources_sufficient,faithful_overall` | Global questions |
-| `CONTEXTCUT_TYPESAFE_MAX_REQUEST_TOKENS` | `60000` | Request budget (state + questions) |
+| `CONTEXTCUT_TYPESAFE_MAX_REQUEST_TOKENS` | `60000` | Soft request budget (state + questions) |
 | `CONTEXTCUT_TYPESAFE_MAX_QUESTIONS` | `400` | Hard cap on questions per request |
+| `CONTEXTCUT_TYPESAFE_MIN_CONFIDENCE` | `0.8` | Choice confidence below this is not trusted; result is marked for review |
+| `CONTEXTCUT_TYPESAFE_MAX_RETRIES` | `2` | Retries on HTTP 429 / rate limits |
+| `CONTEXTCUT_TYPESAFE_RETRY_BACKOFF` | `1.0` | Base retry delay in seconds (honors `Retry-After`) |
 | `CONTEXTCUT_TYPESAFE_CACHE_TTL` | `900` | Answer cache TTL in seconds (`0` disables) |
 | `CONTEXTCUT_TYPESAFE_CACHE_SIZE` | `128` | Max cached responses |
-| `CONTEXTCUT_TYPESAFE_LONG_CONTEXT` | `0` | Send the 262k long-context header (`1` = on) |
+| `CONTEXTCUT_TYPESAFE_LONG_CONTEXT` | `0` | Use the 262k long-context request header (`1` = on); otherwise 64k request / 32k per-question limits apply |
 
 **Testing:** the **🔬 Test** button sends a fixed mixed-claim sample with matching evidence; with TypeSafe ON it exercises the real batched cloud path and should flag the Moon-cheese, Great Wall, and 10%-brain claims while leaving the Canberra and boiling-point claims clean.
 
