@@ -132,11 +132,304 @@ On macOS, services start automatically on login (launchd). On Linux, a `start.sh
 cp ~/contextcut/starterKnowledgeFiles/base-* ~/contextcut/knowledge/
 
 # 2. Point your LLM client at the proxy
-#    (instead of http://localhost:11434/v1, use http://localhost:18788/v1)
+#    instead of http://localhost:11434/v1, use http://localhost:18788/v1
 
 # 3. Open the dashboard
+# macOS
 open http://localhost:18787
+# Linux
+xdg-open http://localhost:18787
+# Windows
+start http://localhost:18787
 ```
+
+See [Run and operate](#run-and-operate) for managed startup, MCP startup, auto-start, SSH tunnels, and troubleshooting.
+
+---
+
+## Run and operate
+
+### Managed startup
+
+```bash
+cd ~/contextcut
+./start.sh                # start proxy + watcher, wait for .proxy_ready, tail pro.log
+./stop.sh                 # stop watcher, MCP (if .mcp.pid), then proxy
+./stop.sh && ./start.sh   # restart after changing .env or Python files
+```
+
+`start.sh` writes `.proxy.pid` and `.ingest.pid`. `stop.sh` releases the license seat, stops the watcher, stops the MCP server if `.mcp.pid` exists, then stops the proxy. On Linux the managed start does **not** start the MCP server; start it separately. On macOS the installer's launchd agent starts it automatically.
+
+Check status and logs:
+
+```bash
+cd ~/contextcut
+for f in .proxy.pid .ingest.pid .mcp.pid; do
+  [ -f "$f" ] && printf '%s: %s\n' "$f" "$(cat "$f")"
+done
+ss -lntp | grep -E ':(18787|18788|8910)\b' || true
+tail -f pro.log
+```
+
+### Manual foreground startup
+
+Run each process in its own terminal:
+
+```bash
+# Terminal 1 — proxy + dashboard
+cd ~/contextcut
+set -a; . ./.env; set +a
+venv/bin/python qdrant_proxy_final.py
+```
+
+```bash
+# Terminal 2 — knowledge-base watcher
+cd ~/contextcut
+set -a; . ./.env; set +a
+venv/bin/python ingest.py --watch
+```
+
+```bash
+# Terminal 3 — MCP knowledge server (HTTP)
+cd ~/contextcut
+set -a; . ./.env; set +a
+venv/bin/python mcp_knowledge_server.py \
+  --transport http --port "${CONTEXTCUT_MCP_PORT:-8910}"
+```
+
+To leave MCP running in the background and let `stop.sh` manage it:
+
+```bash
+cd ~/contextcut
+set -a; . ./.env; set +a
+nohup venv/bin/python mcp_knowledge_server.py \
+  --transport http --port "${CONTEXTCUT_MCP_PORT:-8910}" \
+  >> mcp.log 2>&1 &
+echo $! > .mcp.pid
+```
+
+Test retrieval without starting the proxy:
+
+```bash
+cd ~/contextcut
+venv/bin/python ingest.py --query "your test query"
+```
+
+### Auto-start
+
+Linux systemd user service:
+
+```ini
+# ~/.config/systemd/user/contextcut.service
+[Unit]
+Description=ContextCut PRO — proxy + knowledge base watcher
+After=network-online.target docker.service
+Wants=network-online.target docker.service
+
+[Service]
+Type=simple
+ExecStart=%h/contextcut/start.sh
+ExecStop=%h/contextcut/stop.sh
+Restart=on-failure
+RestartSec=10
+EnvironmentFile=%h/contextcut/.env
+
+[Install]
+WantedBy=default.target
+```
+
+```bash
+systemctl --user daemon-reload
+systemctl --user enable --now contextcut
+sudo loginctl enable-linger "$USER"
+systemctl --user status contextcut
+journalctl --user -u contextcut -f
+```
+
+macOS launchd agents (`ai.contextcut.proxy`, `ai.contextcut.ingest`, `ai.contextcut.mcp`) are installed by `install.sh`:
+
+```bash
+launchctl list | grep ai.contextcut
+launchctl kickstart -k gui/$(id -u)/ai.contextcut.proxy
+```
+
+Windows/WSL startup:
+
+```powershell
+wsl.exe -d Ubuntu -- ~/contextcut/start.sh
+```
+
+```powershell
+(New-Object -Com WScript.Shell).CreateShortcut("$env:APPDATA\Microsoft\Windows\Start Menu\Programs\Startup\ContextCut.lnk").TargetPath = "wsl.exe"; .Arguments = "-d Ubuntu -- ~/contextcut/start.sh"; .Save()
+```
+
+### SSH remote access
+
+Forward the dashboard, proxy, and MCP ports in one SSH session:
+
+```bash
+ssh -N \
+  -L 18787:127.0.0.1:18787 \
+  -L 18788:127.0.0.1:18788 \
+  -L 8910:127.0.0.1:8910 \
+  user@server
+```
+
+Then open `http://127.0.0.1:18787`. Use `127.0.0.1` on both ends of the tunnel, not `localhost`, especially from Windows. Do not expose the dashboard publicly without an authenticated reverse proxy.
+
+### Health checks
+
+```bash
+cd ~/contextcut
+set -a; . ./.env; set +a
+
+curl -fsS "http://127.0.0.1:${CONTEXTCUT_DASHBOARD_PORT:-18787}/" >/dev/null \
+  && echo "dashboard: ok"
+
+MODEL="${CONTEXTCUT_MODEL:-qwen3:14b-q8_0}"
+curl -sS "http://127.0.0.1:${CONTEXTCUT_PROXY_PORT:-18788}/v1/chat/completions" \
+  -H 'Content-Type: application/json' \
+  -d "{\"model\":\"$MODEL\",\"messages\":[{\"role\":\"user\",\"content\":\"Reply with exactly OK\"}],\"max_tokens\":8,\"stream\":false}" \
+  | python3 -m json.tool
+
+ss -lntp | grep ':8910' || echo "MCP not running on 8910"
+```
+
+### Troubleshooting
+
+| Symptom | Check / fix |
+|---|---|
+| Dashboard connection refused | Check `.proxy.pid`, `ss -lntp`, and `pro.log`; confirm `CONTEXTCUT_DASHBOARD_PORT`. |
+| Proxy exits at startup | Check license errors in `pro.log`, run `./reset_license.sh`, or wait 30 minutes for the seat lease to expire. |
+| Watcher not ingesting | Check `.ingest.pid`, `CONTEXTCUT_KB_DIR`, Qdrant on `6333`, and run `venv/bin/python ingest.py --query "test"`. |
+| MCP port already in use | `ss -lntp \| grep 8910`; stop the old process or set `CONTEXTCUT_MCP_PORT` in `.env`. |
+| SSH tunnel refused | Ensure the SSH session is still open and the remote services listen on `127.0.0.1`; forward the exact remote ports. |
+| Stale PID blocks startup | `./stop.sh`, then remove stale `.proxy.pid` / `.ingest.pid` / `.mcp.pid` only if the matching process is gone. |
+| `.proxy_ready` never appears | The proxy failed before initialization; inspect `pro.log`, Qdrant, embeddings, and license validation. |
+
+### Full startup scripts
+
+<details>
+<summary>Linux <code>start.sh</code> (repo/dev version)</summary>
+
+The installer writes a simpler `start.sh`; the repo version additionally redirects proxy output to `pro.log` and tails it after startup.
+
+```bash
+#!/bin/bash
+INST="$(dirname "$0")"
+
+# Clean stale ready file
+rm -f "$INST/.proxy_ready"
+
+# Start proxy first (it ensures correct collection dimension)
+PROXY_PIDFILE="$INST/.proxy.pid"
+if [ -f "$PROXY_PIDFILE" ] && kill -0 $(cat "$PROXY_PIDFILE") 2>/dev/null; then
+  echo "Proxy already running (PID $(cat "$PROXY_PIDFILE")). Stop it first with ./stop.sh"
+  exit 1
+fi
+
+# Source and export env for proxy (proxy reads from os.environ)
+set -a
+source "$INST/.env"
+set +a
+"$INST/venv/bin/python" "$INST/qdrant_proxy_final.py" >> "$INST/pro.log" 2>&1 &
+echo $! > "$PROXY_PIDFILE"
+
+# Wait for proxy ready marker (means .env synced + collection fixed)
+echo "Waiting for proxy to initialize..."
+for i in $(seq 1 60); do
+  if [ -f "$INST/.proxy_ready" ]; then
+    echo "Proxy ready."
+    break
+  fi
+  sleep 1
+done
+
+# Re-source .env after proxy syncs it, then export so ingest gets correct settings
+set -a
+source "$INST/.env"
+set +a
+
+# Start watcher
+WATCHER_PIDFILE="$INST/.ingest.pid"
+if [ -f "$WATCHER_PIDFILE" ] && kill -0 $(cat "$WATCHER_PIDFILE") 2>/dev/null; then
+  echo "Watcher already running (PID $(cat "$WATCHER_PIDFILE"))."
+else
+  "$INST/venv/bin/python" "$INST/ingest.py" --watch &
+  echo $! > "$WATCHER_PIDFILE"
+  echo "Watcher started. PID: $(cat "$WATCHER_PIDFILE")"
+fi
+
+echo "ContextCut started. Dashboard: http://localhost:${CONTEXTCUT_DASHBOARD_PORT}"
+echo "Tailing proxy log (Ctrl+C to stop watching, proxy keeps running)..."
+tail -f "$INST/pro.log"
+```
+
+</details>
+
+<details>
+<summary>Linux <code>stop.sh</code></summary>
+
+```bash
+#!/bin/bash
+INST="$(dirname "$0")"
+
+# Stop watcher
+WATCHER_PIDFILE="$INST/.ingest.pid"
+if [ -f "$WATCHER_PIDFILE" ]; then
+  PID=$(cat "$WATCHER_PIDFILE")
+  if kill -0 "$PID" 2>/dev/null; then
+    echo "Stopping watcher (PID $PID)..."
+    kill "$PID"
+    echo "Watcher stopped."
+  fi
+  rm -f "$WATCHER_PIDFILE"
+fi
+
+# Release license seat before stopping proxy
+ENV_FILE="$INST/.env"
+SECRET_FILE="$HOME/.contextcut/instance_secret"
+if [ -f "$ENV_FILE" ] && [ -f "$SECRET_FILE" ]; then
+  KEY=$(grep "^CONTEXTCUT_LICENSE_KEY=" "$ENV_FILE" | sed 's/^[^=]*=//; s/^["'\'']//; s/["'\'']$//')
+  INSTANCE_ID=$(grep "^CONTEXTCUT_INSTANCE_ID=" "$ENV_FILE" | sed 's/^[^=]*=//; s/^["'\'']//; s/["'\'']$//')
+  SECRET=$(cat "$SECRET_FILE")
+  if [ -n "$KEY" ] && [ -n "$INSTANCE_ID" ] && [ -n "$SECRET" ]; then
+    echo "Releasing license seat..."
+    curl -sf -X POST 'https://api.contextcut-pro.com/v1/license/release' \
+      -H 'Content-Type: application/json' \
+      -d '{"license_key":"'"$KEY"'","instance_id":"'"$INSTANCE_ID"'","instance_secret":"'"$SECRET"'"}' \
+      > /dev/null 2>&1 && echo "Seat released." || echo "Release failed (seat expires in 30 min)."
+  fi
+fi
+
+# Stop MCP knowledge server
+MCP_PIDFILE="$INST/.mcp.pid"
+if [ -f "$MCP_PIDFILE" ]; then
+  PID=$(cat "$MCP_PIDFILE")
+  if kill -0 "$PID" 2>/dev/null; then
+    echo "Stopping MCP server (PID $PID)..."
+    kill "$PID"
+    echo "MCP server stopped."
+  fi
+  rm -f "$MCP_PIDFILE"
+fi
+
+# Stop proxy
+PROXY_PIDFILE="$INST/.proxy.pid"
+if [ -f "$PROXY_PIDFILE" ]; then
+  PID=$(cat "$PROXY_PIDFILE")
+  if kill -0 "$PID" 2>/dev/null; then
+    echo "Stopping proxy (PID $PID)..."
+    kill "$PID"
+    sleep 1
+    echo "Proxy stopped."
+  fi
+  rm -f "$PROXY_PIDFILE"
+  rm -f "$INST/.proxy_ready"
+fi
+```
+
+</details>
 
 ---
 
@@ -152,7 +445,7 @@ open http://localhost:18787
 | `CONTEXTCUT_KB_DIR` | `~/contextcut/knowledge` | Knowledge base directory |
 | `CONTEXTCUT_PROXY_PORT` | `18788` | Proxy listen port |
 | `CONTEXTCUT_DASHBOARD_PORT` | `18787` | Dashboard port |
-| `CONTEXTCUT_CTX_LIMIT` | `8192` | Model context window |
+| `CONTEXTCUT_CTX_LIMIT` | `32768` | Model context window; set to match the model's actual `num_ctx` |
 | `CONTEXTCUT_STREAM_CHUNK_TIMEOUT` | `600` | Seconds to wait for the next streamed chunk before aborting; `0` disables |
 | `CONTEXTCUT_TOP_K` | `5` | Max chunks to retrieve |
 | `CONTEXTCUT_MIN_SCORE` | `0.50` | Minimum relevance threshold |
@@ -231,12 +524,26 @@ Expose your knowledge base via the [Model Context Protocol](https://modelcontext
 ### Start
 
 ```bash
-python mcp_knowledge_server.py                        # stdio transport
-python mcp_knowledge_server.py --transport http        # Streamable HTTP (default: port 8910)
-python mcp_knowledge_server.py --transport http --port 8910
+cd ~/contextcut
+set -a; . ./.env; set +a
+
+venv/bin/python mcp_knowledge_server.py                        # stdio transport
+venv/bin/python mcp_knowledge_server.py --transport http       # Streamable HTTP (default: port 8910)
+venv/bin/python mcp_knowledge_server.py --transport http --port 8910
 ```
 
-The `start.sh` script starts the MCP server automatically with `--transport http --port ${CONTEXTCUT_MCP_PORT:-8910}`.
+`start.sh` does **not** start MCP on Linux; it only starts the proxy and watcher. Start MCP manually with the command above, or in the background:
+
+```bash
+cd ~/contextcut
+set -a; . ./.env; set +a
+nohup venv/bin/python mcp_knowledge_server.py \
+  --transport http --port "${CONTEXTCUT_MCP_PORT:-8910}" \
+  >> mcp.log 2>&1 &
+echo $! > .mcp.pid
+```
+
+`stop.sh` stops MCP when `.mcp.pid` exists. On macOS, `install.sh` creates a separate launchd agent (`ai.contextcut.mcp`) for it.
 
 ### Client Configuration
 
@@ -343,8 +650,12 @@ In short: ContextCut-PRO is the proxy + RAG layer you put in front of any model 
 ~/contextcut/venv/bin/python coding_agent.py --workspace ./sandbox \
   --model qwen2.5-coder:14b-16k --json "fix the failing test"
 
+# Force high reasoning for a hard debugging task
+~/contextcut/venv/bin/python coding_agent.py --workspace ./sandbox \
+  --reasoning high "fix the race condition in the queue worker"
+
 # Show resolved configuration without calling a model
-python coding_agent.py --workspace ./sandbox --dry-run "anything"
+~/contextcut/venv/bin/python coding_agent.py --workspace ./sandbox --dry-run "anything"
 ```
 
 Every run writes `events.jsonl` and a resumable `messages.json` to `~/.contextcut/coding_runs/<run_id>/`. Continue an interrupted run with `--resume <run_id>`; pass `--json` to get status, steps, duration, token usage, and the log path.
@@ -358,8 +669,11 @@ Every run writes `events.jsonl` and a resumable `messages.json` to `~/.contextcu
 | `CONTEXTCUT_CODING_TIMEOUT` | `900` | Wall-clock cap in seconds |
 | `CONTEXTCUT_CODING_SHELL_TIMEOUT` | `AGENT_SHELL_TIMEOUT` → `60` | Per-command timeout |
 | `CONTEXTCUT_CODING_MAX_TOKENS` | `CONTEXTCUT_MAX_TOKENS` → `8192` | Response budget |
+| `CONTEXTCUT_CODING_REASONING` | `auto` | Reasoning effort: `auto`, `none`, `low`, `medium`, `high`, or `default` |
 | `CONTEXTCUT_CODING_ALLOWLIST` | — | Extra executables (comma list) for `run_command` |
 | `CONTEXTCUT_CODING_PASSTHROUGH_ENV` | off | Keep secret env vars in child processes (not recommended) |
+
+`--reasoning` overrides `CONTEXTCUT_CODING_REASONING`. `default` omits the `reasoning_effort` field entirely. `none` disables thinking for throughput. `auto` selects `none` for inspection-only prompts, `low` for normal edits, and `medium` for complex/numeric tasks or after any tool/test failure. An empty model response is retried once with lower effort. Each turn logs `mode`, `effort`, `reason`, and `reasoning_tokens` to `events.jsonl`.
 
 **Sandbox model.** File tools are jailed with `Path.resolve()` + `is_relative_to()`, deny `.env`/keys/`.ssh`/`.git/config`, and refuse symlink escapes. Writes are atomic with optional `.bak-*` backups. `run_command` splits with `shlex` and runs with `shell=False` against an executable allowlist (build/test/lint tools, read-only git); destructive commands, package installs, network clients, and shells are denied. Child processes get a scrubbed environment.
 
@@ -375,6 +689,434 @@ Data-bearing tool output is marked before it reaches the model: file reads, web 
 - escapes any boundary marker inside the payload so content cannot close the block early.
 
 The proxy marks retrieved KB chunks as untrusted, and TypeSafe redacts special tokens in its `state` payload. This is prompt hygiene, not containment: it reduces the chance a model follows injected text, but the coding worker's allowlist/jail is what actually limits execution. `agent_handler.py` still has a broad `shell_exec`, so treat untrusted repositories with care there too.
+
+---
+
+## Worked Example: Neon Maze
+
+This is the actual sequence used to build a self-contained Pac-Man-style game in `/tmp/cc-neon-maze`. The first run hit its time limit with a mostly working core, a focused fix reached 18/18 tests, and a UI-only pass finished the page. The commands below use the same endpoint and model as the original run; replace the base URL, model, workspace, and prompt paths for your setup.
+
+| Stage | Run ID | Result |
+|---|---|---|
+| Core build | `20261110-165941-732034` | Timed out after 1,800s / 16 steps; produced core game and 17/18 tests |
+| Intermediate fix | — | Attempted queued-direction fix; did not complete |
+| Alternate fix | — | Added an early queued-dir guard; not confirmed |
+| Fix + UI | `20261110-195859-9e8a4b` | 15 steps; `game.js` reached 18/18, then stalled before UI |
+| UI only | `20261110-213045-91718a` | Completed in 7 steps / 563s; final 18/18 |
+
+### 1. Core build command
+
+Save the prompt below as `/tmp/neon-maze-prompt.txt`, then run:
+
+```bash
+nohup env CONTEXTCUT_CTX_LIMIT=98304 CONTEXTCUT_CODING_REASONING=none \
+  ~/contextcut/venv/bin/python ~/contextcut/coding_agent.py \
+  --workspace /tmp/cc-neon-maze \
+  --base-url http://192.168.137.1:8080/v1 \
+  --model deepseek-v4.1-flash \
+  --max-steps 40 \
+  --timeout 1800 \
+  --max-tokens 16384 \
+  --json --quiet \
+  "$(< /tmp/neon-maze-prompt.txt)" > /tmp/neon-maze-run5.log 2>&1 & echo $! > /tmp/neon-maze-run5.pid
+
+printf 'New PID: %s\n' "$(cat /tmp/neon-maze-run5.pid)"
+```
+
+<details>
+<summary>Full initial Neon Maze prompt</summary>
+
+```text
+You are working in an empty sandboxed workspace. Build a complete, self-contained
+browser game called "Neon Maze" — a Pac-Man-style maze chase game.
+
+HARD CONSTRAINTS
+- Use only HTML, CSS, and vanilla JavaScript. No frameworks.
+- No external libraries, CDNs, images, audio files, fonts, or network access.
+- Do not install packages. Do not use pygame, tkinter, browser automation, or npm install.
+- Everything must run from the workspace with Python 3 stdlib and Node.js only.
+- Do not leave the workspace. Do not read or write secrets.
+- Use write_file to create source files. Do not use shell pipes, redirects, or heredocs.
+- The harness is non-interactive: do not ask questions. Make reasonable decisions.
+
+DELIVERABLES
+- index.html       — playable game page with canvas and controls
+- style.css        — clean dark neon arcade styling
+- game.js          — pure game logic plus browser bootstrap
+- tests/run_tests.js — headless Node test runner
+- README.md        — controls, how to run, and test command
+
+GAME REQUIREMENTS
+- Tile-based maze, 19 columns x 21 rows. Use a string maze map with:
+  # wall, . pellet, o power pellet, space empty, P player spawn, G ghost spawn.
+- Player moves tile-by-tile with queued turning: pressing a direction buffers it
+  and applies it at the next valid tile. Player cannot enter walls.
+- Four ghosts with distinct behaviours:
+  red: direct chase
+  pink: target 4 tiles ahead of player
+  cyan: deterministic semi-random/ambush
+  orange: chase when far, scatter when close
+- Pellet = 10 points; power pellet = 50 points and activates frightened mode.
+- Frightened ghosts turn blue, flee, and can be eaten for 200/400/800/1600 points.
+- Player starts with 3 lives. Ghost collision costs one life and resets positions.
+- Win when all pellets and power pellets are eaten; advance level and increase speed.
+- Game over when lives reach zero.
+- Pause with P, restart with R.
+- Canvas rendering with requestAnimationFrame and a fixed-timestep update loop.
+- Keyboard controls: Arrow keys and WASD.
+- Show score, lives, level, and frightened timer in the UI.
+- Must be visually clear: neon walls, pellets, power pellets, player, ghosts.
+
+ARCHITECTURE REQUIREMENTS
+- game.js must expose pure logic through:
+  window.NeonMaze in the browser AND module.exports in Node.
+- Required exported functions:
+  createGame({ seed, maze })
+  resetGame(state)
+  setDirection(state, direction)
+  tick(state, dt)
+  getGhostTarget(state, ghost)
+  chooseGhostDirection(state, ghost)
+  consumePellet(state, x, y)
+  checkCollision(state)
+  advanceLevel(state)
+  serializeState(state)
+- Use a seeded PRNG so ghost decisions and tests are reproducible.
+- Keep DOM/canvas code out of the pure logic functions.
+- Use CommonJS-compatible export style so tests/run_tests.js can require("../game.js").
+- index.html must load game.js without a build step.
+
+TESTS
+Write at least 12 meaningful tests in tests/run_tests.js using Node's assert module.
+Cover at least:
+1. Maze parses to the expected width and height.
+2. Player cannot move into a wall.
+3. Player can move into an open tile.
+4. Queued direction applies at the next tile.
+5. Eating a pellet increases score and removes the pellet.
+6. Eating a power pellet activates frightened mode.
+7. Normal ghost collision costs a life.
+8. Frightened ghost collision awards points.
+9. Lives reaching zero sets game over.
+10. Eating all pellets sets win/level-complete state.
+11. Ghost target functions return valid tiles.
+12. Seeded RNG produces reproducible results.
+Run the tests and fix all failures. Do not delete failing tests.
+
+VERIFICATION
+Run these commands one at a time and report the exact results:
+- node --check game.js
+- node tests/run_tests.js
+- python3 -c "from pathlib import Path; required=['index.html','style.css','game.js','tests/run_tests.js','README.md']; print([p for p in required if not Path(p).exists()])"
+- python3 -c "from pathlib import Path; t=Path('index.html').read_text(); print('external' if 'http://' in t or 'https://' in t else 'self-contained')"
+
+BUILD ORDER
+1. Inspect the workspace.
+2. Write game.js with maze, movement, pellets, ghosts, collisions, scoring,
+   levels, and seeded RNG.
+3. Write tests/run_tests.js and run it.
+4. Fix logic failures before adding polish.
+5. Write index.html, style.css, and the browser bootstrap.
+6. Run all verification commands again.
+7. Write README.md with controls and exact commands.
+8. Finish with: files created, tests passed, and how to play.
+
+If you approach the step or time limit, prioritise a working core game with
+passing tests over visual polish. Do not stop with a non-running game.
+```
+
+</details>
+
+### 2. Intermediate fix command
+
+This attempt was aimed at the single failing queued-direction test. It did not finish.
+
+```bash
+nohup env CONTEXTCUT_CTX_LIMIT=98304 CONTEXTCUT_CODING_REASONING=none \
+  ~/contextcut/venv/bin/python ~/contextcut/coding_agent.py \
+  --workspace /tmp/cc-neon-maze \
+  --base-url http://192.168.137.1:8080/v1 \
+  --model deepseek-v4.1-flash \
+  --max-steps 20 \
+  --timeout 1200 \
+  --max-tokens 16384 \
+  --json --quiet \
+  "Fix the 1 failing test in game.js, then build the remaining game assets.
+
+TASK INSTRUCTIONS:
+1. Open game.js and locate player direction handling inside the tick() function.
+2. Ensure that when Pac-Man is aligned to tile center (x % TILE_SIZE === 0 && y % TILE_SIZE === 0), if player.nextDir is set and passable according to canMove(), assign player.dir = player.nextDir and set player.nextDir = null.
+3. Run 'node tests/run_tests.js' and confirm ALL 18 tests pass cleanly.
+4. Clean up any *.bak-* backup files in the workspace.
+5. Generate index.html to mount the game on a canvas element with UI counters (Score, High Score, Lives, Level).
+6. Generate style.css with dark arcade aesthetics, neon glow accents, and responsive layout.
+7. Generate README.md with instructions on running tests and controls (WASD/Arrows, P to pause, R to restart)." \
+  > /tmp/neon-maze-fix.log 2>&1 & echo $! > /tmp/neon-maze-fix.pid
+
+printf 'Fix Agent PID: %s\n' "$(cat /tmp/neon-maze-fix.pid)"
+```
+
+### 3. Fix + UI command that reached 18/18
+
+This run fixed the queued-direction bug and passed all tests, then stalled before creating the UI files.
+
+```bash
+nohup env CONTEXTCUT_CTX_LIMIT=98304 CONTEXTCUT_CODING_REASONING=none \
+  ~/contextcut/venv/bin/python ~/contextcut/coding_agent.py \
+  --workspace /tmp/cc-neon-maze \
+  --base-url http://192.168.137.1:8080/v1 \
+  --model deepseek-v4.1-flash \
+  --max-steps 15 \
+  --timeout 1200 \
+  --max-tokens 16384 \
+  --json --quiet \
+  "FIX BUG & BUILD UI:
+
+1. UNDERSTAND THE BUG IN game.js:
+   - In queued direction handling, the test queues a direction mid-transit and ticks the engine until arriving at the next tile.
+   - Currently, stepEntity() subtracts 1 from progress (e.g. 1.04 - 1 = 0.04 remainder).
+   - Because progress is 0.04 (not exactly 0), guards like 'if (p.progress === 0)' fail and prevent applyQueuedDirection() from promoting queuedDir to dir when arriving at the tile.
+
+2. APPLY THIS FIX TO game.js:
+   - Simplify applyQueuedDirection(state):
+     function applyQueuedDirection(state) {
+       const p = state.player;
+       if (canMove(state, p.x, p.y, p.queuedDir)) {
+         p.dir = p.queuedDir;
+         p.queuedDir = null;
+       }
+     }
+   - In stepEntity(), call onArrive(entity) immediately when tile boundary is crossed (while entity.progress >= 1 loop), and ensure onArrive runs applyQueuedDirection(state) without checking if progress === 0.
+   - In tick(), call applyQueuedDirection(state) whenever player arrives at a tile boundary.
+
+3. VERIFY & CLEANUP:
+   - Run 'node tests/run_tests.js' and confirm 18 of 18 assertions PASS.
+   - Delete all *.bak-* files in /tmp/cc-neon-maze.
+
+4. GENERATE REMAINING UI ASSETS:
+   - Create index.html (canvas mount + neon score/lives/level overlay).
+   - Create style.css (dark arcade styling, glowing neon borders).
+   - Create README.md (controls and test instructions)." \
+  > /tmp/neon-maze-fix2.log 2>&1 & echo $! > /tmp/neon-maze-fix2.pid
+
+printf 'Agent Fix PID: %s\n' "$(cat /tmp/neon-maze-fix2.pid)"
+```
+
+<details>
+<summary>Full fix + UI prompt</summary>
+
+```text
+FIX BUG & BUILD UI:
+
+1. UNDERSTAND THE BUG IN game.js:
+   - In queued direction handling, the test queues a direction mid-transit and ticks the engine until arriving at the next tile.
+   - Currently, stepEntity() subtracts 1 from progress (e.g. 1.04 - 1 = 0.04 remainder).
+   - Because progress is 0.04 (not exactly 0), guards like 'if (p.progress === 0)' fail and prevent applyQueuedDirection() from promoting queuedDir to dir when arriving at the tile.
+
+2. APPLY THIS FIX TO game.js:
+   - Simplify applyQueuedDirection(state):
+     function applyQueuedDirection(state) {
+       const p = state.player;
+       if (canMove(state, p.x, p.y, p.queuedDir)) {
+         p.dir = p.queuedDir;
+         p.queuedDir = null;
+       }
+     }
+   - In stepEntity(), call onArrive(entity) immediately when tile boundary is crossed (while entity.progress >= 1 loop), and ensure onArrive runs applyQueuedDirection(state) without checking if progress === 0.
+   - In tick(), call applyQueuedDirection(state) whenever player arrives at a tile boundary.
+
+3. VERIFY & CLEANUP:
+   - Run 'node tests/run_tests.js' and confirm 18 of 18 assertions PASS.
+   - Delete all *.bak-* files in /tmp/cc-neon-maze.
+
+4. GENERATE REMAINING UI ASSETS:
+   - Create index.html (canvas mount + neon score/lives/level overlay).
+   - Create style.css (dark arcade styling, glowing neon borders).
+   - Create README.md (controls and test instructions).
+```
+
+</details>
+
+### 3b. Alternate fix variant (unconfirmed)
+
+This variant adds an early `if (!p.queuedDir) return;` guard. It was not the prompt recorded in the 18/18 run; keep it only as an experiment.
+
+```bash
+nohup env CONTEXTCUT_CTX_LIMIT=98304 CONTEXTCUT_CODING_REASONING=none \
+  ~/contextcut/venv/bin/python ~/contextcut/coding_agent.py \
+  --workspace /tmp/cc-neon-maze \
+  --base-url http://192.168.137.1:8080/v1 \
+  --model deepseek-v4.1-flash \
+  --max-steps 15 \
+  --timeout 1200 \
+  --max-tokens 16384 \
+  --json --quiet \
+  "FIX BUG & BUILD UI:
+
+1. UNDERSTAND THE BUG IN game.js:
+   - In queued direction handling, the test queues a direction mid-transit and ticks the engine until arriving at the next tile.
+   - Currently, stepEntity() subtracts 1 from progress (e.g. 1.04 - 1 = 0.04 remainder).
+   - Because progress is 0.04 (not exactly 0), guards like 'if (p.progress === 0)' fail and prevent applyQueuedDirection() from promoting queuedDir to dir when arriving at the tile.
+
+2. APPLY THIS FIX TO game.js:
+   - Simplify applyQueuedDirection(state):
+     function applyQueuedDirection(state) {
+       const p = state.player;
+       if (!p.queuedDir) return;
+       if (canMove(state, p.x, p.y, p.queuedDir)) {
+         p.dir = p.queuedDir;
+         p.queuedDir = null;
+       }
+     }
+   - In stepEntity(), call onArrive(entity) immediately when tile boundary is crossed (while entity.progress >= 1 loop), and ensure onArrive runs applyQueuedDirection(state) without checking if progress === 0.
+   - In tick(), call applyQueuedDirection(state) whenever player arrives at a tile boundary.
+
+3. VERIFY & CLEANUP:
+   - Run 'node tests/run_tests.js' and confirm 18 of 18 assertions PASS.
+   - Delete all *.bak-* files in /tmp/cc-neon-maze.
+
+4. GENERATE REMAINING UI ASSETS:
+   - Create index.html (canvas mount + neon score/lives/level overlay).
+   - Create style.css (dark arcade styling, glowing neon borders).
+   - Create README.md (controls and test instructions)." \
+  > /tmp/neon-maze-fix2.log 2>&1 & echo $! > /tmp/neon-maze-fix2.pid
+
+printf 'Agent Fix PID: %s\n' "$(cat /tmp/neon-maze-fix2.pid)"
+```
+
+### 4. UI-only completion
+
+Save the prompt below as `/tmp/neon-maze-ui-prompt.txt`, then run the same command shape with `--max-steps 15`. The completed run was `20261110-213045-91718a` (7 steps, 563s).
+
+```bash
+nohup env CONTEXTCUT_CTX_LIMIT=98304 CONTEXTCUT_CODING_REASONING=none \
+  ~/contextcut/venv/bin/python ~/contextcut/coding_agent.py \
+  --workspace /tmp/cc-neon-maze \
+  --base-url http://192.168.137.1:8080/v1 \
+  --model deepseek-v4.1-flash \
+  --max-steps 15 \
+  --timeout 1200 \
+  --max-tokens 16384 \
+  --json --quiet \
+  "$(< /tmp/neon-maze-ui-prompt.txt)" > /tmp/neon-maze-ui.log 2>&1 & echo $! > /tmp/neon-maze-ui.pid
+
+printf 'UI Agent PID: %s\n' "$(cat /tmp/neon-maze-ui.pid)"
+```
+
+<details>
+<summary>Full UI-only prompt</summary>
+
+```text
+COMPLETE NEON MAZE UI ONLY:
+
+tests/run_tests.js is frozen and currently passes 18/18.
+Do not edit tests/run_tests.js or game.js.
+If any test fails, stop and report.
+
+game.js's browser bootstrap requires these exact elements:
+- canvas id="game"
+- #score
+- #lives
+- #level
+- #frightened
+- #status
+- #overlay class="hidden"
+Load game.js at the end of <body>.
+
+1. Create index.html: canvas mount, score/lives/level/frightened/status
+   display, overlay, and game.js loaded after the DOM.
+2. Create style.css: dark arcade theme, neon borders/glow, and
+   ".hidden { display: none; }"
+3. Create README.md: controls (arrows/WASD, P pause, R restart),
+   test command, and how to open the game.
+4. Run node tests/run_tests.js and confirm 18/18.
+Do not create backup or debug files.
+```
+
+</details>
+
+### 5. Verify the result
+
+```bash
+cd /tmp/cc-neon-maze
+node --check game.js
+node tests/run_tests.js
+
+python3 -m http.server 8000
+# open http://localhost:8000
+```
+
+Expected final result:
+
+```text
+18 passed, 0 failed
+```
+
+The original workspace ended with `game.js` (24 KB), `index.html`, `style.css`, `README.md`, and `tests/run_tests.js`. It is self-contained and requires no network access at runtime.
+
+Why the split worked: the first prompt prioritized a working core over polish; the failure was isolated to one queued-direction edge case; the UI pass froze `game.js` and tests, which prevented the model from breaking working logic while adding presentation. All three runs wrote checkpoints under `~/.contextcut/coding_runs/`, so an interrupted run can be continued with `--resume <run_id>`.
+
+---
+
+## Prompt Examples
+
+### Dashboard agent prompts
+
+Use these in the dashboard Chat tab with **Agent** enabled. Add `DEEP` when you want verification against the knowledge base and web sources.
+
+| Goal | Prompt |
+|---|---|
+| Knowledge-base answer | `Search my knowledge base for the termination clause and summarize the notice period.` |
+| Fact-check | `DEEP: fact-check these three claims against the knowledge base and cite sources.` |
+| Repository inspection | `Inspect this repository, run the test suite, and summarize failures with file:line references.` |
+| Local-first system audit | `Audit this Linux host: listening ports, firewall rules, failed logins, and SUID files. Start local-first.` |
+| Multi-step plan | `Create a plan for migrating the ingest pipeline to the new collection, then execute step 1.` |
+| Persistent preference | `Remember that this project uses Python 3.12, pytest, and Qdrant on port 6333.` |
+| Re-ingest files | `Re-ingest the lawyer-*.md files and report chunk counts.` |
+| Resume after crash | `/resume <task_id>` |
+
+### Headless coding worker prompts
+
+```bash
+# Add tests and run them
+~/contextcut/venv/bin/python coding_agent.py --workspace ./sandbox \
+  "Add tests for the date parser and run them."
+
+# Fix a known failure with higher reasoning effort
+~/contextcut/venv/bin/python coding_agent.py --workspace ./sandbox \
+  --reasoning high \
+  "Fix the failing parser test without modifying the test."
+
+# UI-only changes: freeze logic and tests
+~/contextcut/venv/bin/python coding_agent.py --workspace ./sandbox \
+  "Only edit index.html and style.css. Do not touch game.js or tests."
+
+# Numeric edge cases
+~/contextcut/venv/bin/python coding_agent.py --workspace ./sandbox \
+  --reasoning high \
+  "Implement score logic and verify zero, negative, max, and off-by-one inputs."
+
+# CI-friendly JSON result
+~/contextcut/venv/bin/python coding_agent.py --workspace ./sandbox \
+  --json --max-steps 20 --reasoning medium \
+  "Refactor the ingest pipeline and run pytest."
+
+# Continue an interrupted run (prompt is not repeated)
+~/contextcut/venv/bin/python coding_agent.py --resume 20261110-195859-9e8a4b
+
+# Inspect resolved model, URL, limits, and reasoning mode
+~/contextcut/venv/bin/python coding_agent.py --workspace ./sandbox --dry-run "anything"
+```
+
+### Prompt checklist
+
+- State the goal, deliverables, and hard constraints explicitly.
+- Name the exact verification commands and require exact output.
+- Freeze files that must not change during a follow-up pass.
+- For numeric/state logic, require zero, negative, max, empty, and off-by-one tests.
+- Split large builds into core, fix, and polish phases when the model has a step or time limit.
+- Use `--json` for scripts and `--quiet` for cron/CI; omit both when watching progress.
+- Use `--reasoning high` for debugging and `--reasoning none` for throughput on models that support disabling thinking.
 
 ---
 
