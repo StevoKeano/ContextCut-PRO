@@ -49,6 +49,28 @@ class TestBuildAgent:
         tool_names = [t.name if hasattr(t, "name") else str(t) for t in tool_list_arg]
         assert "shell_exec" in tool_names
 
+    @patch("agent_handler.ChatOpenAI")
+    @patch("agent_handler.create_agent")
+    @patch("agent_handler._get_dynamic_tools", return_value=[])
+    def test_includes_extra_tools(self, mock_dyn, mock_create_agent, mock_chat):
+        from langchain.tools import tool
+
+        from agent_handler import build_agent
+
+        @tool
+        def aeo_probe() -> str:
+            """Probe tool."""
+            return "ok"
+
+        mock_create_agent.return_value = MagicMock()
+        build_agent(upstream="http://localhost:11434", extra_tools=[aeo_probe])
+
+        tool_names = [
+            t.name if hasattr(t, "name") else str(t)
+            for t in mock_create_agent.call_args[1]["tools"]
+        ]
+        assert "aeo_probe" in tool_names
+
 
 class TestStreamChunkTimeoutConfig:
     @patch("agent_handler.ChatOpenAI")

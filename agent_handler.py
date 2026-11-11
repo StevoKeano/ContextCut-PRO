@@ -2048,7 +2048,7 @@ def build_agent(model_name: str = None, upstream: str = None,
                 api_key: str = None, task_id: str = None, goal: str = None,
                 user_message: str = None, provider: str = None,
                 reasoning_effort: str = None, max_tokens: int = None,
-                checkpointer=None):
+                checkpointer=None, extra_tools: list | None = None):
 
     extra = {}
     extra_body = {}
@@ -2071,7 +2071,9 @@ def build_agent(model_name: str = None, upstream: str = None,
         **extra,
     )
 
-    tools = apply_harness(ALL_TOOLS + _get_dynamic_tools(), user_message)
+    tools = apply_harness(
+        ALL_TOOLS + _get_dynamic_tools() + list(extra_tools or []), user_message
+    )
 
     middleware = []
     if HumanInTheLoopMiddleware is not None:
@@ -2082,6 +2084,8 @@ def build_agent(model_name: str = None, upstream: str = None,
                     "run_python": {"allowed_decisions": ["approve", "reject"]},
                     "write_file": {"allowed_decisions": ["approve", "reject"]},
                     "append_file": {"allowed_decisions": ["approve", "reject"]},
+                    "content_write": {"allowed_decisions": ["approve", "reject"]},
+                    "publish_content": {"allowed_decisions": ["approve", "reject"]},
                     "delete_knowledge": {"allowed_decisions": ["approve", "reject"]},
                 },
                 description_prefix="High-impact tool requires approval",

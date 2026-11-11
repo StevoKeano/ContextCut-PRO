@@ -2289,6 +2289,184 @@ def make_swarm_page():
     )
 
 
+def make_experiments_page():
+    return (
+        '<!DOCTYPE html>\n<html lang="en">\n<head>\n'
+        '<meta charset="utf-8">\n'
+        '<meta name="viewport" content="width=device-width,initial-scale=1">\n'
+        '<title>AEO Experiments - ContextCut-PRO</title>\n'
+        '<style>\n'
+        '*{margin:0;padding:0;box-sizing:border-box}\n'
+        ':root{--bg:#1a1a2e;--surf:#16213e;--surf2:#1e2a4a;--text:#e0e0e0;--muted:#888;--accent:#22c55e;--blue:#38bdf8;--yellow:#f59e0b;--red:#ef4444;--border:#2a2a4a;--r:6px;font-family:\'Inter\',\'Segoe UI\',sans-serif;font-size:14px;color:var(--text);background:var(--bg)}\n'
+        'body{display:flex;flex-direction:column;height:100vh}\n'
+        'header{background:var(--surf);border-bottom:1px solid var(--border);padding:10px 16px;display:flex;align-items:center;gap:12px}\n'
+        'header h1{font-size:15px;font-weight:600;color:var(--accent)}\n'
+        'header .sub{font-size:11px;color:var(--muted)}\n'
+        'header a{color:var(--muted);font-size:12px;text-decoration:none;margin-left:auto}\n'
+        'header a:hover{color:var(--accent)}\n'
+        '.main{display:flex;flex:1;overflow:hidden}\n'
+        '.left{width:44%;display:flex;flex-direction:column;border-right:1px solid var(--border);min-width:0}\n'
+        '.right{flex:1;display:flex;flex-direction:column;min-width:0}\n'
+        '.panel{padding:12px;overflow-y:auto}\n'
+        '.card{background:var(--surf2);border:1px solid var(--border);border-radius:var(--r);padding:10px;margin-bottom:10px}\n'
+        '.card h3{font-size:12px;color:var(--blue);margin-bottom:8px}\n'
+        '.form-row{display:flex;flex-direction:column;gap:3px;margin-bottom:8px}\n'
+        '.form-row label{font-size:10px;color:var(--muted);text-transform:uppercase;letter-spacing:.04em}\n'
+        '.form-row input,.form-row select,.form-row textarea{background:var(--bg);border:1px solid var(--border);color:var(--text);border-radius:3px;padding:6px;font-size:11px;font-family:\'JetBrains Mono\',monospace;width:100%}\n'
+        '.form-row textarea{min-height:62px;resize:vertical}\n'
+        '.grid2{display:grid;grid-template-columns:1fr 1fr;gap:8px}\n'
+        '.btn{background:var(--accent);color:#000;border:none;border-radius:3px;padding:7px 14px;font-size:11px;font-weight:600;cursor:pointer;font-family:\'JetBrains Mono\',monospace}\n'
+        '.btn:disabled{opacity:.5;cursor:not-allowed}\n'
+        '.btn-sm{padding:4px 9px;font-size:10px}\n'
+        '.btn-danger{background:var(--red);color:#fff;margin-left:4px}\n'
+        '.btn-muted{background:transparent;border:1px solid var(--border);color:var(--muted)}\n'
+        '.log{background:var(--surf2);border:1px solid var(--border);border-radius:var(--r);padding:8px;font-size:10px;font-family:\'JetBrains Mono\',monospace;height:120px;overflow-y:auto;white-space:pre-wrap;word-break:break-word;line-height:1.6}\n'
+        '.log .info{color:var(--muted)}.log .done{color:var(--accent)}.log .fail{color:var(--red)}\n'
+        '.toolbar{display:flex;align-items:center;gap:8px;margin-bottom:8px}\n'
+        '.toolbar .title{font-size:12px;font-weight:600;color:var(--accent);flex:1}\n'
+        '.exp{border-left:3px solid var(--border)}\n'
+        '.exp.pending{border-left-color:var(--yellow)}\n'
+        '.exp.completed{border-left-color:var(--accent)}\n'
+        '.exp.failed{border-left-color:var(--red)}\n'
+        '.meta{display:flex;gap:8px;flex-wrap:wrap;font-size:10px;color:var(--muted);margin:4px 0 6px}\n'
+        '.badge{background:var(--bg);border:1px solid var(--border);border-radius:99px;padding:1px 7px}\n'
+        '.badge.win{color:var(--accent);border-color:var(--accent)}.badge.loss,.badge.invalid{color:var(--red);border-color:var(--red)}.badge.inconclusive{color:var(--yellow);border-color:var(--yellow)}\n'
+        'details{margin-top:6px}summary{cursor:pointer;font-size:10px;color:var(--blue)}\n'
+        'pre{background:var(--bg);padding:8px;border-radius:3px;font-size:10px;overflow:auto;max-height:260px;margin-top:5px;white-space:pre-wrap;word-break:break-word}\n'
+        '.empty{color:var(--muted);font-size:12px;padding:20px;text-align:center}\n'
+        '@media(max-width:900px){.main{flex-direction:column}.left{width:100%;border-right:none;border-bottom:1px solid var(--border)}}\n'
+        '</style>\n</head>\n<body>\n<header>\n'
+        '  <h1>AEO Experiments</h1>\n'
+        '  <span class="sub">Deterministic supervisor with human approval</span>\n'
+        '  <a href="/">\u2190 Dashboard</a>\n'
+        '</header>\n<div class="main">\n'
+        '<div class="left panel">\n'
+        '  <div class="card">\n'
+        '    <h3>New Experiment</h3>\n'
+        '    <div class="form-row"><label>Objective</label><input id="objective" value="Improve AEO citation coverage"></div>\n'
+        '    <div class="grid2">\n'
+        '      <div class="form-row"><label>Site</label><input id="site" value="example.com"></div>\n'
+        '      <div class="form-row"><label>Page</label><input id="page" value="index.md"></div>\n'
+        '    </div>\n'
+        '    <div class="form-row"><label>Content root</label><input id="content_root" value="~/aeo-content"></div>\n'
+        '    <div class="form-row"><label>Publish root (optional)</label><input id="publish_root" placeholder="defaults to sibling published/"></div>\n'
+        '    <div class="form-row"><label>Queries (one per line)</label><textarea id="queries">what is contextcut\nhow does contextcut work</textarea></div>\n'
+        '    <div class="grid2">\n'
+        '      <div class="form-row"><label>Scenario</label><select id="scenario"><option>improved</option><option>baseline</option><option>regressed</option><option>no_change</option><option>invalid</option></select></div>\n'
+        '      <div class="form-row"><label>Agent mode</label><select id="agent_mode"><option>rule</option><option>llm</option></select></div>\n'
+        '    </div>\n'
+        '    <div class="grid2">\n'
+        '      <div class="form-row"><label>Min lift</label><input id="min_lift" type="number" step="0.01" value="0.05"></div>\n'
+        '      <div class="form-row"><label>Max steps</label><input id="max_steps" type="number" min="1" value="12"></div>\n'
+        '    </div>\n'
+        '    <button class="btn" id="createBtn" onclick="createExperiment()">Create Experiment</button>\n'
+        '  </div>\n'
+        '  <div class="log" id="log">Ready. Create an experiment to request approval.</div>\n'
+        '</div>\n'
+        '<div class="right panel">\n'
+        '  <div class="toolbar"><span class="title">Experiments</span><button class="btn btn-sm btn-muted" onclick="loadExperiments()">Refresh</button></div>\n'
+        '  <div id="list"><div class="empty">Loading...</div></div>\n'
+        '</div>\n</div>\n'
+        '<script>\n'
+        'function esc(value) {\n'
+        '  return String(value == null ? "" : value).replace(/[&<>"\']/g, function(ch) {\n'
+        '    return {"&":"&amp;","<":"&lt;",">":"&gt;","\\"":"&quot;","\\\'":"&#39;"}[ch];\n'
+        '  });\n'
+        '}\n'
+        'function log(msg, cls) {\n'
+        '  const el = document.getElementById("log");\n'
+        '  if (!el) return;\n'
+        '  const d = document.createElement("div");\n'
+        '  d.className = cls || "info";\n'
+        '  d.textContent = msg;\n'
+        '  el.appendChild(d);\n'
+        '  el.scrollTop = el.scrollHeight;\n'
+        '}\n'
+        'async function api(path, options) {\n'
+        '  const resp = await fetch(path, options || {});\n'
+        '  const data = await resp.json();\n'
+        '  if (!resp.ok || data.ok === false) throw new Error(data.error || ("HTTP " + resp.status));\n'
+        '  return data;\n'
+        '}\n'
+        'function renderExperiment(exp) {\n'
+        '  const evaluation = (exp.result && exp.result.evaluation) || {};\n'
+        '  const decision = exp.decision || "";\n'
+        '  const cls = exp.state === "PENDING_APPROVAL" ? "pending" : (exp.status === "completed" ? "completed" : (exp.status === "failed" ? "failed" : ""));\n'
+        '  const approval = exp.approval || {};\n'
+        '  const payload = approval.payload || {};\n'
+        '  let actions = "";\n'
+        '  if (exp.state === "PENDING_APPROVAL") {\n'
+        '    actions = \'<button class="btn btn-sm" onclick="resolveExperiment(\\\'\' + esc(exp.id) + \'\\\',\\\'approve\\\')">Approve</button>\' +\n'
+        '      \'<button class="btn btn-sm btn-danger" onclick="resolveExperiment(\\\'\' + esc(exp.id) + \'\\\',\\\'reject\\\')">Reject</button>\';\n'
+        '  }\n'
+        '  const diff = payload.diff ? \'<details><summary>Proposed diff</summary><pre>\' + esc(payload.diff) + \'</pre></details>\' : "";\n'
+        '  const delta = evaluation.delta == null ? "" : \'<span class="badge">delta \' + esc(evaluation.delta.toFixed(3)) + \'</span>\';\n'
+        '  return \'<div class="card exp \' + cls + \'">\' +\n'
+        '    \'<div style="display:flex;gap:8px;align-items:center"><strong style="font-size:12px">\' + esc(exp.page) + \'</strong>\' +\n'
+        '    \'<span class="badge">\' + esc(exp.state) + \'</span>\' +\n'
+        '    (decision ? \'<span class="badge \' + esc(decision) + \'">\' + esc(decision) + \'</span>\' : "") + delta + \'</div>\' +\n'
+        '    \'<div class="meta"><span>\' + esc(exp.site) + \'</span><span>\' + esc(exp.id) + \'</span><span>\' + esc((exp.queries || []).length) + \' queries</span></div>\' +\n'
+        '    \'<div style="font-size:11px;color:var(--muted)">\' + esc(exp.objective) + \'</div>\' +\n'
+        '    (exp.error ? \'<div style="font-size:11px;color:var(--red);margin-top:5px">\' + esc(exp.error) + \'</div>\' : "") +\n'
+        '    diff + (actions ? \'<div style="margin-top:8px">\' + actions + \'</div>\' : "") + \'</div>\';\n'
+        '}\n'
+        'async function loadExperiments() {\n'
+        '  const list = document.getElementById("list");\n'
+        '  try {\n'
+        '    const [expData, approvalData] = await Promise.all([\n'
+        '      api("/api/experiments?limit=50"),\n'
+        '      api("/api/approvals?status=pending&limit=50")\n'
+        '    ]);\n'
+        '    const byExperiment = {};\n'
+        '    (approvalData.approvals || []).forEach(function(a) { byExperiment[a.experiment_id] = a; });\n'
+        '    const experiments = expData.experiments || [];\n'
+        '    if (!experiments.length) { list.innerHTML = \'<div class="empty">No experiments yet.</div>\'; return; }\n'
+        '    list.innerHTML = experiments.map(function(exp) {\n'
+        '      exp.approval = byExperiment[exp.id] || null;\n'
+        '      return renderExperiment(exp);\n'
+        '    }).join("");\n'
+        '  } catch (e) {\n'
+        '    list.innerHTML = \'<div class="empty" style="color:var(--red)">\' + esc(e.message) + \'</div>\';\n'
+        '  }\n'
+        '}\n'
+        'async function createExperiment() {\n'
+        '  const btn = document.getElementById("createBtn");\n'
+        '  btn.disabled = true;\n'
+        '  const body = {\n'
+        '    objective: document.getElementById("objective").value.trim(),\n'
+        '    site: document.getElementById("site").value.trim(),\n'
+        '    page: document.getElementById("page").value.trim(),\n'
+        '    content_root: document.getElementById("content_root").value.trim(),\n'
+        '    publish_root: document.getElementById("publish_root").value.trim(),\n'
+        '    queries: document.getElementById("queries").value.split(/\\n|,/).map(function(q){return q.trim();}).filter(Boolean),\n'
+        '    scenario: document.getElementById("scenario").value,\n'
+        '    agent_mode: document.getElementById("agent_mode").value,\n'
+        '    min_lift: parseFloat(document.getElementById("min_lift").value) || 0.05,\n'
+        '    max_steps: parseInt(document.getElementById("max_steps").value) || 12\n'
+        '  };\n'
+        '  try {\n'
+        '    const data = await api("/api/experiments", {method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(body)});\n'
+        '    log("Created " + data.experiment.id + " -> " + data.experiment.state, "done");\n'
+        '    await loadExperiments();\n'
+        '  } catch (e) { log("Create failed: " + e.message, "fail"); }\n'
+        '  finally { btn.disabled = false; }\n'
+        '}\n'
+        'async function resolveExperiment(id, decision) {\n'
+        '  try {\n'
+        '    const data = await api("/api/experiments/" + encodeURIComponent(id) + "/approve", {\n'
+        '      method:"POST",headers:{"Content-Type":"application/json"},\n'
+        '      body:JSON.stringify({decision: decision, message: "dashboard " + decision})\n'
+        '    });\n'
+        '    log(decision + " " + id + " -> " + data.experiment.state, "done");\n'
+        '    await loadExperiments();\n'
+        '  } catch (e) { log(decision + " failed: " + e.message, "fail"); }\n'
+        '}\n'
+        'loadExperiments();\n'
+        'setInterval(loadExperiments, 5000);\n'
+        '</script>\n</body>\n</html>'
+    )
+
+
 def make_dashboard():
     with _lock:
         rows = list(_log)
@@ -2533,6 +2711,7 @@ tr.cloud-off td{{background:#0a1a2e!important;color:#22c55e!important;border-top
   <button class="tog" id="togBtn" title="Toggle day/night">☀</button>
   <a href="/settings" style="background:transparent;border:1px solid var(--border);color:var(--muted);border-radius:3px;padding:3px 10px;font-size:11px;cursor:pointer;font-family:'JetBrains Mono',monospace;text-decoration:none">LLM-Provider ⚙</a>
   <a href="/swarm" style="background:#8b5cf6;color:#fff;border:1px solid #8b5cf6;border-radius:3px;padding:3px 8px;font-size:11px;font-weight:600;cursor:pointer;font-family:'JetBrains Mono',monospace;text-decoration:none" title="Parallel company research with verification">🐝 Swarm</a>
+  <a href="/experiments" style="background:#22c55e;color:#052e16;border:1px solid #22c55e;border-radius:3px;padding:3px 8px;font-size:11px;font-weight:600;cursor:pointer;font-family:'JetBrains Mono',monospace;text-decoration:none" title="AEO content experiments with human approval">🧪 AEO</a>
   <button onclick="openFileBrowser()" style="background:transparent;border:1px solid var(--border);color:var(--muted);border-radius:3px;padding:3px 10px;font-size:11px;cursor:pointer;font-family:'JetBrains Mono',monospace">Browse Files 📂</button>
   <a href="/api/logs/export" style="background:transparent;border:1px solid var(--border);color:var(--muted);border-radius:3px;padding:3px 8px;font-size:11px;cursor:pointer;font-family:'JetBrains Mono',monospace;text-decoration:none" title="Download audit log CSV">Export Log</a>
   <button onclick="seedDemo()" style="background:transparent;border:1px solid var(--border);color:var(--muted);border-radius:3px;padding:3px 8px;font-size:11px;cursor:pointer;font-family:'JetBrains Mono',monospace" title="Load sample data for demo">Demo Data</button>
@@ -5104,7 +5283,151 @@ class DashboardHandler(_SuppressBrokenPipe, BaseHTTPRequestHandler):
     def log_message(self, fmt, *args):
         pass
 
+    def _send_json(self, payload, status=200):
+        body = json.dumps(payload, ensure_ascii=False, default=str).encode("utf-8")
+        self.send_response(status)
+        self.send_header("Content-Type", "application/json")
+        self.send_header("Content-Length", str(len(body)))
+        self.end_headers()
+        self.wfile.write(body)
+
+    def _experiment_supervisor(self):
+        from supervisor import Supervisor
+
+        return Supervisor()
+
+    def _handle_experiment_get(self):
+        parsed = urllib.parse.urlparse(self.path)
+        path = parsed.path.rstrip("/") or "/"
+        qs = urllib.parse.parse_qs(parsed.query)
+        try:
+            supervisor = self._experiment_supervisor()
+            if path == "/api/experiments":
+                status = (qs.get("status") or [None])[0]
+                limit = int((qs.get("limit") or ["50"])[0])
+                self._send_json(
+                    {
+                        "ok": True,
+                        "experiments": supervisor.store.list(
+                            status=status, limit=limit
+                        ),
+                    }
+                )
+                return
+            if path.startswith("/api/experiments/"):
+                experiment_id = path.rsplit("/", 1)[-1]
+                detail = supervisor.store.detail(experiment_id)
+                if detail.get("approval_id"):
+                    try:
+                        detail["approval"] = supervisor.approvals.get(
+                            detail["approval_id"]
+                        )
+                    except KeyError:
+                        detail["approval"] = None
+                self._send_json({"ok": True, "experiment": detail})
+                return
+            if path == "/api/approvals":
+                status = (qs.get("status") or ["pending"])[0]
+                if status == "all":
+                    status = None
+                limit = int((qs.get("limit") or ["50"])[0])
+                self._send_json(
+                    {
+                        "ok": True,
+                        "approvals": supervisor.approvals.list(
+                            status=status, limit=limit
+                        ),
+                    }
+                )
+                return
+            self._send_json({"ok": False, "error": "not found"}, 404)
+        except KeyError as exc:
+            self._send_json({"ok": False, "error": str(exc)}, 404)
+        except Exception as exc:
+            self._send_json({"ok": False, "error": str(exc)}, 400)
+
+    def _handle_experiment_post(self, raw_body):
+        parsed = urllib.parse.urlparse(self.path)
+        path = parsed.path.rstrip("/")
+        try:
+            body = json.loads(raw_body or b"{}")
+            if not isinstance(body, dict):
+                raise ValueError("JSON body must be an object")
+        except Exception as exc:
+            self._send_json({"ok": False, "error": f"invalid JSON: {exc}"}, 400)
+            return
+        try:
+            supervisor = self._experiment_supervisor()
+            if path == "/api/experiments":
+                queries = body.get("queries", [])
+                if isinstance(queries, str):
+                    queries = re.split(r"[,\n]", queries)
+                if not isinstance(queries, list):
+                    raise ValueError("queries must be a list or comma-separated string")
+                content_root = str(body.get("content_root") or "").strip()
+                if not content_root:
+                    raise ValueError("content_root is required")
+                agent_mode = str(body.get("agent_mode") or "rule").strip().lower()
+                if agent_mode not in {"rule", "llm"}:
+                    raise ValueError("agent_mode must be rule or llm")
+                max_steps = max(1, int(body.get("max_steps", 12)))
+                experiment = supervisor.create(
+                    objective=str(body.get("objective") or "").strip(),
+                    site=str(body.get("site") or "").strip(),
+                    page=str(body.get("page") or "").strip(),
+                    queries=queries,
+                    target_metric=str(
+                        body.get("target_metric") or "aeo_citation_rate"
+                    ).strip(),
+                    content_root=content_root,
+                    publish_root=body.get("publish_root") or None,
+                    variant_scenario=str(
+                        body.get("scenario")
+                        or body.get("variant_scenario")
+                        or "improved"
+                    ).strip(),
+                    min_lift=float(body.get("min_lift", 0.05)),
+                    agent_mode=agent_mode,
+                    budget={"max_steps": max_steps},
+                )
+                self._send_json({"ok": True, "experiment": experiment}, 201)
+                return
+            if path.startswith("/api/experiments/") and path.endswith("/approve"):
+                parts = path.split("/")
+                experiment_id = parts[-2] if len(parts) >= 2 else ""
+                if not experiment_id:
+                    raise ValueError("experiment id is required")
+                decision = str(body.get("decision") or "approve").strip().lower()
+                message = str(body.get("message") or "")
+                resolved_by = str(body.get("resolved_by") or "dashboard")
+                if decision == "approve":
+                    experiment = supervisor.approve(
+                        experiment_id,
+                        message=message,
+                        resolved_by=resolved_by,
+                    )
+                elif decision == "reject":
+                    experiment = supervisor.reject(
+                        experiment_id,
+                        message=message,
+                        resolved_by=resolved_by,
+                    )
+                else:
+                    raise ValueError("decision must be approve or reject")
+                self._send_json({"ok": True, "experiment": experiment})
+                return
+            self._send_json({"ok": False, "error": "not found"}, 404)
+        except KeyError as exc:
+            self._send_json({"ok": False, "error": str(exc)}, 404)
+        except Exception as exc:
+            self._send_json({"ok": False, "error": str(exc)}, 400)
+
     def do_GET(self):
+        if self.path.startswith("/api/experiments") or self.path.startswith(
+            "/api/approvals"
+        ):
+            self._handle_experiment_get()
+            return
         if self.path.startswith("/api/security/alerts"):
             try:
                 parsed = urllib.parse.urlparse(self.path)
@@ -5798,6 +6121,14 @@ class DashboardHandler(_SuppressBrokenPipe, BaseHTTPRequestHandler):
                 self.end_headers()
                 self.wfile.write(data)
             return
+        if self.path == "/experiments":
+            page = make_experiments_page().encode("utf-8")
+            self.send_response(200)
+            self.send_header("Content-Type", "text/html; charset=utf-8")
+            self.send_header("Content-Length", str(len(page)))
+            self.end_headers()
+            self.wfile.write(page)
+            return
         if self.path == "/settings":
             page = make_settings_page().encode("utf-8")
             self.send_response(200)
@@ -5900,6 +6231,10 @@ class DashboardHandler(_SuppressBrokenPipe, BaseHTTPRequestHandler):
             self.close_connection = True
             return
         raw_body = self.rfile.read(length)
+
+        if self.path.startswith("/api/experiments"):
+            self._handle_experiment_post(raw_body)
+            return
 
         # ── Settings endpoints ──
         if self.path == "/api/settings/provider":
