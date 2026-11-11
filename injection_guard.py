@@ -65,8 +65,14 @@ _PATTERNS: list[tuple[str, str, re.Pattern[str]]] = [
         "shell-execution",
         "medium",
         re.compile(
-            r"\b(run|execute|invoke|call)\b[^\n]{0,60}\b(shell|bash|command|script)\b"
-            r"|\b(bash\s+-c|sh\s+-c|powershell|cmd\.exe)\b",
+            # Actionable instructions only: "run this command", fenced
+            # commands, explicit shells, or curl/wget piped to a shell.
+            # Avoids flagging documentation such as "run shell commands".
+            r"\b(run|execute|invoke)\b[^\n]{0,40}\b(the following|this|these)\b"
+            r"[^\n]{0,20}\b(command|script|shell|code)\b"
+            r"|\b(run|execute)\b[^`\n]{0,20}`[^`\n]*[\s/;|&$><=][^`\n]{0,200}`"
+            r"|\b(bash\s+-c|sh\s+-c|powershell|cmd\.exe)\b"
+            r"|\b(curl|wget)\b[^\n]{0,120}\|\s*(bash|sh)\b",
             re.IGNORECASE,
         ),
     ),

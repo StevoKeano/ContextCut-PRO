@@ -55,11 +55,26 @@ class TestDashboardHandlerGET:
         status, raw = make_handler("/", "GET")
         assert status == 200
         assert b"ContextCut" in raw
+        assert b"https://github.com/StevoKeano/ContextCut-PRO/blob/main/README.md" in raw
+
+    def test_dashboard_unattended_label_visibility_targets_label(self, make_handler):
+        status, raw = make_handler("/", "GET")
+        assert status == 200
+        html = raw.decode("utf-8", errors="replace")
+        assert 'id="unattendedLbl"' in html
+        load_state = html.split("function loadState() {", 1)[1].split(
+            "function resetDefaults()", 1
+        )[0]
+        assert "getElementById('unattendedLbl')" in load_state
+        assert "getElementById('unattendedChk')" not in load_state
+        assert "async function syncShellModeFromUi()" in html
+        assert "initSession().then(() => syncShellModeFromUi())" in html
 
     def test_settings_returns_html(self, make_handler):
         status, raw = make_handler("/settings", "GET")
         assert status == 200
         assert b"Settings" in raw or b"settings" in raw.lower() or b"Provider" in raw
+        assert b"https://github.com/StevoKeano/ContextCut-PRO/blob/main/README.md" in raw
 
     @patch("qdrant_proxy_final.QDRANT_HOST", "localhost")
     @patch("qdrant_proxy_final.QDRANT_PORT", 6333)

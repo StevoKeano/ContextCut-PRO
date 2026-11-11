@@ -118,6 +118,41 @@ class TestCheckpointManager:
         assert "timestamp" in data
         assert len(data["timestamp"]) > 10
 
+    def test_task_meta_roundtrip_and_not_a_step(self, mgr):
+        mgr.save_task_meta("meta-task", {"goal": "original question"})
+        assert mgr.exists("meta-task") is False
+        assert mgr.latest_step_number("meta-task") == 0
+        assert mgr.load_task_meta("meta-task")["goal"] == "original question"
+
+        mgr.save("meta-task", {
+            "step_number": 1, "tool_name": "t", "tool_input": {},
+            "tool_output": "x", "goal": "continue", "model_used": "m",
+        })
+        assert mgr.exists("meta-task") is True
+        assert mgr.latest_step_number("meta-task") == 1
+        assert [cp["step_number"] for cp in mgr.list_all("meta-task")] == [1]
+
+    def test_resume_context_includes_task_meta_goal(self, mgr):
+        mgr.save_task_meta("task-goal", {"goal": "original question"})
+        mgr.save("task-goal", {
+            "step_number": 1, "tool_name": "t", "tool_input": {},
+            "tool_output": "x", "goal": "continue", "model_used": "m",
+        })
+        ctx = mgr.build_resume_context("task-goal")
+        assert "Original task: original question" in ctx
+
+    def test_resume_context_falls_back_to_checkpoint_goal(self, mgr):
+        mgr.save("task-fallback", {
+            "step_number": 1, "tool_name": "t", "tool_input": {},
+            "tool_output": "x", "goal": "continue", "model_used": "m",
+        })
+        mgr.save("task-fallback", {
+            "step_number": 2, "tool_name": "t", "tool_input": {},
+            "tool_output": "y", "goal": "original question", "model_used": "m",
+        })
+        ctx = mgr.build_resume_context("task-fallback")
+        assert "Original task: original question" in ctx
+
 
 class TestCheckpointCrashRecovery:
     """Simulate crash by deleting in-memory state after partial checkpointing."""
@@ -149,6 +184,27 @@ class TestCheckpointCrashRecovery:
         for i, cp in enumerate(checkpoints, 1):
             assert cp["step_number"] == i
             assert cp["tool_name"] == steps_data[i - 1]["tool_name"]
+
+    def test_callback_appends_after_restart(self, tmp_path: Path, monkeypatch):
+        from agent_handler import CheckpointCallbackHandler, CheckpointManager
+
+        monkeypatch.setattr("agent_handler._CHECKPOINT_DIR", tmp_path)
+        mgr = CheckpointManager(base_dir=tmp_path)
+        for i in range(1, 4):
+            mgr.save("resume-task", {
+                "step_number": i, "tool_name": "t", "tool_input": {},
+                "tool_output": f"old{i}", "goal": "g", "model_used": "m",
+            })
+
+        handler = CheckpointCallbackHandler("resume-task", "continue", "m")
+        assert handler.step_number == 3
+        handler.on_tool_start({"name": "read_file"}, "", inputs={"path": "x"})
+        handler.on_tool_end("new output")
+
+        assert handler.step_number == 4
+        assert (tmp_path / "resume-task" / "0004.json").exists()
+        assert mgr.load("resume-task", step_number=1)["tool_output"] == "old1"
+        assert mgr.latest_step_number("resume-task") == 4
 
     def test_resume_after_crash_preserves_prior_context(self, tmp_path: Path):
         from agent_handler import CheckpointManager
@@ -196,6 +252,7 @@ class TestCheckpointCallbackHandler:
     @patch("agent_handler.CheckpointManager")
     def test_on_tool_end_saves_checkpoint(self, MockCkptMgr):
         from agent_handler import CheckpointCallbackHandler
+        MockCkptMgr.return_value.latest_step_number.return_value = 0
         handler = CheckpointCallbackHandler(
             task_id="test-task", goal="test goal", model_used="qwen3:4b"
         )
@@ -214,6 +271,7 @@ class TestCheckpointCallbackHandler:
     @patch("agent_handler.CheckpointManager")
     def test_on_tool_end_error_output_not_fail(self, MockCkptMgr):
         from agent_handler import CheckpointCallbackHandler
+        MockCkptMgr.return_value.latest_step_number.return_value = 0
         handler = CheckpointCallbackHandler(
             task_id="t2", goal="g", model_used="m"
         )

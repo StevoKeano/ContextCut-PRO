@@ -49,6 +49,14 @@ from untrusted_content import wrap_untrusted
 from scan_sanitize import sanitize_scan_html
 from injection_guard import get_alerts_since, get_recent_alerts, latest_seq
 
+try:
+    from langchain_openai import StreamChunkTimeoutError
+except ImportError:  # pragma: no cover - optional dependency drift
+    class StreamChunkTimeoutError(TimeoutError):
+        timeout_s = 0.0
+        model_name = None
+        chunks_received = 0
+
 _VOYAGE_AVAILABLE = False
 _voyage_mod = None
 try:
@@ -1850,6 +1858,8 @@ body{{background:var(--bg);color:var(--text);font-family:'JetBrains Mono',monosp
 .header{{background:var(--surf);border-bottom:1px solid var(--border);padding:0 20px;display:flex;align-items:center;gap:14px;height:48px;flex-shrink:0}}
 .logo{{font-family:'Syne',sans-serif;font-size:20px;font-weight:800;color:var(--accent);letter-spacing:-.5px}}
 .logo span{{color:var(--text)}}
+.logo-info{{display:inline-flex;align-items:center;justify-content:center;width:15px;height:15px;margin-left:6px;border:1px solid var(--border);border-radius:50%;color:var(--muted);font-size:10px;font-weight:600;line-height:1;text-decoration:none;vertical-align:middle}}
+.logo-info:hover{{color:var(--accent);border-color:var(--accent);background:var(--surf2)}}
 .back-btn{{background:transparent;border:1px solid var(--border);color:var(--muted);border-radius:3px;padding:3px 10px;font-size:11px;cursor:pointer;font-family:'JetBrains Mono',monospace;margin-left:auto;text-decoration:none}}
 .back-btn:hover{{color:var(--text);border-color:var(--accent)}}
 .tog{{background:transparent;border:1px solid var(--border);color:var(--muted);border-radius:3px;padding:3px 8px;font-size:13px;cursor:pointer;line-height:1;flex-shrink:0}}
@@ -1881,7 +1891,7 @@ body{{background:var(--bg);color:var(--text);font-family:'JetBrains Mono',monosp
 </head>
 <body>
 <div class="header">
-  <div class="logo">ContextCut<span>-PRO</span></div>
+  <div class="logo">ContextCut<span>-PRO</span><a class="logo-info" href="https://github.com/StevoKeano/ContextCut-PRO/blob/main/README.md" target="_blank" rel="noopener noreferrer" title="README / documentation" aria-label="Open README on GitHub">i</a></div>
   <button class="tog" id="togBtn" title="Toggle day/night">☀</button>
   <a href="/" class="back-btn">← Back to Dashboard</a>
 </div>
@@ -2352,6 +2362,8 @@ body{{background:var(--bg);color:var(--text);font-family:'JetBrains Mono',monosp
 .header{{background:var(--surf);border-bottom:1px solid var(--border);padding:0 20px;display:flex;align-items:center;gap:14px;height:48px;flex-shrink:0}}
 .logo{{font-family:'Syne',sans-serif;font-size:20px;font-weight:800;color:var(--accent);letter-spacing:-.5px}}
 .logo span{{color:var(--text)}}
+.logo-info{{display:inline-flex;align-items:center;justify-content:center;width:15px;height:15px;margin-left:6px;border:1px solid var(--border);border-radius:50%;color:var(--muted);font-size:10px;font-weight:600;line-height:1;text-decoration:none;vertical-align:middle}}
+.logo-info:hover{{color:var(--accent);border-color:var(--accent);background:var(--surf2)}}
 .hinfo{{color:var(--muted);font-size:11px;flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}}
 .live{{display:flex;align-items:center;gap:5px;color:var(--muted);font-size:11px;flex-shrink:0}}
 .dot{{width:7px;height:7px;border-radius:50%;background:var(--green);animation:pulse 2s infinite}}
@@ -2511,7 +2523,7 @@ tr.cloud-off td{{background:#0a1a2e!important;color:#22c55e!important;border-top
 <div id="secAlert" class="sec-alert" style="display:none"></div>
 
 <div class="header">
-  <div class="logo">ContextCut<span>-PRO</span></div>
+  <div class="logo">ContextCut<span>-PRO</span><a class="logo-info" href="https://github.com/StevoKeano/ContextCut-PRO/blob/main/README.md" target="_blank" rel="noopener noreferrer" title="README / documentation" aria-label="Open README on GitHub">i</a></div>
   <div class="hinfo">{UPSTREAM} · Qdrant {QDRANT_HOST}:{QDRANT_PORT} · min_score={MIN_SCORE} · top_k={TOP_K}</div>
   <button class="tog" id="togBtn" title="Toggle day/night">☀</button>
   <a href="/settings" style="background:transparent;border:1px solid var(--border);color:var(--muted);border-radius:3px;padding:3px 10px;font-size:11px;cursor:pointer;font-family:'JetBrains Mono',monospace;text-decoration:none">LLM-Provider ⚙</a>
@@ -2793,8 +2805,8 @@ function loadState() {{
   if (rv) rv.textContent = maxRetries;
   const dc = document.getElementById('deepChk');
   if (dc) dc.checked = deepMode;
-  const uc = document.getElementById('unattendedChk');
-  if (uc) uc.classList.toggle('show', agentMode);
+  const ul = document.getElementById('unattendedLbl');
+  if (ul) ul.classList.toggle('show', agentMode);
   const input = document.getElementById('chatInput');
   if (input) {{
     input.placeholder = agentMode
@@ -2837,6 +2849,8 @@ function toggleAgentMode() {{
         }});
       }}
     }}
+  }} else {{
+    syncShellModeFromUi();
   }}
   saveState();
 }}
@@ -3191,12 +3205,44 @@ function showSecurityAlert(alert) {{
   window._secAlertTimer = setTimeout(() => {{ el.style.display = 'none'; }}, 15000);
 }}
 
+function markApprovalResolved(approvalId, status, message) {{
+  if (!approvalId) return;
+  const labels = {{
+    approved: '🟢 Approved',
+    rejected: '🔴 Rejected',
+    expired: '⌛ Expired'
+  }};
+  document.querySelectorAll('.approval-card').forEach(card => {{
+    if (card.dataset.approvalId !== approvalId || card.dataset.resolved === '1') return;
+    card.dataset.resolved = '1';
+    card.dataset.status = status || 'resolved';
+    const btns = card.querySelector('.shell-btns');
+    if (!btns) return;
+    const span = document.createElement('span');
+    span.className = 'approval-status';
+    span.textContent = labels[status] || ('⚪ ' + (message || 'Resolved'));
+    if (message) span.title = message;
+    btns.replaceChildren(span);
+  }});
+  if (pendingApproval && pendingApproval.approval_id === approvalId) pendingApproval = null;
+}}
+
 function renderApproval(data) {{
+  const approvalId = data.approval_id || ('legacy-' + Date.now());
+  if (pendingApproval && pendingApproval.approval_id &&
+      pendingApproval.approval_id !== approvalId) {{
+    markApprovalResolved(
+      pendingApproval.approval_id,
+      'expired',
+      'Superseded by a newer approval request.'
+    );
+  }}
   pendingApproval = data;
   const box = document.getElementById('messages');
   if (!box) return;
   const div = document.createElement('div');
-  div.className = 'msg assistant';
+  div.className = 'msg assistant approval-card';
+  div.dataset.approvalId = approvalId;
   const actions = data.actions || [];
   const rows = actions.map(a => {{
     const row = document.createElement('div');
@@ -3207,53 +3253,79 @@ function renderApproval(data) {{
   div.innerHTML = '<div class="bubble"><strong>🔐 Approval required</strong>' + rows +
     '<div class="shell-btns"><button class="allow" onclick="shellConfirm(this, true)">Allow</button>' +
     '<button class="deny" onclick="shellConfirm(this, false)">Deny</button>' +
-    '<button class="allow" onclick="shellAlways()">Always Allow</button>' +
-    '<button class="deny" onclick="shellReject()">Always Reject</button></div></div>';
+    '<button class="allow" onclick="shellAlways(this)">Always Allow</button>' +
+    '<button class="deny" onclick="shellReject(this)">Always Reject</button></div></div>';
   box.appendChild(div);
   div.scrollIntoView({{behavior:'smooth', block:'start'}});
 }}
 
-async function submitApproval(allow) {{
-  if (!pendingApproval) return;
+async function submitApproval(approvalId, allow) {{
+  if (!pendingApproval || !approvalId || pendingApproval.approval_id !== approvalId) {{
+    markApprovalResolved(approvalId, 'expired', 'This approval request is no longer active.');
+    return;
+  }}
   const taskId = pendingApproval.task_id;
   const count = (pendingApproval.actions || []).length || 1;
   const decisions = Array.from({{length: count}}, () => allow
     ? {{type:'approve'}}
     : {{type:'reject', message:'Denied by user.'}});
-  pendingApproval = null;
   try {{
-    await fetch('/api/agent/approve', {{
+    const resp = await fetch('/api/agent/approve', {{
       method: 'POST',
       headers: {{'Content-Type':'application/json'}},
-      body: JSON.stringify({{task_id: taskId, decisions: decisions}})
+      body: JSON.stringify({{task_id: taskId, approval_id: approvalId, decisions: decisions}})
     }});
-  }} catch(e) {{ console.warn('approval:', e); }}
-  document.querySelectorAll('.shell-btns').forEach(el => el.innerHTML = allow ? '🟢 Allowed' : '🔴 Denied');
+    if (!resp.ok) {{
+      const data = await resp.json().catch(() => ({{}}));
+      markApprovalResolved(
+        approvalId,
+        resp.status === 409 ? 'expired' : 'rejected',
+        data.error || ('Approval failed (' + resp.status + ').')
+      );
+      return;
+    }}
+    markApprovalResolved(approvalId, allow ? 'approved' : 'rejected');
+  }} catch(e) {{
+    console.warn('approval:', e);
+  }}
 }}
 
 async function shellConfirm(btn, allow) {{
-  await submitApproval(allow);
+  const card = btn && btn.closest ? btn.closest('.approval-card') : null;
+  await submitApproval(card && card.dataset.approvalId, allow);
 }}
 
-async function shellAlways() {{
+async function shellAlways(btn) {{
+  const card = btn && btn.closest ? btn.closest('.approval-card') : null;
+  const approvalId = card ? card.dataset.approvalId : (pendingApproval && pendingApproval.approval_id);
+  if (!pendingApproval || pendingApproval.approval_id !== approvalId) {{
+    markApprovalResolved(approvalId, 'expired', 'This approval request is no longer active.');
+    return;
+  }}
   try {{
     await fetch('/api/agent/shell-mode', {{
       method: 'POST',
       headers: {{'Content-Type':'application/json'}},
       body: JSON.stringify({{session_id: sessionId, mode: 'always'}})
     }});
-    await submitApproval(true);
+    await submitApproval(approvalId, true);
   }} catch(e) {{}}
 }}
 
-async function shellReject() {{
+async function shellReject(btn) {{
+  const card = btn && btn.closest ? btn.closest('.approval-card') : null;
+  const approvalId = card ? card.dataset.approvalId : (pendingApproval && pendingApproval.approval_id);
+  if (!pendingApproval || pendingApproval.approval_id !== approvalId) {{
+    markApprovalResolved(approvalId, 'expired', 'This approval request is no longer active.');
+    return;
+  }}
   try {{
     await fetch('/api/agent/shell-mode', {{
       method: 'POST',
       headers: {{'Content-Type':'application/json'}},
       body: JSON.stringify({{session_id: sessionId, mode: 'reject'}})
     }});
-    await submitApproval(false);
+    await submitApproval(approvalId, false);
   }} catch(e) {{}}
 }}
 
@@ -3366,6 +3438,19 @@ async function initSession() {{
       sessionId = d.session_id;
       updateSessionBadge();
     }}
+  }} catch(e) {{}}
+}}
+
+async function syncShellModeFromUi() {{
+  if (!sessionId) return;
+  const chk = document.getElementById('unattendedChk');
+  const mode = agentMode && chk && chk.checked ? 'always' : 'ask';
+  try {{
+    await fetch('/api/agent/shell-mode', {{
+      method: 'POST',
+      headers: {{'Content-Type':'application/json'}},
+      body: JSON.stringify({{session_id: sessionId, mode}})
+    }});
   }} catch(e) {{}}
 }}
 
@@ -3961,8 +4046,8 @@ pollStats();
 pollLicense();
 pollGpu();
 fetchModels();
-initSession();
 loadState();
+initSession().then(() => syncShellModeFromUi());
 renderTypesafeBtn();
 // Pre-warm knowledge file cache
 fetch('/api/knowledge/files').then(r=>r.json()).then(d=>{{ _kbFiles = new Set(d.files.map(f=>f.name)); }}).catch(()=>{{}});
@@ -4130,6 +4215,8 @@ async function sendMessage(taskIdOverride) {{
                 showSecurityAlert(data.alert);
               }} else if (data.approval) {{
                 renderApproval(data);
+              }} else if (data.type === 'approval_resolved') {{
+                markApprovalResolved(data.approval_id, data.status, data.message);
               }} else if (data.reasoning) {{
                 updateThinking(data.reasoning);
               }} else if (data.token) {{
@@ -4846,6 +4933,17 @@ def _agent_config(task_id: str) -> dict:
     }
 
 
+def _stream_chunk_timeout_message(exc) -> str:
+    timeout_s = float(getattr(exc, "timeout_s", 0) or 0)
+    model = getattr(exc, "model_name", None) or "unknown"
+    chunks = int(getattr(exc, "chunks_received", 0) or 0)
+    return (
+        f"Model stream stalled for {timeout_s:.0f}s after {chunks} chunk(s) "
+        f"(model={model}). No answer was generated. Retry, raise "
+        "CONTEXTCUT_STREAM_CHUNK_TIMEOUT, or use a faster model."
+    )
+
+
 def _action_to_dict(action) -> dict:
     if isinstance(action, dict):
         return {
@@ -4900,10 +4998,12 @@ async def _resolve_approval_requests(
     if mode == "reject" or emit is None:
         return _reject_decisions(count, "Rejected by policy or non-streaming request.")
 
+    approval_id = uuid.uuid4().hex
     gate = {
         "event": threading.Event(),
         "decisions": None,
         "created": time.time(),
+        "approval_id": approval_id,
     }
     with _APPROVALS_LOCK:
         _APPROVALS[task_id] = gate
@@ -4915,11 +5015,18 @@ async def _resolve_approval_requests(
             {
                 "type": "approval_required",
                 "approval": True,
+                "approval_id": approval_id,
                 "task_id": task_id,
                 "session_id": sid,
                 "actions": actions,
                 "timeout": APPROVAL_TIMEOUT,
             }
+        )
+        print(
+            f"[{datetime.now().strftime('%H:%M:%S')}] [Approval] requested "
+            f"task={task_id[:8]} id={approval_id[:8]} actions={len(actions)} "
+            f"timeout={APPROVAL_TIMEOUT}s",
+            flush=True,
         )
         try:
             await asyncio.get_running_loop().run_in_executor(
@@ -4927,9 +5034,30 @@ async def _resolve_approval_requests(
             )
         except Exception:
             pass
+        expired = not gate["event"].is_set()
         decisions = gate.get("decisions")
         if not isinstance(decisions, list) or len(decisions) != count:
-            return _reject_decisions(count, "Approval denied or timed out.")
+            status = "expired" if expired else "rejected"
+            message = (
+                f"Approval expired after {APPROVAL_TIMEOUT}s."
+                if expired
+                else "Approval denied or invalid decision."
+            )
+            print(
+                f"[{datetime.now().strftime('%H:%M:%S')}] [Approval] {status} "
+                f"task={task_id[:8]} id={approval_id[:8]}",
+                flush=True,
+            )
+            emit(
+                {
+                    "type": "approval_resolved",
+                    "approval_id": approval_id,
+                    "task_id": task_id,
+                    "status": status,
+                    "message": message,
+                }
+            )
+            return _reject_decisions(count, message)
         normalized = []
         for decision in decisions:
             if not isinstance(decision, dict):
@@ -4942,6 +5070,24 @@ async def _resolve_approval_requests(
             if decision.get("message"):
                 item["message"] = str(decision["message"])[:1000]
             normalized.append(item)
+        status = (
+            "approved"
+            if normalized and all(item["type"] == "approve" for item in normalized)
+            else "rejected"
+        )
+        print(
+            f"[{datetime.now().strftime('%H:%M:%S')}] [Approval] {status} "
+            f"task={task_id[:8]} id={approval_id[:8]} decisions={len(normalized)}",
+            flush=True,
+        )
+        emit(
+            {
+                "type": "approval_resolved",
+                "approval_id": approval_id,
+                "task_id": task_id,
+                "status": status,
+            }
+        )
         return normalized
     finally:
         with _APPROVALS_LOCK:
@@ -6374,15 +6520,32 @@ class DashboardHandler(_SuppressBrokenPipe, BaseHTTPRequestHandler):
             try:
                 body = json.loads(raw_body)
                 task_id = str(body.get("task_id", "")).strip()
+                approval_id = str(body.get("approval_id", "")).strip()
                 decisions = body.get("decisions")
                 if not task_id or not isinstance(decisions, list):
                     raise ValueError("task_id and decisions[] are required")
+                gate = None
+                stale = False
                 with _APPROVALS_LOCK:
                     gate = _APPROVALS.get(task_id)
                     if gate:
-                        gate["decisions"] = decisions
-                        gate["event"].set()
-                if not gate:
+                        gate_id = str(gate.get("approval_id", "") or "")
+                        if approval_id and gate_id and approval_id != gate_id:
+                            stale = True
+                        else:
+                            gate["decisions"] = decisions
+                            gate["event"].set()
+                if stale:
+                    print(
+                        f"[{datetime.now().strftime('%H:%M:%S')}] [Approval] stale "
+                        f"task={task_id[:8]} id={approval_id[:8]}",
+                        flush=True,
+                    )
+                    resp = json.dumps(
+                        {"ok": False, "error": "approval expired or superseded"}
+                    ).encode()
+                    self.send_response(409)
+                elif not gate:
                     resp = json.dumps(
                         {"ok": False, "error": "no pending approval for task_id"}
                     ).encode()
@@ -6685,6 +6848,11 @@ class DashboardHandler(_SuppressBrokenPipe, BaseHTTPRequestHandler):
                 resume_context = None
                 if ckpt_mgr.exists(task_id):
                     resume_context = ckpt_mgr.build_resume_context(task_id)
+                else:
+                    ckpt_mgr.save_task_meta(
+                        task_id,
+                        {"goal": goal, "model_used": model_name},
+                    )
                 _sessions[sid]["task_id"] = task_id
 
                 add_to_history(sid, "user", message)
@@ -6787,7 +6955,7 @@ class DashboardHandler(_SuppressBrokenPipe, BaseHTTPRequestHandler):
 
                     called_tools = set()
                     full_output = ""
-                    step_counter = 0
+                    step_counter = ckpt_mgr.latest_step_number(task_id)
                     config = _agent_config(task_id)
                     alert_seq = latest_seq()
 
@@ -6891,8 +7059,13 @@ class DashboardHandler(_SuppressBrokenPipe, BaseHTTPRequestHandler):
                             full_output = "".join(collected)
                         except _AgentAbort:
                             raise
+                        except StreamChunkTimeoutError as e:
+                            err_msg = _stream_chunk_timeout_message(e)
+                            emit({'error': err_msg})
+                            print(f"[{datetime.now().strftime('%H:%M:%S')}] [Agent] \u274c {err_msg}", flush=True)
+                            raise _AgentAbort()
                         except asyncio.TimeoutError:
-                            emit({'error': f'Agent timed out ({AGENT_TIMEOUT}s). Try simplifying the prompt.'})
+                            emit({'error': f'Agent timed out ({AGENT_TIMEOUT}s wall-clock). Try simplifying the prompt.'})
                             print(f"[{datetime.now().strftime('%H:%M:%S')}] [Agent] \u23f0 Timeout", flush=True)
                             raise _AgentAbort()
                         except Exception as e:
@@ -7038,7 +7211,17 @@ class DashboardHandler(_SuppressBrokenPipe, BaseHTTPRequestHandler):
 
                 print(f"[{datetime.now().strftime('%H:%M:%S')}] [Agent] 🤖 Agent session started for model '{model_name}'", flush=True)
                 if not is_stream:
-                    output = asyncio.run(_run_agent())
+                    try:
+                        output = asyncio.run(_run_agent())
+                    except StreamChunkTimeoutError as e:
+                        output = _stream_chunk_timeout_message(e)
+                        print(f"[{datetime.now().strftime('%H:%M:%S')}] [Agent] ❌ {output}", flush=True)
+                    except asyncio.TimeoutError:
+                        output = (
+                            f"Agent timed out ({AGENT_TIMEOUT}s wall-clock). "
+                            "Try simplifying the prompt."
+                        )
+                        print(f"[{datetime.now().strftime('%H:%M:%S')}] [Agent] ⏰ Timeout", flush=True)
                     add_to_history(sid, "assistant", output)
                     tok = count_tokens(message) + count_tokens(output)
                     record(

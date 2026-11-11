@@ -51,6 +51,30 @@ MAX_LIST_ENTRIES = int(os.environ.get("AGENT_MAX_LIST_ENTRIES", "2000"))
 MAX_WEB_RESULTS = 10
 MAX_TOP_K = 20
 
+
+def _stream_chunk_timeout_setting() -> float | None:
+    """Return the per-chunk stream stall timeout in seconds.
+
+    ``CONTEXTCUT_STREAM_CHUNK_TIMEOUT`` wins; otherwise the standard
+    ``LANGCHAIN_OPENAI_STREAM_CHUNK_TIMEOUT_S`` is honored. The default is
+    600s because slow local models can legitimately take ~2 minutes between
+    chunks. Set either variable to ``0``/``none``/``off`` to disable.
+    """
+    raw = os.environ.get("CONTEXTCUT_STREAM_CHUNK_TIMEOUT")
+    if raw is None:
+        raw = os.environ.get("LANGCHAIN_OPENAI_STREAM_CHUNK_TIMEOUT_S")
+    if raw is None or not raw.strip():
+        return 600.0
+    value = raw.strip().lower()
+    if value in {"0", "none", "off", "false", "disable", "disabled"}:
+        return None
+    try:
+        timeout = float(value)
+    except ValueError:
+        return 600.0
+    return timeout if timeout > 0 else None
+
+
 # ── Checkpoint Manager ─────────────────────────────────────────────────────────
 
 _CHECKPOINT_DIR = Path.home() / ".contextcut" / "checkpoints"
@@ -67,6 +91,41 @@ class CheckpointManager:
         d.mkdir(parents=True, exist_ok=True)
         return d
 
+    def _step_paths(self, task_id: str) -> list[Path]:
+        d = self.base_dir / task_id
+        if not d.exists():
+            return []
+        return sorted(p for p in d.glob("*.json") if p.stem.isdigit())
+
+    def save_task_meta(self, task_id: str, data: dict) -> Path | None:
+        """Persist task-level metadata (for example the original goal)."""
+        path = self._task_dir(task_id) / ".task.json"
+        existing = {}
+        if path.exists():
+            try:
+                existing = json.loads(path.read_text())
+            except (OSError, ValueError, TypeError):
+                existing = {}
+        payload = {**existing, **data}
+        payload.setdefault("task_id", task_id)
+        payload.setdefault("created", datetime.now().isoformat())
+        payload["updated"] = datetime.now().isoformat()
+        try:
+            path.write_text(json.dumps(payload, indent=2, default=str))
+            return path
+        except (OSError, IOError, TypeError) as e:
+            print(f"[checkpoint] meta save error for {task_id}: {e}", flush=True)
+            return None
+
+    def load_task_meta(self, task_id: str) -> dict | None:
+        path = self.base_dir / task_id / ".task.json"
+        if not path.exists():
+            return None
+        try:
+            return json.loads(path.read_text())
+        except (OSError, ValueError, TypeError):
+            return None
+
     def save(self, task_id: str, data: dict) -> Path | None:
         step = data.get("step_number", 1)
         try:
@@ -82,19 +141,17 @@ class CheckpointManager:
         if step_number:
             path = self._task_dir(task_id) / f"{int(step_number):04d}.json"
             return json.loads(path.read_text()) if path.exists() else None
-        paths = sorted(self._task_dir(task_id).glob("*.json"))
+        paths = self._step_paths(task_id)
         return json.loads(paths[-1].read_text()) if paths else None
 
     def list_all(self, task_id: str) -> list[dict]:
-        paths = sorted(self._task_dir(task_id).glob("*.json"))
-        return [json.loads(p.read_text()) for p in paths]
+        return [json.loads(p.read_text()) for p in self._step_paths(task_id)]
 
     def exists(self, task_id: str) -> bool:
-        d = self.base_dir / task_id
-        return d.exists() and any(d.glob("*.json"))
+        return bool(self._step_paths(task_id))
 
     def latest_step_number(self, task_id: str) -> int:
-        paths = sorted(self._task_dir(task_id).glob("*.json"))
+        paths = self._step_paths(task_id)
         return int(paths[-1].stem) if paths else 0
 
     def list_task_ids(self) -> list[str]:
@@ -131,6 +188,20 @@ class CheckpointManager:
             "Continue from where you left off. Do NOT re-do completed steps.",
             "",
         ]
+        meta = self.load_task_meta(task_id) or {}
+        goal = str(meta.get("goal") or "").strip()
+        if not goal:
+            for cp in checkpoints:
+                candidate = str(cp.get("goal") or "").strip()
+                if candidate and candidate.lower() not in (
+                    "continue",
+                    "continue from where i left off.",
+                ):
+                    goal = candidate
+                    break
+        if goal:
+            lines.append(f"Original task: {goal}")
+            lines.append("")
         for cp in checkpoints:
             inp = json.dumps(cp.get("tool_input", {}))
             out = str(cp.get("tool_output", ""))[:200]
@@ -153,10 +224,10 @@ class CheckpointCallbackHandler(BaseCallbackHandler):
         self.task_id = task_id
         self.goal = goal
         self.model_used = model_used
-        self.step_number = 0
         self._current_tool_name = None
         self._current_tool_input = None
         self._manager = CheckpointManager()
+        self.step_number = self._manager.latest_step_number(task_id)
 
     def on_tool_start(
         self, serialized: dict, input_str: str = "", **kwargs
@@ -1996,6 +2067,7 @@ def build_agent(model_name: str = None, upstream: str = None,
         openai_api_key=api_key or "not-needed",
         temperature=0.3,
         streaming=True,
+        stream_chunk_timeout=_stream_chunk_timeout_setting(),
         **extra,
     )
 

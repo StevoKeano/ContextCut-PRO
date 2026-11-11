@@ -91,6 +91,24 @@ class TestQdrantContext:
         assert meta == []
 
 
+class TestStreamChunkTimeoutMessage:
+    def test_reports_real_chunk_timeout(self):
+        from langchain_openai import StreamChunkTimeoutError
+        from qdrant_proxy_final import _stream_chunk_timeout_message
+
+        exc = StreamChunkTimeoutError(
+            600.0, model_name="slow-model", chunks_received=1
+        )
+
+        msg = _stream_chunk_timeout_message(exc)
+
+        assert "stalled for 600s" in msg
+        assert "slow-model" in msg
+        assert "1 chunk" in msg
+        assert "CONTEXTCUT_STREAM_CHUNK_TIMEOUT" in msg
+        assert "900s" not in msg
+
+
 class TestInjectContext:
     def test_with_context_string(self):
         from qdrant_proxy_final import inject_context

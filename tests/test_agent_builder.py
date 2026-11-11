@@ -50,6 +50,59 @@ class TestBuildAgent:
         assert "shell_exec" in tool_names
 
 
+class TestStreamChunkTimeoutConfig:
+    @patch("agent_handler.ChatOpenAI")
+    @patch("agent_handler.create_agent")
+    def test_default_is_600(self, mock_create_agent, mock_chat, monkeypatch):
+        from agent_handler import build_agent
+
+        monkeypatch.delenv("CONTEXTCUT_STREAM_CHUNK_TIMEOUT", raising=False)
+        monkeypatch.delenv("LANGCHAIN_OPENAI_STREAM_CHUNK_TIMEOUT_S", raising=False)
+        mock_create_agent.return_value = MagicMock()
+
+        build_agent(upstream="http://localhost:11434")
+
+        assert mock_chat.call_args[1]["stream_chunk_timeout"] == 600.0
+
+    @patch("agent_handler.ChatOpenAI")
+    @patch("agent_handler.create_agent")
+    def test_app_env_override(self, mock_create_agent, mock_chat, monkeypatch):
+        from agent_handler import build_agent
+
+        monkeypatch.setenv("CONTEXTCUT_STREAM_CHUNK_TIMEOUT", "900")
+        monkeypatch.delenv("LANGCHAIN_OPENAI_STREAM_CHUNK_TIMEOUT_S", raising=False)
+        mock_create_agent.return_value = MagicMock()
+
+        build_agent(upstream="http://localhost:11434")
+
+        assert mock_chat.call_args[1]["stream_chunk_timeout"] == 900.0
+
+    @patch("agent_handler.ChatOpenAI")
+    @patch("agent_handler.create_agent")
+    def test_langchain_env_fallback(self, mock_create_agent, mock_chat, monkeypatch):
+        from agent_handler import build_agent
+
+        monkeypatch.delenv("CONTEXTCUT_STREAM_CHUNK_TIMEOUT", raising=False)
+        monkeypatch.setenv("LANGCHAIN_OPENAI_STREAM_CHUNK_TIMEOUT_S", "450")
+        mock_create_agent.return_value = MagicMock()
+
+        build_agent(upstream="http://localhost:11434")
+
+        assert mock_chat.call_args[1]["stream_chunk_timeout"] == 450.0
+
+    @patch("agent_handler.ChatOpenAI")
+    @patch("agent_handler.create_agent")
+    def test_zero_disables(self, mock_create_agent, mock_chat, monkeypatch):
+        from agent_handler import build_agent
+
+        monkeypatch.setenv("CONTEXTCUT_STREAM_CHUNK_TIMEOUT", "0")
+        mock_create_agent.return_value = MagicMock()
+
+        build_agent(upstream="http://localhost:11434")
+
+        assert mock_chat.call_args[1]["stream_chunk_timeout"] is None
+
+
 class TestBuildMessagesFromHistory:
     def test_converts_user_assistant_system(self):
         from agent_handler import build_messages_from_history

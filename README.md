@@ -153,6 +153,7 @@ open http://localhost:18787
 | `CONTEXTCUT_PROXY_PORT` | `18788` | Proxy listen port |
 | `CONTEXTCUT_DASHBOARD_PORT` | `18787` | Dashboard port |
 | `CONTEXTCUT_CTX_LIMIT` | `8192` | Model context window |
+| `CONTEXTCUT_STREAM_CHUNK_TIMEOUT` | `600` | Seconds to wait for the next streamed chunk before aborting; `0` disables |
 | `CONTEXTCUT_TOP_K` | `5` | Max chunks to retrieve |
 | `CONTEXTCUT_MIN_SCORE` | `0.50` | Minimum relevance threshold |
 | `CONTEXTCUT_MODEL` | `qwen3:14b-q8_0` | Default model in dashboard |
