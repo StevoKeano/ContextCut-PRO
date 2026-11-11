@@ -1961,6 +1961,11 @@ body{{background:var(--bg);color:var(--text);font-family:'JetBrains Mono',monosp
 <script>
 let selectedModelName = null;
 
+function esc(s) {{
+  return (s || '').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;')
+    .replace(/"/g,'&quot;').replace(/'/g,'&#39;');
+}}
+
 function escAttr(s) {{ return (s||'').replace(/&/g,'&amp;').replace(/"/g,'&quot;').replace(/'/g,'&#39;').replace(/</g,'&lt;').replace(/>/g,'&gt;'); }}
 
 function onProviderChange() {{

@@ -76,6 +76,13 @@ class TestDashboardHandlerGET:
         assert b"Settings" in raw or b"settings" in raw.lower() or b"Provider" in raw
         assert b"https://github.com/StevoKeano/ContextCut-PRO/blob/main/README.md" in raw
 
+    def test_settings_model_list_defines_esc(self, make_handler):
+        status, raw = make_handler("/settings", "GET")
+        assert status == 200
+        html = raw.decode("utf-8", errors="replace")
+        assert "function esc(" in html
+        assert "esc(m)" in html
+
     @patch("qdrant_proxy_final.QDRANT_HOST", "localhost")
     @patch("qdrant_proxy_final.QDRANT_PORT", 6333)
     @patch("qdrant_proxy_final.KB_DIR", Path("/tmp/kb"))
