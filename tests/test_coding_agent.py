@@ -708,3 +708,77 @@ def test_logger_round_trip(tmp_path):
     logger.event(type="test", value=1)
     assert logger.load_messages() == messages
     assert "test" in logger.events_path.read_text(encoding="utf-8")
+
+
+# ── textual tool-call repair ─────────────────────────────────────────────────
+
+
+def test_extract_textual_tool_calls_parses_qwen_xml():
+    text = (
+        "⚡ <function=list_dir><parameter=path>.</parameter></function> "
+        "</tool_call>"
+    )
+    calls = coding_agent.extract_textual_tool_calls(text)
+    assert calls == [{"name": "list_dir", "input": {"path": "."}}]
+
+
+def test_extract_textual_tool_calls_handles_partial_block():
+    calls = coding_agent.extract_textual_tool_calls("<function=list_dir>")
+    assert calls == [{"name": "list_dir", "input": {}}]
+
+
+def test_extract_textual_tool_calls_ignores_plain_text():
+    assert coding_agent.extract_textual_tool_calls("plain answer") == []
+
+
+def test_strip_textual_tool_calls_preserves_prose():
+    text = (
+        "Before\n<function=read_file><parameter=path>x</parameter></function>\nAfter"
+    )
+    cleaned = coding_agent.strip_textual_tool_calls(text)
+    assert "Before" in cleaned
+    assert "After" in cleaned
+    assert "<function" not in cleaned
+
+
+def test_textual_tool_retry_message_names_call():
+    message = coding_agent.textual_tool_call_retry_message(
+        [{"name": "list_dir", "input": {"path": "."}}]
+    )
+    assert "list_dir" in message
+    assert "NOT executed" in message
+    assert "native tool interface" in message
+
+
+def test_run_task_retries_textual_tool_call(tmp_path, ws):
+    raw = "<function=list_dir><parameter=path>.</parameter></function>"
+    client = FakeClient(
+        [_response(FakeMessage(raw)), _response(FakeMessage("finished"))]
+    )
+    result = coding_agent.run_task(
+        "list files", workspace=ws.root, client=client, logger=_logger(tmp_path)
+    )
+    assert result.status == "done"
+    assert result.output == "finished"
+    assert len(client.chat.completions.calls) == 2
+    sent = client.chat.completions.calls[1]["messages"]
+    assert any("raw tool-call XML" in (item.get("content") or "") for item in sent)
+    assert any(
+        item.get("role") == "assistant"
+        and (item.get("content") or "") == "[raw tool-call XML removed]"
+        for item in sent
+    )
+
+
+def test_run_task_errors_after_repeated_textual_tool_calls(tmp_path, ws):
+    raw = "<tool_call><function=list_dir></function></tool_call>"
+    client = FakeClient([_response(FakeMessage(raw)) for _ in range(3)])
+    result = coding_agent.run_task(
+        "list files",
+        workspace=ws.root,
+        client=client,
+        logger=_logger(tmp_path),
+        max_steps=10,
+    )
+    assert result.status == "error"
+    assert "repeatedly printed raw tool-call XML" in result.output

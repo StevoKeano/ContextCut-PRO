@@ -1,0 +1,54 @@
+You are fixing the existing Beep Locator project. Do not rebuild it.
+Workspace: /home/steve/dev/beep-locator
+
+The previous implementer already fixed the UI routes, room query parsing, join_url,
+and the event shape. Do not redo those. Fix only the remaining issues below.
+
+MUST FIX:
+1. beep_locator/app.py
+   - Call sites to room.broadcast_message(...) are still missing await in
+     install_module_handler and mystery_target_handler.
+   - Search for every room.broadcast_message( in the project.
+   - Await every call in an async handler.
+   - Do not use asyncio.create_task, try/except suppression, or fire-and-forget.
+   - After the fix, pytest must not report "coroutine 'Room.broadcast_message'
+     was never awaited".
+2. tests/test_server.py
+   - Strengthen test_admin_ui:
+     * response body contains "Beep Locator - Admin"
+     * response body contains "/static/admin.js"
+   - Strengthen test_listener_ui:
+     * request "/listen?room=default"
+     * response body contains "Beep Locator - Listener"
+     * response body contains "/static/listener.js"
+   - Both responses must not contain "placeholder".
+   - Keep every existing assertion.
+3. Add TODO.md entries for the two optional deferrals:
+   - M7: rooms.triangulate_if_needed still uses the hardcoded 0.5,0.5 broadcast;
+     replace with real triangulation later. Do not fake it now.
+   - M8: static/listener.js still uses Math.random simulated detection;
+     replace with the real detector later.
+   - Make the TODO.md entries specific and reference the exact files.
+
+DO NOT CHANGE:
+- beep_locator/triangulate.py
+- tests/test_triangulation.py
+- The already-correct FileResponse routes, URLSearchParams parsing, join_url,
+  or canonical event shape, unless a test proves they are broken.
+
+VERIFY:
+python3 -m compileall -q server.py beep_locator
+python3 -m pytest -q
+node --check static/detector.js
+node --test tests/detector.test.mjs
+
+CONSTRAINTS:
+- Use python3, not python.
+- Use aiohttp. FastAPI is not installed.
+- No package installs, external network, CDNs, or external assets.
+- One shell command per tool call. No ;, &&, pipes, redirects, or command
+  substitution.
+- Do not commit.
+- Do not claim success unless pytest has no "never awaited" warning and the
+  strengthened UI tests pass.
+- Final summary: files changed, exact commands/results, remaining TODOs.

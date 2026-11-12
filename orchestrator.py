@@ -35,8 +35,8 @@ from typing import Any, Callable, Iterable, Sequence
 DEFAULT_ARTIFACT_ROOT = Path.home() / ".contextcut" / "orchestrations"
 DEFAULT_RUN_ROOT = Path.home() / ".contextcut" / "coding_runs"
 DEFAULT_CTX_LIMIT = 32768
-DEFAULT_IMPLEMENTER_STEPS = 24
-DEFAULT_VERIFIER_STEPS = 12
+DEFAULT_IMPLEMENTER_STEPS = 60
+DEFAULT_VERIFIER_STEPS = 24
 DEFAULT_IMPLEMENTER_TIMEOUT = 1800.0
 DEFAULT_VERIFIER_TIMEOUT = 900.0
 DEFAULT_MAX_TOKENS = 16384
@@ -446,6 +446,7 @@ def test_integrity_check(workspace: Path, git_info: GitInfo) -> CheckResult:
     issues: list[str] = []
     warnings: list[str] = []
     changed_tests: set[str] = set()
+    new_tests: set[str] = set()
 
     for line in git_info.test_name_status:
         parts = line.split("\t")
@@ -458,7 +459,7 @@ def test_integrity_check(workspace: Path, git_info: GitInfo) -> CheckResult:
 
     for rel in git_info.untracked_files:
         if rel.startswith("tests/") and rel.endswith(".py"):
-            changed_tests.add(rel)
+            new_tests.add(rel)
 
     for line in git_info.test_diff.splitlines():
         if line.startswith(("+++", "---")):
@@ -475,13 +476,13 @@ def test_integrity_check(workspace: Path, git_info: GitInfo) -> CheckResult:
             elif re.search(r"\bassert\b", removed):
                 warnings.append(f"removed assertion: {removed.strip()[:160]}")
 
-    for rel in sorted(changed_tests):
+    for rel in sorted(changed_tests | new_tests):
         if not rel.startswith("tests/") or not rel.endswith(".py"):
             continue
         path = Path(workspace) / rel
         if not path.is_file():
             continue
-        if rel in git_info.untracked_files:
+        if rel in new_tests:
             for lineno, line in enumerate(path.read_text(encoding="utf-8", errors="replace").splitlines(), 1):
                 for label, pattern in FORBIDDEN_TEST_PATTERNS:
                     if pattern.search(line):
@@ -489,6 +490,8 @@ def test_integrity_check(workspace: Path, git_info: GitInfo) -> CheckResult:
 
     if changed_tests:
         warnings.append("changed test files: " + ", ".join(sorted(changed_tests)))
+    if new_tests:
+        warnings.append("new test files: " + ", ".join(sorted(new_tests)))
 
     lines = [f"FAIL: {issue}" for issue in issues]
     lines.extend(f"WARN: {warning}" for warning in warnings)
@@ -576,6 +579,42 @@ def scan_async_warnings(checks: Sequence[CheckResult]) -> CheckResult | None:
     )
 
 
+def pytest_test_count_check(
+    workspace: Path,
+    minimum: int,
+    timeout: float,
+) -> CheckResult:
+    command = ["python3", "-m", "pytest", "--collect-only", "-q"]
+    result = run_check(
+        "pytest_test_count",
+        command,
+        workspace,
+        timeout,
+        required=True,
+    )
+    if not result.passed:
+        return result
+
+    output = f"{result.stdout}\n{result.stderr}"
+    match = re.search(r"(\d+)\s+tests?\s+collected", output)
+    if match:
+        count = int(match.group(1))
+    else:
+        count = len(
+            {
+                line.strip()
+                for line in result.stdout.splitlines()
+                if "::" in line and not line.startswith(("=", "_"))
+            }
+        )
+
+    result.stdout = f"{count} tests collected (minimum {minimum}).\n{result.stdout}"
+    if count < minimum:
+        result.passed = False
+        result.error = f"only {count} pytest tests collected; minimum is {minimum}"
+    return result
+
+
 def run_deterministic_checks(
     source_workspace: Path,
     check_workspace: Path,
@@ -583,6 +622,7 @@ def run_deterministic_checks(
     protected: Sequence[str],
     custom_commands: Sequence[tuple[str, list[str]]],
     timeout: float,
+    min_pytest_tests: int = 0,
 ) -> list[CheckResult]:
     results: list[CheckResult] = []
 
@@ -630,7 +670,10 @@ def run_deterministic_checks(
                 )
             )
 
-    commands = list(custom_commands) if custom_commands else default_checks(check_workspace)
+    if min_pytest_tests > 0:
+        results.append(pytest_test_count_check(check_workspace, min_pytest_tests, timeout))
+
+    commands = default_checks(check_workspace) + list(custom_commands)
     if not commands:
         results.append(
             CheckResult(
@@ -741,7 +784,7 @@ def build_file_evidence(
     workspace: Path,
     paths: Sequence[str],
     *,
-    max_file_chars: int = 12000,
+    max_file_chars: int = 60000,
     max_total_chars: int = 60000,
 ) -> str:
     parts: list[str] = []
@@ -754,7 +797,8 @@ def build_file_evidence(
         seen.add(raw)
         if raw.startswith((".orchestrator/", "data/")):
             continue
-        if Path(raw).suffix.lower() in skipped_suffixes and Path(raw).name != "TODO.md":
+        keep_doc = Path(raw).name in {"TODO.md", "README.md"}
+        if Path(raw).suffix.lower() in skipped_suffixes and not keep_doc:
             continue
         path = workspace / raw
         if not path.is_file():
@@ -774,6 +818,49 @@ def build_file_evidence(
         if total >= max_total_chars:
             break
     return "\n".join(parts) if parts else "(no file evidence available)"
+
+
+def verifier_evidence_paths(workspace: Path, git_info: GitInfo) -> list[str]:
+    """Choose current source/document files to embed for the verifier."""
+    candidates = [*git_info.changed_files, *git_info.untracked_files]
+    candidates.extend(["README.md", "TODO.md", "pyproject.toml", "setup.cfg", "requirements.txt"])
+
+    if not any(Path(raw).suffix.lower() == ".py" for raw in candidates if raw):
+        returncode, stdout, _, _ = _git(workspace, ["ls-files"])
+        if returncode == 0:
+            candidates.extend(stdout.splitlines())
+
+    allowed_suffixes = {
+        ".py",
+        ".md",
+        ".txt",
+        ".toml",
+        ".cfg",
+        ".ini",
+        ".html",
+        ".htm",
+        ".css",
+        ".js",
+        ".mjs",
+    }
+    evidence: list[str] = []
+    seen: set[str] = set()
+    for raw in candidates:
+        rel = raw.strip().lstrip("./")
+        if not rel or rel in seen:
+            continue
+        seen.add(rel)
+        if rel.startswith((".orchestrator/", "data/")):
+            continue
+        name = Path(rel).name
+        if name.startswith("debug_") or ".bak" in name or ".orig" in name:
+            continue
+        if "pytest_cache" in Path(rel).parts or Path(rel).suffix.lower() not in allowed_suffixes:
+            continue
+        if not (workspace / rel).is_file():
+            continue
+        evidence.append(rel)
+    return evidence
 
 
 def build_verifier_prompt(
@@ -839,11 +926,19 @@ VERIFICATION RULES
 3. UNKNOWN means you could not establish the result; it fails closed.
 4. Re-run the key commands yourself. Do not rely only on the provided results.
 5. Check that tests were not deleted, skipped, xfailed, trivialized, or weakened.
-   Compare test files against .orchestrator/implementer.diff.
+   Compare test files against .orchestrator/implementer.diff. New test files are
+   allowed in greenfield work; do not set test_integrity.weakened=true merely
+   because tests are new or show as untracked. Flag weakening only when a
+   baseline test was deleted, skipped, xfailed, or had assertions removed or
+   trivialized.
 6. Check that no placeholder or simulated implementation remains where the
    mandate requires real behavior.
 7. Evidence must name files, line numbers, commands, and observed output.
-8. Return JSON only. Do not use markdown fences or add prose outside the JSON.
+8. The deterministic check results are authoritative. If they establish a
+   mandate, mark it PASS even if you did not re-run the command yourself.
+   Use the embedded current file evidence to verify source-level mandates; only
+   mark UNKNOWN when neither the checks nor the evidence establish the result.
+9. Return JSON only. Do not use markdown fences or add prose outside the JSON.
 
 REQUIRED JSON SCHEMA
 {{
@@ -1220,6 +1315,7 @@ def _run_cycle(
         args.protected,
         custom_commands,
         args.check_timeout,
+        args.min_pytest_tests,
     )
     _save_checks(cycle_dir, checks)
     progress(f"[cycle {cycle}] deterministic checks: {sum(1 for c in checks if not c.passed)} failed")
@@ -1234,7 +1330,7 @@ def _run_cycle(
         verifier_dir = copy_workspace(source, cycle_dir / "verifier-workspace")
         _write_verifier_context(verifier_dir, git_info)
         before_manifest = file_manifest(verifier_dir)
-        evidence_paths = [*git_info.changed_files, "tests/test_server.py", "TODO.md"]
+        evidence_paths = verifier_evidence_paths(source, git_info)
         file_evidence = build_file_evidence(verifier_dir, evidence_paths)
         verifier_prompt = build_verifier_prompt(
             original_prompt,
@@ -1287,13 +1383,19 @@ def _run_cycle(
 
         tool_count = _run_tool_count(str(verifier.get("run_id") or ""))
         has_evidence = bool(file_evidence and file_evidence != "(no file evidence available)")
+        has_diff = bool(git_info.diff_patch.strip())
+        inspected = tool_count > 0 or has_evidence or has_diff
         inspection_check = CheckResult(
             name="verifier_inspected",
             command="coding run event and evidence inspection",
-            passed=tool_count > 0 or has_evidence,
+            passed=inspected,
             required=True,
-            stdout=f"tool calls: {tool_count}; file evidence: {'yes' if has_evidence else 'no'}",
-            error="" if tool_count > 0 or has_evidence else "verifier made no tool calls and no file evidence was embedded",
+            stdout=(
+                f"tool calls: {tool_count}; "
+                f"file evidence: {'yes' if has_evidence else 'no'}; "
+                f"baseline diff: {'yes' if has_diff else 'no'}"
+            ),
+            error="" if inspected else "verifier made no tool calls and no file or diff evidence was embedded",
         )
         checks.append(inspection_check)
         _save_checks(cycle_dir, checks)
@@ -1521,6 +1623,12 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--max-cycles", type=int, default=2)
     parser.add_argument("--check-timeout", type=float, default=DEFAULT_CHECK_TIMEOUT)
     parser.add_argument("--check-command", action="append", default=[], help="custom check command")
+    parser.add_argument(
+        "--min-pytest-tests",
+        type=int,
+        default=0,
+        help="require at least this many collected pytest tests",
+    )
     parser.add_argument("--protected", action="append", default=[], help="path that must not change")
     parser.add_argument("--artifacts-dir", default=str(DEFAULT_ARTIFACT_ROOT))
     parser.add_argument("--allow-dirty", action="store_true", help="allow dirty workspace in run mode")
@@ -1565,6 +1673,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                             for name, command in default_checks(workspace)
                         ],
                         "custom_checks": args.check_command,
+                        "min_pytest_tests": args.min_pytest_tests,
                         "protected": args.protected,
                     },
                     indent=2,

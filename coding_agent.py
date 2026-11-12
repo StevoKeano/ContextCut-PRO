@@ -333,6 +333,90 @@ def _tool_fingerprint(name: str, arguments: Any) -> str:
     return f"{name}:{payload}"
 
 
+_RAW_FUNCTION_BLOCK_RE = re.compile(
+    r"<function\s*=\s*(?P<name>[A-Za-z_][\w.-]*)\s*>(?P<body>.*?)</function>",
+    re.IGNORECASE | re.DOTALL,
+)
+_RAW_FUNCTION_OPEN_RE = re.compile(
+    r"<function\s*=\s*(?P<name>[A-Za-z_][\w.-]*)\s*>",
+    re.IGNORECASE,
+)
+_RAW_PARAMETER_RE = re.compile(
+    r"<parameter\s*=\s*(?P<name>[A-Za-z_][\w.-]*)\s*>(?P<value>.*?)</parameter>",
+    re.IGNORECASE | re.DOTALL,
+)
+_RAW_TOOL_WRAPPER_RE = re.compile(
+    r"</?(?:tool_call|function_call|tool_calls)\b[^>]*>",
+    re.IGNORECASE,
+)
+_RAW_TAG_RE = re.compile(
+    r"</?(?:tool_call|function_call|tool_calls|function|parameter)\b[^>]*>",
+    re.IGNORECASE,
+)
+
+
+def extract_textual_tool_calls(text: str) -> list[dict[str, Any]]:
+    """Return tool calls emitted as raw XML text instead of native calls."""
+    if not text:
+        return []
+    calls: list[dict[str, Any]] = []
+    for match in _RAW_FUNCTION_BLOCK_RE.finditer(text):
+        params = {
+            item.group("name"): item.group("value").strip()
+            for item in _RAW_PARAMETER_RE.finditer(match.group("body"))
+        }
+        calls.append({"name": match.group("name"), "input": params})
+    if calls:
+        return calls
+    for match in _RAW_FUNCTION_OPEN_RE.finditer(text):
+        tail = text[match.end() :]
+        next_call = _RAW_FUNCTION_OPEN_RE.search(tail)
+        body = tail[: next_call.start()] if next_call else tail
+        params = {
+            item.group("name"): item.group("value").strip()
+            for item in _RAW_PARAMETER_RE.finditer(body)
+        }
+        calls.append({"name": match.group("name"), "input": params})
+    if calls:
+        return calls
+    if "<tool_call" in text.lower():
+        return [{"name": "unknown", "input": {}}]
+    return []
+
+
+def strip_textual_tool_calls(text: str) -> str:
+    """Remove raw XML tool-call syntax while keeping any surrounding prose."""
+    if not text:
+        return text
+    cleaned = _RAW_FUNCTION_BLOCK_RE.sub("", text)
+    cleaned = _RAW_FUNCTION_OPEN_RE.sub("", cleaned)
+    cleaned = _RAW_PARAMETER_RE.sub("", cleaned)
+    cleaned = _RAW_TOOL_WRAPPER_RE.sub("", cleaned)
+    cleaned = _RAW_TAG_RE.sub("", cleaned)
+    return re.sub(r"\n{3,}", "\n\n", cleaned).strip()
+
+
+def textual_tool_call_retry_message(calls: list[dict[str, Any]]) -> str:
+    """Build a correction message for a model that printed tool XML as text."""
+    names = []
+    for call in calls:
+        name = call.get("name", "unknown")
+        arguments = call.get("input") or {}
+        names.append(
+            f"{name}({json.dumps(arguments, ensure_ascii=False)})"
+            if arguments
+            else f"{name}()"
+        )
+    attempted = ", ".join(names) or "unknown tool"
+    return (
+        "Your previous response printed raw tool-call XML instead of using the "
+        f"native tool interface. The attempted call was NOT executed: {attempted}. "
+        "Do not print <function=...>, <parameter=...>, or <tool_call> tags. "
+        "If you still need a tool, call it now through the native tool interface. "
+        "Otherwise provide the final summary."
+    )
+
+
 def run_task(
     prompt: str,
     *,
@@ -421,6 +505,7 @@ def run_task(
     failure_seen = False
     empty_retries = 0
     empty_retry_pending = False
+    textual_tool_retries = 0
     previous_effort = ""
 
     while True:
@@ -489,7 +574,35 @@ def run_task(
 
         tool_calls = getattr(message, "tool_calls", None) or []
         if not tool_calls:
-            if content:
+            if isinstance(content, str) and content:
+                textual_calls = extract_textual_tool_calls(content)
+                if textual_calls:
+                    textual_tool_retries += 1
+                    log.event(
+                        type="textual_tool_call",
+                        step=steps,
+                        calls=textual_calls,
+                        retry=textual_tool_retries,
+                    )
+                    if textual_tool_retries > 2:
+                        status = "error"
+                        output = (
+                            "Model repeatedly printed raw tool-call XML instead of "
+                            "using native tool calls."
+                        )
+                        break
+                    if messages and messages[-1].get("role") == "assistant":
+                        cleaned = strip_textual_tool_calls(content)
+                        messages[-1]["content"] = cleaned or "[raw tool-call XML removed]"
+                    messages.append(
+                        {
+                            "role": "user",
+                            "content": textual_tool_call_retry_message(textual_calls),
+                        }
+                    )
+                    _trim_messages(messages, ctx_limit)
+                    log.save_messages(messages)
+                    continue
                 output = content
                 break
             log.event(type="empty_response", step=steps, effort=effort)

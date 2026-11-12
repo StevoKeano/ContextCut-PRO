@@ -1,0 +1,120 @@
+Build "Vault of the Token Wyrm", a complete, deterministic ASCII roguelike
+in Python. This is a greenfield implementation in the current workspace.
+
+Mission
+- Work only inside the current workspace.
+- Do not stop to ask questions. Make reasonable decisions and implement them.
+- Build a real, playable game with a clean engine/UI separation.
+- Runtime code must use only the Python standard library. pytest is allowed
+  for tests.
+- No network access, no third-party runtime packages, no binary assets, no
+  generated image/audio files.
+- Keep the project small enough to understand, but complete enough to play.
+
+Game concept
+- The player explores a multi-level dungeon to recover the Token Wyrm.
+- The game is turn-based. Enemies move only after the player acts.
+- Use seeded procedural generation so every run with the same seed is
+  reproducible.
+- Use ASCII graphics with optional ANSI color. Do not use curses.
+
+Required behavior
+- CLI entry point: `python3 -m token_wyrm`
+- Flags: `--help`, `--seed N`, `--load PATH`, `--no-color`, `--self-check`
+- `--self-check` runs a deterministic non-interactive smoke simulation and
+  exits 0 without needing a TTY. It must exercise map generation, movement,
+  combat, item pickup/use, saving/loading, and at least one stairs transition.
+- Interactive controls:
+  - move: WASD and arrow keys
+  - wait: `.`
+  - descend stairs: `>`
+  - pick up: `g`
+  - inventory: `i`
+  - use/quaff: `q`
+  - equip/unequip: `e`
+  - drop: `d`
+  - save: `s`
+  - help: `?`
+  - quit: `Q`
+- The UI shows the map, player HP, level/depth, gold, current message log,
+  and a clear win/lose screen.
+- Invalid input must not crash the game.
+- Missing or corrupt save files must produce a clear error, not a traceback.
+
+Dungeon and progression
+- Generate rooms and corridors across a rectangular grid.
+- Guarantee that the player start, stairs, items, and enemies are reachable.
+- No enemy or item may spawn inside a wall or on the stairs.
+- The player starts on depth 1. Descending increases depth and difficulty.
+- Reaching the final depth and defeating the boss wins the game.
+- Player death ends the game with a clear summary.
+- Same seed + same inputs = same results. Use `random.Random(seed)`, never the
+  global random module.
+
+Combat and items
+- Bump-to-attack combat with HP, attack, defense, damage rolls, and death.
+- At least four enemy types with different stats/behavior.
+- At least one boss encounter.
+- Items: at least health potion, weapon, armor, gold, and a rare token.
+- Inventory supports pickup, drop, use, equip, and unequip.
+- Weapons/armor affect combat stats. Potions heal and are consumed.
+- Show combat and item messages in the message log.
+
+Save/load
+- Save to JSON, not pickle.
+- Include a schema version.
+- Round-trip map, depth, player stats, inventory, equipped items, enemies,
+  items on the floor, message log, and RNG state so loading resumes exactly.
+- Loading a save must not require the original terminal size.
+- Validate malformed data and report errors cleanly.
+
+Architecture
+- Put the package under `token_wyrm/`.
+- Separate pure game logic from terminal I/O so tests can drive the engine.
+- Suggested modules: models, dungeon generation, combat, items/inventory,
+  save/load, engine/game loop, CLI, rendering.
+- Use type hints and docstrings for public functions/classes.
+- Keep functions focused and avoid giant monolithic files.
+
+Testing
+- Add at least 25 meaningful pytest tests.
+- Cover map connectivity, deterministic seeds, movement/collision, combat,
+  death, item pickup/use/equip, inventory limits, stairs/progression, win
+  condition, save/load round-trip, corrupt save handling, and CLI self-check.
+- Tests must check behavior, not merely that objects exist. Explicitly test
+  reachability/spawn validity, all enemy types plus the boss, the win path,
+  RNG-state round-trip, and `--self-check`.
+- Tests must not require an interactive terminal. Use pytest `tmp_path` for
+  temporary save files; do not write shared fixed-name save files.
+- `python3 -m pytest -q` must pass.
+- `python3 -m pytest --collect-only -q` must report at least 25 collected tests.
+
+External acceptance check
+- Run this from the workspace:
+  `python3 /home/steve/dev/ContextCut-PRO/scripts/verify_token_wyrm.py`
+- It must print `all checks passed` and exit 0. It independently verifies
+  determinism, reachability, collision, enemy turns, combat, item effects,
+  save/load (including inventory and RNG state), boss/win, UI, stdlib-only
+  runtime imports, and README contents.
+- Mark the final boss with `is_boss = True` or a name containing `Boss`,
+  `Wyrm`, or `Token Wyrm` so it can be identified mechanically.
+- The boss must appear on the final depth and defeating it must set the win
+  state.
+
+Completion protocol
+- Do not stop while any required check is failing. Run `python3 -m pytest -q`,
+  `python3 -m pytest --collect-only -q`,
+  `python3 -m token_wyrm --seed 7 --self-check`,
+  `python3 -m token_wyrm --help`, and the external acceptance check before
+  finishing.
+- Do not delete, skip, xfail, or trivialize tests to make the suite pass.
+- If a test itself is wrong or contradictory, correct the test so it still
+  asserts the required behavior; never weaken the implementation contract.
+- Remove debug scripts, backup files, and generated save files before finishing.
+
+Definition of done
+- `python3 -m token_wyrm --help` works.
+- `python3 -m token_wyrm --seed 7 --self-check` exits 0.
+- `python3 -m pytest -q` passes.
+- README explains setup, controls, flags, save format, and how to run tests.
+- The game is genuinely playable, not a stub or a mock.

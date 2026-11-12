@@ -1058,6 +1058,216 @@ Why the split worked: the first prompt prioritized a working core over polish; t
 
 ---
 
+## Worked Example: Robo-Builder (two-agent orchestrator)
+
+This example uses the **orchestrator** (`orchestrator.py`) instead of the single coding worker. It runs `qwen3-coder:30b` as the implementer, freezes the result, executes deterministic checks, then starts a separate `qwen3:14b-q8_0` verifier in a disposable workspace copy that must return a JSON verdict for every mandate. The target is a single self-contained `index.html` game.
+
+Two setup details are easy to miss and both fail the run before the implementer produces anything:
+
+- **The orchestrator does not load `.env`.** It calls `coding_agent.run_task()` directly (only `coding_agent.main()` calls `_load_env()`), so with no explicit upstream the base URL falls back to `http://localhost:11434/v1` and every model call dies with `Model call failed: Connection error.` Pass `CONTEXTCUT_UPSTREAM` (below) or `--base-url http://192.168.137.1:11434/v1`.
+- **A single-HTML project has no default checks.** `default_checks()` only detects `server.py`, `beep_locator/`, `static/detector.js`, and `tests/`, so the gate fails with `check checks_configured failed: no checks found; pass --check-command`. Supply `--check-command`.
+
+### 0. Throwaway workspace with a git baseline
+
+```bash
+rm -rf /tmp/cc-robo-builder && mkdir -p /tmp/cc-robo-builder
+cd /tmp/cc-robo-builder && git init -q && git commit -q --allow-empty -m init
+```
+
+The orchestrator diffs against a git baseline, so the workspace must be a repo. Always point `--workspace` at a throwaway directory, never a trusted one.
+
+### 1. Save the prompt
+
+```bash
+cat > /tmp/robo-builder-prompt.txt <<'PROMPT'
+Build a complete, self-contained, single-file HTML5 interactive puzzle and logic game (`index.html`) designed for a bright 6-year-old child.
+
+Core Game Concept: "Robo-Builder: Crystal Maze"
+A colorful, friendly grid-based logic and spatial-programming game where the player guides a cute robot across floating islands to collect glowing energy crystals and reach the teleporter pad.
+
+Technical & Output Requirements
+1. Single-File Delivery: Output one complete `index.html` file containing all HTML, CSS, and vanilla JavaScript. No external libraries, CDN links, or image/audio assets—generate all graphics using clean SVG/Canvas vector art and all sound effects/chimes procedurally using the Web Audio API (with a clear Mute/Unmute toggle button).
+2. Zero-Reading Visual Onboarding: A 6-year-old should understand how to play immediately without reading paragraphs of text:
+   - Use large, high-contrast icon buttons (Up, Down, Left, Right, Jump, Loop/Repeat x2, Play, Reset).
+   - On Level 1, show an animated translucent "ghost hand" tapping the first arrow button and then the green Play button.
+   - Use minimal, encouraging 1-3 word labels ("GO!", "TRY AGAIN!", "AWESOME!") alongside big visual cues.
+3. Progressive Challenge (12 Hand-Crafted Levels):
+   - Levels 1-3 (Movement & Sequencing): Queue 3-6 directional commands, then press GO to watch the robot execute the sequence step-by-step (highlighting each active command block as it runs).
+   - Levels 4-6 (Obstacles & Switches): Introduce color-coded laser bridges/gates that toggle on/off when the robot steps on matching floor switches.
+   - Levels 7-9 (Loops & Pattern Recognition): Unlock a "Repeat x2 / x3" container block so she can spot repeating stair-step or zigzag patterns and solve levels with fewer blocks.
+   - Levels 10-12 (Multi-Step Logic): Combine switches, teleporter pairs, and loops into clever spatial puzzles that reward planning ahead.
+4. Kid-Friendly UX & Safety:
+   - Large touch-friendly hit targets (minimum 64px x 64px) so it works effortlessly on both a touchscreen tablet and a mouse/trackpad.
+   - Gentle, playful failure states: if the robot bumps a wall or misses a bridge, play a silly cartoon "boing" sound, show a brief wobble animation, and automatically reset the robot to the start while keeping her command blocks intact so she can debug and tweak her sequence.
+   - Celebratory feedback: confetti particles, cheerful musical arpeggios via Web Audio API, and a star-rating badge (3 stars for optimal block count, 2 stars for solving).
+   - Include a subtle top-bar Level Selector (1-12) so an adult or child can jump between levels anytime.
+
+Quality Verification
+Before finishing, verify that every single level (1 through 12) has a mathematically valid, tested solution path and that the JavaScript contains zero runtime errors.
+PROMPT
+```
+
+### 2. Deterministic check for the single file
+
+Because no default checks apply, save a small validator and pass it to `--check-command`. It confirms `index.html` exists, that the inline `<script>` parses under `node --check`, that required features are present, and that no external resources are referenced. The mute check accepts a sound-toggle alias (`mute`, `soundToggle`, `soundEnabled`, or `toggleSound`) because a game can implement muting without ever using the literal word — requiring only `mute` produces false failures.
+
+```bash
+cat > /tmp/verify_robo_builder.py <<'PY'
+#!/usr/bin/env python3
+"""Deterministic check for the Robo-Builder single-file HTML game."""
+import os
+import re
+import subprocess
+import sys
+import tempfile
+
+
+def main() -> int:
+    path = sys.argv[1] if len(sys.argv) > 1 else "index.html"
+    if not os.path.isfile(path):
+        print(f"FAIL: {path} not found")
+        return 1
+    html = open(path, encoding="utf-8").read()
+    if len(html) < 1000:
+        print(f"FAIL: {path} too small ({len(html)} bytes)")
+        return 1
+
+    errors = []
+    if re.search(r"<script[^>]+src\s*=", html, re.I):
+        errors.append("external <script src> found")
+    if re.search(r'<link[^>]+href\s*=\s*["\']https?://', html, re.I):
+        errors.append("external <link href> found")
+    if re.search(r"https?://(?:cdn|unpkg|jsdelivr|cdnjs)", html, re.I):
+        errors.append("CDN reference found")
+
+    required_features = {
+        "Web Audio API (AudioContext)": ("audiocontext",),
+        "mute / sound toggle": ("mute", "soundtoggle", "soundenabled", "togglesound"),
+        "confetti": ("confetti",),
+    }
+    lowered = html.lower()
+    for label, aliases in required_features.items():
+        if not any(alias in lowered for alias in aliases):
+            errors.append(f"missing required feature: {label}")
+
+    scripts = re.findall(r"<script(?![^>]*\bsrc=)[^>]*>(.*?)</script>", html, re.I | re.S)
+    if not scripts:
+        errors.append("no inline <script> block found")
+    else:
+        js = "\n;\n".join(scripts)
+        tmp = None
+        try:
+            with tempfile.NamedTemporaryFile(
+                "w", suffix=".js", delete=False, encoding="utf-8"
+            ) as fh:
+                fh.write(js)
+                tmp = fh.name
+            proc = subprocess.run(
+                ["node", "--check", tmp], capture_output=True, text=True
+            )
+            if proc.returncode != 0:
+                errors.append("inline JS syntax error:\n" + proc.stderr.strip())
+        except FileNotFoundError:
+            print("WARN: node not found; skipping JS syntax check")
+        finally:
+            if tmp and os.path.exists(tmp):
+                os.unlink(tmp)
+
+    if errors:
+        print("FAIL")
+        for err in errors:
+            print(" - " + err)
+        return 1
+    print("OK: index.html present, inline JS parses, features present, no external resources")
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())
+PY
+```
+
+### 3. Run the orchestrator
+
+```bash
+nohup env CONTEXTCUT_CTX_LIMIT=32768 \
+  CONTEXTCUT_UPSTREAM=http://192.168.137.1:11434 \
+  ~/contextcut/venv/bin/python ~/contextcut/orchestrator.py \
+  --workspace /tmp/cc-robo-builder \
+  --prompt-file /tmp/robo-builder-prompt.txt \
+  --implementer-model qwen3-coder:30b \
+  --verifier-model qwen3:14b-q8_0 \
+  --implementer-max-steps 40 --implementer-timeout 1800 \
+  --verifier-max-steps 24 --max-cycles 2 \
+  --check-command "python3 /tmp/verify_robo_builder.py index.html" \
+  --json 1> /tmp/robo-builder-orch.json 2> /tmp/robo-builder-orch.progress &
+echo $! > /tmp/robo-builder-orch.pid
+```
+
+### 4. Monitor and stop
+
+```bash
+tail -f /tmp/robo-builder-orch.progress
+ps -p "$(cat /tmp/robo-builder-orch.pid)" -o pid,etime,cmd
+cat /tmp/robo-builder-orch.json
+kill "$(cat /tmp/robo-builder-orch.pid)"   # or: pkill -f "orchestrator.py --workspace /tmp/cc-robo-builder"
+```
+
+### 5. Restart or re-audit
+
+`--mode run` refuses to start on a dirty workspace, so restarting after a partial run aborts with `workspace has uncommitted changes; commit/stash them or pass --allow-dirty`. Either commit the produced files first, or add `--allow-dirty`:
+
+```bash
+# option A: commit the implementer's output, then re-run cleanly
+git -C /tmp/cc-robo-builder add -A && git -C /tmp/cc-robo-builder commit -m "robo-builder build"
+
+# option B: re-run on the existing (dirty) workspace
+nohup env CONTEXTCUT_CTX_LIMIT=32768 CONTEXTCUT_UPSTREAM=http://192.168.137.1:11434 \
+  ~/contextcut/venv/bin/python ~/contextcut/orchestrator.py \
+  --workspace /tmp/cc-robo-builder --prompt-file /tmp/robo-builder-prompt.txt \
+  --implementer-model qwen3-coder:30b --verifier-model qwen3:14b-q8_0 \
+  --allow-dirty \
+  --check-command "python3 /tmp/verify_robo_builder.py index.html" \
+  --json 1> /tmp/robo-builder-orch.json 2> /tmp/robo-builder-orch.progress &
+echo $! > /tmp/robo-builder-orch.pid
+```
+
+To re-audit existing work without re-running the implementer, use `--mode verify` and pass the **implementer's start commit** as `--baseline` (read it from `~/.contextcut/orchestrations/<id>/cycles/cycle-1/git/baseline.txt`, or the `baseline` field of the final report). Include `--check-command`, or the gate fails `checks_configured` exactly as it does in run mode:
+
+```bash
+~/contextcut/venv/bin/python ~/contextcut/orchestrator.py \
+  --mode verify --workspace /tmp/cc-robo-builder \
+  --prompt-file /tmp/robo-builder-prompt.txt \
+  --base-url http://192.168.137.1:11434/v1 \
+  --baseline <commit> --implementer-run-id <run_id> \
+  --check-command "python3 /tmp/verify_robo_builder.py index.html" \
+  --json
+```
+
+The orchestrator has no mid-run resume. To continue an interrupted implementer, resume the coding run directly and then verify:
+
+```bash
+~/contextcut/venv/bin/python ~/contextcut/coding_agent.py --resume <implementer_run_id>
+```
+
+### Flag notes
+
+| Flag | Why |
+|---|---|
+| `CONTEXTCUT_UPSTREAM=http://192.168.137.1:11434` | The orchestrator skips `.env`; without it the base URL is `localhost:11434` and calls fail. Equivalent to `--base-url http://192.168.137.1:11434/v1`. |
+| `--check-command "python3 /tmp/verify_robo_builder.py index.html"` | Single-HTML projects match no default checks; without it the gate fails `checks_configured`. Custom checks run with the workspace copy as `cwd`, so the relative `index.html` resolves. |
+| `--json 1> ... 2> ...` | Final JSON on stdout, live progress on stderr. Omit `--quiet` so progress is actually written. |
+| no `cd ... &&` before `nohup` | `nohup`/`env` exec in place, so `$!` is the Python PID. A `cd ... &&` prefix backgrounds the wrapper subshell and stores the wrong PID. |
+| `--verifier-model qwen3:14b-q8_0` | Must differ from the implementer to avoid self-evaluation. |
+
+Artifacts land in `~/.contextcut/orchestrations/<id>/` (per-cycle implementer/verifier prompts, results, git diffs, and checks), with the final report at `/tmp/robo-builder-orch.json`. See [5. Restart or re-audit](#5-restart-or-re-audit) for the verify-only command.
+
+The verifier only sees files whose suffix is in its evidence allow-list (`.py`, `.md`, `.txt`, `.toml`, `.cfg`, `.ini`, `.html`, `.htm`, `.css`, `.js`, `.mjs`) and only up to 60,000 characters per file and 60,000 total. A single-file web deliverable is therefore embedded whole; if the verifier reports `(no file evidence available)`, the deliverable was filtered out and the gate will fail `verifier_inspected`.
+
+Note: the deterministic check proves the file exists, the inline JS parses, and the required features are present — it cannot prove all 12 levels are solvable or that the game is free of runtime errors while playing. That semantic verification is delegated to the verifier model.
+
+---
+
 ## Prompt Examples
 
 ### Dashboard agent prompts

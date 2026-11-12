@@ -1,0 +1,79 @@
+You are fixing an existing Beep Locator project. Do not rebuild it.
+
+Workspace: /home/steve/dev/beep-locator
+The previous agent scaffolded the project, then ended with a completion summary
+despite leaving integration gaps. Inspect the current code first.
+
+Read these first:
+beep_locator/app.py
+beep_locator/protocol.py
+beep_locator/rooms.py
+static/admin.html
+static/admin.js
+static/listen.html
+static/listener.js
+tests/test_server.py
+
+Leave beep_locator/triangulate.py and tests/test_triangulation.py unchanged.
+They are already fixed and strict. Do not weaken, delete, or skip tests.
+
+MUST FIX:
+1. beep_locator/app.py
+   - GET / must serve static/admin.html.
+   - GET /listen must serve static/listen.html.
+   - Use aiohttp FileResponse.
+   - Remove both "Admin UI placeholder" and "Listener UI placeholder" responses.
+   - Keep /static, /health, API routes, and /ws working.
+2. static/admin.js and static/listener.js
+   - Parse the room from ?room=QUERY instead of always using "default".
+   - Use URLSearchParams or equivalent.
+   - The join URL must open the correct room.
+3. beep_locator/protocol.py hello_ok
+   - admin.js expects message.config.join_url, but hello_ok does not send it.
+   - Add join_url to hello_ok config, or update admin.js consistently.
+   - Prefer reusing the join_url already produced by room.to_dict().
+4. Canonical event shape
+   - room.add_event data, hello_ok events, the "event" broadcast in protocol.py,
+     and admin.js currently disagree.
+   - admin.js does events.push(message.event), but the server sends message.data.
+   - Pick one canonical shape and align server, admin.js, and tests.
+   - New events must appear in the admin event list and map without JS errors.
+5. beep_locator/rooms.py broadcast_message
+   - node.ws.send_str(...) is not awaited.
+   - Fix it correctly with an async-safe approach.
+   - Do not hide the problem with try/except or warning suppression.
+   - Keep tests passing.
+6. tests/test_server.py
+   Strengthen the UI tests to assert real HTML, not just status 200:
+   - GET / contains "Beep Locator - Admin" and "/static/admin.js"
+   - GET /listen?room=default contains "Beep Locator - Listener"
+     and "/static/listener.js"
+   - Neither response contains "placeholder"
+   Keep all existing assertions.
+
+ONLY IF STEP/TIME BUDGET REMAINS:
+7. Replace the hardcoded 0.5,0.5 broadcast in rooms.triangulate_if_needed
+   with real triangulation only if you can do it safely. Otherwise add a
+   TODO.md entry. Do not fake functionality.
+8. Replace the Math.random simulated detection in static/listener.js only if
+   you can preserve the detector tests. Otherwise add a TODO.md entry.
+
+VERIFY:
+python3 -m compileall -q server.py beep_locator
+python3 -m pytest -q
+node --check static/detector.js
+node --test tests/detector.test.mjs
+
+Use the aiohttp test client for HTTP checks. Do not leave a server running.
+
+CONSTRAINTS:
+- Use python3, not python.
+- Use aiohttp. FastAPI is not installed.
+- No package installs, external network, CDNs, or external assets.
+- One shell command per tool call. No ;, &&, pipes, redirects, or command
+  substitution.
+- Do not commit.
+- If you approach the step or time limit, finish the MUST FIX items and write
+  TODO.md for the rest.
+- Do not claim success unless tests pass and no placeholder text remains.
+- Final summary: files changed, exact commands/results, remaining TODOs.

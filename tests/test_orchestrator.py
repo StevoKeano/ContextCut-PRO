@@ -320,6 +320,118 @@ def test_build_file_evidence_includes_code_and_skips_docs(tmp_path):
     assert "missing.py" not in evidence
 
 
+def test_build_file_evidence_includes_readme_and_todo(tmp_path):
+    (tmp_path / "README.md").write_text("# Project\n", encoding="utf-8")
+    (tmp_path / "TODO.md").write_text("M7: later\n", encoding="utf-8")
+    (tmp_path / "notes.md").write_text("skip me\n", encoding="utf-8")
+
+    evidence = orchestrator.build_file_evidence(
+        tmp_path,
+        ["README.md", "TODO.md", "notes.md"],
+    )
+
+    assert "--- FILE: README.md ---" in evidence
+    assert "# Project" in evidence
+    assert "--- FILE: TODO.md ---" in evidence
+    assert "skip me" not in evidence
+
+
+def test_verifier_evidence_paths_uses_untracked_sources_and_filters_noise(tmp_path):
+    (tmp_path / "README.md").write_text("# Project\n", encoding="utf-8")
+    (tmp_path / "app.py").write_text("VALUE = 1\n", encoding="utf-8")
+    (tmp_path / "tests").mkdir()
+    (tmp_path / "tests" / "test_app.py").write_text("def test_ok():\n    assert True\n", encoding="utf-8")
+    (tmp_path / "debug_app.py").write_text("print('debug')\n", encoding="utf-8")
+    (tmp_path / "app.py.bak-1").write_text("old\n", encoding="utf-8")
+    (tmp_path / "save.json").write_text("{}\n", encoding="utf-8")
+
+    git_info = orchestrator.GitInfo(
+        untracked_files=[
+            "README.md",
+            "app.py",
+            "tests/test_app.py",
+            "debug_app.py",
+            "app.py.bak-1",
+            "save.json",
+        ]
+    )
+
+    paths = orchestrator.verifier_evidence_paths(tmp_path, git_info)
+
+    assert paths == ["README.md", "app.py", "tests/test_app.py"]
+
+
+def test_verifier_evidence_paths_includes_web_assets(tmp_path):
+    (tmp_path / "index.html").write_text("<html></html>\n", encoding="utf-8")
+    (tmp_path / "style.css").write_text("body {}\n", encoding="utf-8")
+    (tmp_path / "game.js").write_text("const x = 1;\n", encoding="utf-8")
+    (tmp_path / "save.json").write_text("{}\n", encoding="utf-8")
+    (tmp_path / "index.html.bak-1").write_text("old\n", encoding="utf-8")
+
+    git_info = orchestrator.GitInfo(
+        untracked_files=[
+            "index.html",
+            "style.css",
+            "game.js",
+            "save.json",
+            "index.html.bak-1",
+        ]
+    )
+
+    paths = orchestrator.verifier_evidence_paths(tmp_path, git_info)
+
+    assert paths == ["index.html", "style.css", "game.js"]
+
+
+def test_build_file_evidence_embeds_large_single_html(tmp_path):
+    body = "<script>const s = '" + ("x" * 40000) + "';</script>"
+    (tmp_path / "index.html").write_text(body, encoding="utf-8")
+
+    evidence = orchestrator.build_file_evidence(tmp_path, ["index.html"])
+
+    assert "--- FILE: index.html ---" in evidence
+    assert "[file evidence truncated]" not in evidence
+    assert len(evidence) > 40000
+
+
+def test_custom_checks_do_not_replace_default_pytest(tmp_path):
+    tests_dir = tmp_path / "tests"
+    tests_dir.mkdir()
+    (tests_dir / "test_ok.py").write_text(
+        "def test_ok():\n    assert 1 == 1\n",
+        encoding="utf-8",
+    )
+
+    results = orchestrator.run_deterministic_checks(
+        tmp_path,
+        tmp_path,
+        orchestrator.GitInfo(error="skip"),
+        [],
+        [("custom", ["python3", "-c", "print('ok')"])],
+        30,
+    )
+
+    names = [result.name for result in results]
+    assert "pytest" in names
+    assert "custom" in names
+    assert next(result for result in results if result.name == "pytest").passed
+
+
+def test_pytest_test_count_check_enforces_minimum(tmp_path):
+    (tmp_path / "test_sample.py").write_text(
+        "def test_a():\n    assert 1 == 1\n\ndef test_b():\n    assert 2 == 2\n",
+        encoding="utf-8",
+    )
+
+    too_few = orchestrator.pytest_test_count_check(tmp_path, 3, 30)
+    enough = orchestrator.pytest_test_count_check(tmp_path, 2, 30)
+
+    assert too_few.passed is False
+    assert "only 2 pytest tests collected" in too_few.error
+    assert enough.passed is True
+    assert "2 tests collected" in enough.stdout
+
+
 def test_scan_async_warnings_flags_unawaited_coroutines():
     checks = [
         orchestrator.CheckResult(

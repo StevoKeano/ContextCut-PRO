@@ -1,0 +1,67 @@
+[
+  {
+    "id": "M1",
+    "text": "python3 -m token_wyrm --help works and documents --seed, --load, --no-color, and --self-check.",
+    "required": true
+  },
+  {
+    "id": "M2",
+    "text": "python3 -m token_wyrm --seed 7 --self-check runs a deterministic non-interactive simulation and exits 0.",
+    "required": true
+  },
+  {
+    "id": "M3",
+    "text": "Same seed produces the same dungeon, enemy, and item layout; different seeds can produce different layouts.",
+    "required": true
+  },
+  {
+    "id": "M4",
+    "text": "Map generation creates a rectangular grid with rooms and corridors, and every start, stairs, item, and enemy is reachable and not inside a wall.",
+    "required": true
+  },
+  {
+    "id": "M5",
+    "text": "Movement supports WASD/arrows and collision prevents walking through walls; enemies act only after player turns.",
+    "required": true
+  },
+  {
+    "id": "M6",
+    "text": "Combat supports bump attacks, HP, damage, defense, enemy death, player death, and message-log output.",
+    "required": true
+  },
+  {
+    "id": "M7",
+    "text": "At least four enemy types, a final boss, and a clear win condition after reaching the final depth and defeating the boss.",
+    "required": true
+  },
+  {
+    "id": "M8",
+    "text": "Inventory supports at least health potions, weapons, armor, gold, and a rare token, with pickup, drop, use, equip, and unequip.",
+    "required": true
+  },
+  {
+    "id": "M9",
+    "text": "Save/load uses versioned JSON and round-trips map, depth, player, inventory, equipment, enemies, floor items, log, and RNG state; corrupt saves fail cleanly.",
+    "required": true
+  },
+  {
+    "id": "M10",
+    "text": "The terminal UI shows the map, HP, depth, gold, message log, controls, and clear win/lose screens, with optional ANSI color and --no-color support.",
+    "required": true
+  },
+  {
+    "id": "M11",
+    "text": "At least 25 meaningful pytest tests exist and python3 -m pytest -q passes without an interactive terminal.",
+    "required": true
+  },
+  {
+    "id": "M12",
+    "text": "Runtime uses only the Python standard library, with no network access, no binary assets, and no third-party runtime dependencies.",
+    "required": true
+  },
+  {
+    "id": "M13",
+    "text": "README explains setup, controls, flags, save format, and test commands; code is split into focused modules with type hints.",
+    "required": true
+  }
+]
