@@ -307,6 +307,75 @@ def get_current_api_key():
     return _api_key if PROVIDERS.get(_provider_name, {}).get("key_required") else None
 
 
+_MODEL_TOOL_WARNING_CACHE = {}
+
+
+def model_tool_template_warning(model_name: str, upstream: str | None = None,
+                                provider: str | None = None) -> str | None:
+    """Return an advisory warning for Ollama models without a tools template.
+
+    Some models advertise tool capability but have an empty/short chat template,
+    which makes them prone to printing raw ``<function=...>`` syntax as text.
+    This is advisory only: the agent still runs, and the runtime repairs raw
+    calls when possible.
+    """
+    if not model_name:
+        return None
+    prov = provider if provider is not None else _provider_name
+    if prov != "Ollama":
+        return None
+    base = (upstream or get_current_upstream() or "").rstrip("/")
+    if not base:
+        return None
+    cache_key = f"{base}|{model_name}"
+    now = time.time()
+    cached = _MODEL_TOOL_WARNING_CACHE.get(cache_key)
+    if cached and now - cached[0] < 300:
+        return cached[1]
+
+    warning = None
+    try:
+        payload = json.dumps({"model": model_name}).encode("utf-8")
+        req = urllib.request.Request(
+            f"{base}/api/show",
+            data=payload,
+            headers={"Content-Type": "application/json"},
+            method="POST",
+        )
+        with urllib.request.urlopen(req, timeout=3) as resp:
+            data = json.loads(resp.read().decode("utf-8"))
+        caps = {str(c).lower() for c in (data.get("capabilities") or [])}
+        template = (data.get("template") or "").lower()
+        has_tool_caps = "tools" in caps
+        has_tool_template = any(
+            marker in template
+            for marker in (
+                "tool_call",
+                "tool_calls",
+                "<tools",
+                "tools>",
+                ".tools",
+                "<function",
+                "function=",
+            )
+        )
+        if not has_tool_caps:
+            warning = (
+                f"Model '{model_name}' does not advertise tool support. Agent mode "
+                "may fail; switch to qwen3:14b-q8_0 or qwen3:32b, or turn Agent OFF."
+            )
+        elif not has_tool_template:
+            warning = (
+                f"Model '{model_name}' advertises tools but its Ollama template has "
+                "no tool-call scaffolding. If it prints raw <function=...> text, "
+                "switch to qwen3:14b-q8_0 or qwen3:32b, or turn Agent OFF."
+            )
+    except Exception:
+        warning = None
+    _MODEL_TOOL_WARNING_CACHE[cache_key] = (now, warning)
+    return warning
+
+
 load_saved_credentials()
 DEFAULT_TEMP = float(os.getenv("CONTEXTCUT_TEMP", "0.7"))
 DEFAULT_MAX_TK = int(os.getenv("CONTEXTCUT_MAX_TOKENS", "8192"))
@@ -4401,6 +4470,27 @@ async function sendMessage(taskIdOverride) {{
                 renderApproval(data);
               }} else if (data.type === 'approval_resolved') {{
                 markApprovalResolved(data.approval_id, data.status, data.message);
+              }} else if (data.type === 'reset') {{
+                fullText = '';
+                if (bubble) bubble.innerHTML = '';
+              }} else if (data.type === 'warning') {{
+                ensureBubble();
+                if (assistantDiv && !assistantDiv.querySelector('.agent-warning')) {{
+                  const wdiv = document.createElement('div');
+                  wdiv.className = 'agent-warning';
+                  wdiv.style.cssText = 'font-size:10px;color:#f59e0b;padding:4px 6px;margin:0 0 4px;border-left:2px solid #f59e0b;line-height:1.4';
+                  wdiv.textContent = '\u26a0 ' + (data.warning || '');
+                  assistantDiv.insertBefore(wdiv, bubble);
+                }}
+              }} else if (data.type === 'malformed_tool_call') {{
+                ensureBubble();
+                if (assistantDiv) {{
+                  const mdiv = document.createElement('div');
+                  mdiv.className = 'agent-warning';
+                  mdiv.style.cssText = 'font-size:10px;color:#f59e0b;padding:4px 6px;margin:0 0 4px;border-left:2px solid #f59e0b;line-height:1.4';
+                  mdiv.textContent = '\u26a0 ' + (data.message || '');
+                  assistantDiv.insertBefore(mdiv, bubble);
+                }}
               }} else if (data.reasoning) {{
                 updateThinking(data.reasoning);
               }} else if (data.token) {{
@@ -7174,11 +7264,15 @@ class DashboardHandler(_SuppressBrokenPipe, BaseHTTPRequestHandler):
                     build_agent,
                     build_messages_from_history,
                     _check_tool_usage,
+                    extract_textual_tool_calls,
+                    strip_textual_tool_calls,
+                    textual_tool_call_retry_message,
+                    malformed_tool_call_message,
                     _shell_is_safe,
                     CheckpointManager,
                     SystemMessage,
                 )
-                from langchain_core.messages import HumanMessage
+                from langchain_core.messages import AIMessage, HumanMessage
 
                 # ── Task ID & Resume ────────────────────────────────────────────
                 ckpt_mgr = CheckpointManager()
@@ -7198,6 +7292,14 @@ class DashboardHandler(_SuppressBrokenPipe, BaseHTTPRequestHandler):
                 add_to_history(sid, "user", message)
                 session = _sessions[sid]
                 chat_history = build_messages_from_history(session["history"][:-1])
+                agent_warning = model_tool_template_warning(
+                    model_name, get_current_upstream(), _provider_name
+                )
+                if agent_warning:
+                    print(
+                        f"[{datetime.now().strftime('%H:%M:%S')}] [Agent] ⚠ {agent_warning}",
+                        flush=True,
+                    )
                 try:
                     agent = build_agent(
                         model_name,
@@ -7252,13 +7354,25 @@ class DashboardHandler(_SuppressBrokenPipe, BaseHTTPRequestHandler):
 
                 import asyncio
 
-                async def _run_agent() -> str:
+                def _content_text(content) -> str:
+                    if isinstance(content, str):
+                        return content
+                    if isinstance(content, list):
+                        parts = []
+                        for item in content:
+                            if isinstance(item, str):
+                                parts.append(item)
+                            elif isinstance(item, dict) and item.get("type") == "text":
+                                parts.append(item.get("text", ""))
+                        return "".join(parts)
+                    return str(content or "")
+
+                async def _invoke_agent_once(msgs, config) -> str:
                     from langgraph.types import Command
 
-                    config = _agent_config(task_id)
                     result = await asyncio.wait_for(
                         agent.with_config({"recursion_limit": 50}).ainvoke(
-                            {"messages": input_messages}, config=config
+                            msgs, config=config
                         ),
                         timeout=AGENT_TIMEOUT,
                     )
@@ -7285,7 +7399,34 @@ class DashboardHandler(_SuppressBrokenPipe, BaseHTTPRequestHandler):
                             timeout=AGENT_TIMEOUT,
                         )
                     final_msgs = result.get("messages", [])
-                    return final_msgs[-1].content if final_msgs else ""
+                    return _content_text(final_msgs[-1].content) if final_msgs else ""
+
+                async def _run_agent() -> str:
+                    config = _agent_config(task_id)
+                    output = await _invoke_agent_once(
+                        {"messages": input_messages}, config
+                    )
+                    raw_calls = extract_textual_tool_calls(output)
+                    for attempt in range(2):
+                        if not raw_calls:
+                            break
+                        print(
+                            f"[{datetime.now().strftime('%H:%M:%S')}] [Agent] ⚠ Raw textual tool call detected; retrying ({attempt + 1}/2)",
+                            flush=True,
+                        )
+                        retry_msgs = input_messages + [
+                            AIMessage(content=output),
+                            HumanMessage(content=textual_tool_call_retry_message(raw_calls)),
+                        ]
+                        output = await _invoke_agent_once(
+                            {"messages": retry_msgs}, config
+                        )
+                        raw_calls = extract_textual_tool_calls(output)
+                    if raw_calls:
+                        output = malformed_tool_call_message(raw_calls)
+                    else:
+                        output = strip_textual_tool_calls(output)
+                    return output
 
                 class _AgentAbort(Exception):
                     pass
@@ -7295,6 +7436,7 @@ class DashboardHandler(_SuppressBrokenPipe, BaseHTTPRequestHandler):
 
                     called_tools = set()
                     full_output = ""
+                    raw_repair_failed = False
                     step_counter = ckpt_mgr.latest_step_number(task_id)
                     config = _agent_config(task_id)
                     alert_seq = latest_seq()
@@ -7311,6 +7453,9 @@ class DashboardHandler(_SuppressBrokenPipe, BaseHTTPRequestHandler):
                         for alert in get_alerts_since(alert_seq):
                             alert_seq = max(alert_seq, int(alert.get("seq", 0)))
                             emit({"type": "security_alert", "alert": alert})
+
+                    if agent_warning:
+                        emit({"type": "warning", "warning": agent_warning})
 
                     async def _invoke_and_stream(msgs, capture_only=False):
                         nonlocal full_output, step_counter
@@ -7343,7 +7488,18 @@ class DashboardHandler(_SuppressBrokenPipe, BaseHTTPRequestHandler):
                                                 text = chunk.content
                                                 if isinstance(text, str) and text:
                                                     collected.append(text)
-                                                    if not capture_only:
+                                                    raw_markers = (
+                                                        "<function=",
+                                                        "<parameter=",
+                                                        "<tool_call",
+                                                        "</function>",
+                                                        "</parameter>",
+                                                    )
+                                                    is_raw = any(
+                                                        marker in text.lower()
+                                                        for marker in raw_markers
+                                                    )
+                                                    if not capture_only and not is_raw:
                                                         emit({'token': text})
                                         elif kind == "on_tool_start":
                                             tool_name = event.get("name", "unknown")
@@ -7446,9 +7602,67 @@ class DashboardHandler(_SuppressBrokenPipe, BaseHTTPRequestHandler):
                     except _AgentAbort:
                         return full_output
 
+                    # Layer 1a: Repair raw textual tool calls
+                    try:
+                        raw_calls = (
+                            extract_textual_tool_calls(full_output)
+                            if not called_tools
+                            else []
+                        )
+                        repair_attempts = 0
+                        while raw_calls and repair_attempts < 2:
+                            details = ", ".join(
+                                c.get("name", "unknown") for c in raw_calls
+                            )
+                            print(
+                                f"[{datetime.now().strftime('%H:%M:%S')}] [Agent] ⚠ Raw textual tool call detected ({details}); retrying ({repair_attempts + 1}/2)",
+                                flush=True,
+                            )
+                            emit({
+                                "type": "malformed_tool_call",
+                                "message": (
+                                    "Model printed raw tool-call text instead of using "
+                                    "the native tool interface. Retrying…"
+                                ),
+                                "calls": [
+                                    {
+                                        "name": c.get("name", "unknown"),
+                                        "input": c.get("input", {}),
+                                    }
+                                    for c in raw_calls
+                                ],
+                            })
+                            emit({"type": "reset"})
+                            retry_msgs = input_messages + [
+                                AIMessage(content=full_output),
+                                HumanMessage(
+                                    content=textual_tool_call_retry_message(raw_calls)
+                                ),
+                            ]
+                            retry_tools = await _invoke_and_stream(retry_msgs)
+                            called_tools |= retry_tools
+                            raw_calls = (
+                                []
+                                if called_tools
+                                else extract_textual_tool_calls(full_output)
+                            )
+                            repair_attempts += 1
+                        if raw_calls:
+                            raw_repair_failed = True
+                            full_output = malformed_tool_call_message(raw_calls)
+                            emit({"type": "warning", "warning": full_output})
+                        else:
+                            full_output = strip_textual_tool_calls(full_output)
+                    except _AgentAbort:
+                        return full_output
+
                     # Layer 1: Check tool usage and re-run if needed
                     try:
-                        blocked, reason = _check_tool_usage(message, called_tools)
+                        blocked, reason = (
+                            (False, "")
+                            if raw_repair_failed
+                            else _check_tool_usage(message, called_tools)
+                        )
                         max_retries = 2
                         retry_count = 0
                         while blocked and retry_count < max_retries:
@@ -7457,14 +7671,22 @@ class DashboardHandler(_SuppressBrokenPipe, BaseHTTPRequestHandler):
                                 HumanMessage(content=f"IMPORTANT: {reason}")
                             ]
                             retry_tools = await _invoke_and_stream(retry_msgs)
-                            blocked, reason = _check_tool_usage(message, retry_tools)
+                            called_tools |= retry_tools
+                            blocked, reason = _check_tool_usage(message, called_tools)
                             retry_count += 1
                     except _AgentAbort:
                         return full_output
 
                     # Layer 2: Self-correction loop (skip for trivial responses, no-op for deep scans)
                     final_output = full_output
-                    if scan and loop_retries > 0 and full_output and len(full_output) > 80 and not deep:
+                    if (
+                        scan
+                        and loop_retries > 0
+                        and full_output
+                        and len(full_output) > 80
+                        and not deep
+                        and not raw_repair_failed
+                    ):
                         try:
                             from agent_handler import _confidence_scan
                             _kb_ctx = _sessions.get(sid, {}).get("_kb_context", "")
@@ -7540,8 +7762,16 @@ class DashboardHandler(_SuppressBrokenPipe, BaseHTTPRequestHandler):
                         except Exception as scan_e:
                             emit({'error': str(scan_e), 'type': 'correction'})
 
+                    leftover_raw = extract_textual_tool_calls(final_output)
+                    if leftover_raw:
+                        cleaned = strip_textual_tool_calls(final_output)
+                        final_output = (
+                            cleaned
+                            if re.search(r"[A-Za-z]{3,}", cleaned)
+                            else malformed_tool_call_message(leftover_raw)
+                        )
                     emit_alerts()
-                    tok_count = len(full_output.split())
+                    tok_count = len(final_output.split())
                     print(f"[{datetime.now().strftime('%H:%M:%S')}] [Agent] \U0001f3af Done ({tok_count} words, {len(called_tools)} tools)", flush=True)
                     try:
                         emit({'response': final_output, 'type': 'done'})
@@ -7576,7 +7806,10 @@ class DashboardHandler(_SuppressBrokenPipe, BaseHTTPRequestHandler):
                             "type": "agent",
                         }
                     )
-                    resp = json.dumps({"response": output, "task_id": task_id}).encode()
+                    payload = {"response": output, "task_id": task_id}
+                    if agent_warning:
+                        payload["warning"] = agent_warning
+                    resp = json.dumps(payload).encode()
                     self.send_response(200)
                     self.send_header("Content-Type", "application/json")
                     self.send_header("Content-Length", str(len(resp)))

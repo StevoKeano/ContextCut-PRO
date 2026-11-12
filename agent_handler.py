@@ -520,6 +520,127 @@ def _check_tool_usage(user_message: str, called_tools: set) -> tuple[bool, str]:
     return False, ""
 
 
+# ── Layer 1b: Textual tool-call repair ────────────────────────────────────────
+# Some models print Qwen-style XML tool calls as assistant text instead of using
+# the native tool interface. Those tags are not executable and must never be
+# shown as the final answer.
+
+_RAW_FUNCTION_BLOCK_RE = re.compile(
+    r"<function\s*=\s*(?P<name>[A-Za-z_][\w.-]*)\s*>(?P<body>.*?)</function>",
+    re.IGNORECASE | re.DOTALL,
+)
+_RAW_FUNCTION_OPEN_RE = re.compile(
+    r"<function\s*=\s*(?P<name>[A-Za-z_][\w.-]*)\s*>",
+    re.IGNORECASE,
+)
+_RAW_PARAMETER_RE = re.compile(
+    r"<parameter\s*=\s*(?P<name>[A-Za-z_][\w.-]*)\s*>(?P<value>.*?)</parameter>",
+    re.IGNORECASE | re.DOTALL,
+)
+_RAW_TOOL_WRAPPER_RE = re.compile(
+    r"</?(?:tool_call|function_call|tool_calls)\b[^>]*>",
+    re.IGNORECASE,
+)
+_RAW_PARAMETER_CLOSE_RE = re.compile(r"</parameter>", re.IGNORECASE)
+_RAW_FUNCTION_CLOSE_RE = re.compile(r"</function>", re.IGNORECASE)
+
+
+def extract_textual_tool_calls(text: str) -> list[dict]:
+    """Return tool calls embedded as raw text by a model, if any.
+
+    Handles Qwen-style ``<function=name><parameter=key>value</parameter>``
+    output as well as partial blocks missing a closing ``</function>`` tag.
+    """
+    if not text:
+        return []
+
+    calls = []
+    for match in _RAW_FUNCTION_BLOCK_RE.finditer(text):
+        params = {
+            p.group("name"): p.group("value").strip()
+            for p in _RAW_PARAMETER_RE.finditer(match.group("body"))
+        }
+        calls.append(
+            {
+                "name": match.group("name"),
+                "input": params,
+                "raw": match.group(0),
+            }
+        )
+    if calls:
+        return calls
+
+    for match in _RAW_FUNCTION_OPEN_RE.finditer(text):
+        name = match.group("name")
+        tail = text[match.end():]
+        next_fn = _RAW_FUNCTION_OPEN_RE.search(tail)
+        body = tail[: next_fn.start()] if next_fn else tail
+        params = {
+            p.group("name"): p.group("value").strip()
+            for p in _RAW_PARAMETER_RE.finditer(body)
+        }
+        calls.append({"name": name, "input": params, "raw": match.group(0)})
+
+    if calls:
+        return calls
+
+    if "<tool_call" in text.lower():
+        return [{"name": "unknown", "input": {}, "raw": text.strip()}]
+    return []
+
+
+def strip_textual_tool_calls(text: str) -> str:
+    """Remove raw XML tool-call syntax while preserving surrounding prose."""
+    if not text:
+        return text
+    cleaned = _RAW_FUNCTION_BLOCK_RE.sub("", text)
+    cleaned = _RAW_FUNCTION_OPEN_RE.sub("", cleaned)
+    cleaned = _RAW_PARAMETER_RE.sub("", cleaned)
+    cleaned = _RAW_PARAMETER_CLOSE_RE.sub("", cleaned)
+    cleaned = _RAW_FUNCTION_CLOSE_RE.sub("", cleaned)
+    cleaned = _RAW_TOOL_WRAPPER_RE.sub("", cleaned)
+    cleaned = re.sub(r"\n{3,}", "\n\n", cleaned)
+    return cleaned.strip()
+
+
+def textual_tool_call_retry_message(calls: list[dict]) -> str:
+    """Correction message for a model that printed tool syntax as text."""
+    details = []
+    for call in calls:
+        name = call.get("name", "unknown")
+        args = call.get("input") or {}
+        if args:
+            details.append(f"{name}({json.dumps(args, ensure_ascii=False)})")
+        else:
+            details.append(f"{name}()")
+    attempted = ", ".join(details) or "unknown tool"
+    return (
+        "Your previous response printed raw tool-call XML instead of using the "
+        f"native tool interface. The attempted call was NOT executed: {attempted}. "
+        "Do not print <function=...>, <parameter=...>, or <tool_call> tags. "
+        "If you still need a tool, call it now through the native tool interface. "
+        "If the injected knowledge-base context already answers the user, answer "
+        "directly and cite the source filenames instead of listing directories or "
+        "reading local files."
+    )
+
+
+def malformed_tool_call_message(calls: list[dict]) -> str:
+    """Clean fallback shown when raw tool syntax cannot be repaired."""
+    details = []
+    for call in calls:
+        name = call.get("name", "unknown")
+        args = call.get("input") or {}
+        details.append(f"{name}({json.dumps(args, ensure_ascii=False)})" if args else f"{name}()")
+    attempted = ", ".join(details) or "unknown tool"
+    return (
+        "The model emitted a malformed text-based tool call instead of using the "
+        f"native tool interface ({attempted}). No tool was executed. Switch Agent "
+        "mode to a compatible model such as qwen3:14b-q8_0 or qwen3:32b, or turn "
+        "Agent OFF and retry."
+    )
+
+
 # ── Layer 2: Confidence scan ──────────────────────────────────────────────────
 
 # Independent scan model — MUST differ from the agent model to avoid self-evaluation.
@@ -1920,6 +2041,23 @@ You have access to:
 - remember / recall / forget: Persistent key-value memory across sessions
 - compose_tool: Create new compound tools that chain primitive tools
 
+NATIVE TOOL CALLS ONLY:
+- Use the native tool-calling interface. Never print tool calls as text.
+- Never output <function=...>, <parameter=...>, <tool_call>, or JSON tool-call
+  payloads in your answer. If you need a tool, invoke it through the tool
+  interface so the runtime can execute it.
+- If you receive injected knowledge-base context, that content has already been
+  retrieved for you. Do not claim you cannot access the files.
+
+DOCUMENT / REPORT RULE:
+- For questions about documents, PDFs, resumes, business plans, LOIs, or
+  reports, answer from the injected knowledge-base context first and cite the
+  source filenames.
+- Use vector_search only when the injected context is missing or insufficient.
+- Do not use list_dir or read_file merely because the user mentions files. Use
+  them only when the user explicitly asks to inspect local files or when the
+  document text is not already available in the injected context.
+
 CRITICAL — NEVER overcomplicate:
 - NEVER create Python virtual environments for simple tasks.
 - NEVER install pip packages (flask, fastapi, requests) for trivial scripts or hello-world demos.
@@ -1937,7 +2075,7 @@ CRITICAL — NEVER overcomplicate:
 
 Rules:
 1. For shell_exec, state the command. High-impact tools are paused by the approval mechanism; proceed only after approval.
-2. Use vector_search proactively when the question relates to the knowledge base.
+2. Use injected knowledge-base context first when it is present. Use vector_search when the question relates to the knowledge base but the injected context is missing or insufficient.
 3. Write well-structured, correct code.
 4. When reading files, respect the file size limit.
 5. Do NOT fabricate information — use tools to verify facts.
