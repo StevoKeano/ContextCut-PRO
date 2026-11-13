@@ -536,6 +536,145 @@ def protected_files_check(git_info: GitInfo, protected: Sequence[str]) -> CheckR
     )
 
 
+_HTML_BUTTON_RE = re.compile(r"<button\b(?P<attrs>[^>]*)>", re.IGNORECASE)
+_HTML_ATTR_RE = re.compile(
+    r"([A-Za-z_:][-A-Za-z0-9_:.]*)\s*=\s*(?:\"([^\"]*)\"|'([^']*)')"
+)
+_HTML_SCRIPT_RE = re.compile(r"<script\b[^>]*>(?P<body>.*?)</script>", re.IGNORECASE | re.DOTALL)
+_JS_FUNCTION_RE = re.compile(r"function\s+([A-Za-z_$][\w$]*)\s*\(")
+_ENTRY_PREFIXES = ("init", "start", "main", "boot", "setup")
+
+
+def _html_attrs(raw: str) -> dict[str, str]:
+    attrs: dict[str, str] = {}
+    for match in _HTML_ATTR_RE.finditer(raw):
+        value = match.group(2) if match.group(2) is not None else (match.group(3) or "")
+        attrs[match.group(1).lower()] = value
+    return attrs
+
+
+def _camel_case(name: str) -> str:
+    parts = name.split("-")
+    return parts[0] + "".join(part.title() for part in parts[1:])
+
+
+def web_app_check(workspace: Path) -> CheckResult | None:
+    """Generic smoke check for a self-contained HTML app.
+
+    Catches two silent-failure classes that a syntax/feature check misses:
+    an init function that is defined but never invoked, and buttons that are
+    never wired to any handler.
+    """
+    index = Path(workspace) / "index.html"
+    if not index.is_file():
+        return None
+    html = index.read_text(encoding="utf-8", errors="replace")
+    if "<script" not in html.lower():
+        return None
+    if re.search(r"<script\b[^>]*\bsrc\s*=", html, re.IGNORECASE):
+        return None
+
+    scripts = "\n".join(match.group("body") for match in _HTML_SCRIPT_RE.finditer(html))
+    if not scripts.strip():
+        return None
+
+    problems: list[str] = []
+
+    for match in _JS_FUNCTION_RE.finditer(scripts):
+        name = match.group(1)
+        if not name.lower().startswith(_ENTRY_PREFIXES):
+            continue
+        if len(re.findall(rf"\b{re.escape(name)}\b", scripts)) <= 1:
+            problems.append(
+                f"init function {name}() is defined but never called or registered "
+                "(invoke it on DOMContentLoaded or at the end of the script)"
+            )
+
+    aliases: dict[str, set[str]] = {}
+    for match in re.finditer(
+        r"(?:const|let|var)\s+([A-Za-z_$][\w$]*)\s*=\s*document\."
+        r"(?:getElementById\(\s*['\"]([^'\"]+)['\"]\s*\)"
+        r"|querySelector\(\s*['\"]#([^'\"]+)['\"]\s*\))",
+        scripts,
+    ):
+        aliases.setdefault(match.group(2) or match.group(3), set()).add(match.group(1))
+
+    delegated = bool(
+        re.search(
+            r"addEventListener\(\s*['\"]click['\"].{0,400}?(?:closest|matches)\(\s*['\"]button",
+            scripts,
+            re.DOTALL,
+        )
+    )
+    if not delegated:
+        for match in _HTML_BUTTON_RE.finditer(html):
+            attrs = _html_attrs(match.group("attrs"))
+            if "onclick" in attrs:
+                continue
+            label = attrs.get("id") or attrs.get("data-command") or "<anonymous>"
+            data_attrs = [key for key in attrs if key.startswith("data-")]
+            if data_attrs:
+                missing = [
+                    key
+                    for key in data_attrs
+                    if not re.search(
+                        rf"dataset(?:\.{re.escape(_camel_case(key[5:]))}\b|\[\s*['\"]{re.escape(_camel_case(key[5:]))}['\"]\s*\])",
+                        scripts,
+                    )
+                    and f"data-{key[5:]}" not in scripts
+                ]
+                if missing:
+                    problems.append(
+                        f"button {label} has {', '.join(missing)} but the script never reads it"
+                    )
+                continue
+            button_id = attrs.get("id")
+            if not button_id:
+                problems.append("button has no id, data-* attribute, or onclick handler")
+                continue
+            wired = bool(
+                re.search(
+                    rf"(?:getElementById\(\s*['\"]{re.escape(button_id)}['\"]\s*\)"
+                    rf"|querySelector\(\s*['\"]#{re.escape(button_id)}['\"]\s*\))"
+                    rf"[^;]{{0,200}}?\.addEventListener\(",
+                    scripts,
+                    re.DOTALL,
+                )
+            )
+            if not wired:
+                wired = any(
+                    re.search(
+                        rf"\b{re.escape(alias)}\s*(?:\.addEventListener\(|\.onclick\s*=)",
+                        scripts,
+                    )
+                    for alias in aliases.get(button_id, ())
+                )
+            if not wired:
+                for class_name in attrs.get("class", "").split():
+                    if re.search(
+                        rf"querySelectorAll\(\s*['\"]\.{re.escape(class_name)}['\"]\s*\)"
+                        rf".{{0,200}}?addEventListener\(",
+                        scripts,
+                        re.DOTALL,
+                    ):
+                        wired = True
+                        break
+            if not wired:
+                problems.append(
+                    f"button #{button_id} has no click handler "
+                    "(add addEventListener or a data-command)"
+                )
+
+    return CheckResult(
+        name="web_app_wiring",
+        command="single-file HTML app inspection",
+        passed=not problems,
+        required=True,
+        stdout="\n".join(problems),
+        error="" if not problems else "web app initialization or button wiring is incomplete",
+    )
+
+
 def default_checks(workspace: Path) -> list[tuple[str, list[str]]]:
     workspace = Path(workspace)
     checks: list[tuple[str, list[str]]] = []
@@ -687,6 +826,10 @@ def run_deterministic_checks(
 
     for index, (name, cmd) in enumerate(commands, 1):
         results.append(run_check(name or f"check-{index}", cmd, check_workspace, timeout))
+
+    web_check = web_app_check(source_workspace)
+    if web_check is not None:
+        results.append(web_check)
 
     async_warning = scan_async_warnings(results)
     if async_warning is not None:
@@ -1009,6 +1152,54 @@ def _status_map(report: dict[str, Any]) -> dict[str, dict[str, Any]]:
     return result
 
 
+_CITATION_RE = re.compile(
+    r"(?:file:)?"
+    r"(?P<path>[A-Za-z0-9_./-]+\.(?:html?|css|m?js|jsx|ts|tsx|py|md|json|txt|sh|ya?ml))"
+    r":(?P<start>\d+)(?:-(?P<end>\d+))?"
+)
+
+
+def invalid_verifier_citations(
+    report: dict[str, Any] | None, workspace: Path
+) -> list[str]:
+    """Return verifier evidence citations that point at missing files or bad lines."""
+    if not report:
+        return []
+    root = Path(workspace).resolve()
+    invalid: list[str] = []
+    for item in _status_map(report).values():
+        evidence = item.get("evidence") or []
+        if isinstance(evidence, str):
+            evidence = [evidence]
+        if not isinstance(evidence, list):
+            continue
+        for entry in evidence:
+            for match in _CITATION_RE.finditer(str(entry)):
+                citation = match.group(0)
+                rel = match.group("path")
+                start = int(match.group("start"))
+                end = int(match.group("end") or start)
+                target = (root / rel).resolve()
+                try:
+                    target.relative_to(root)
+                except ValueError:
+                    invalid.append(f"{citation} (outside workspace)")
+                    continue
+                if not target.is_file():
+                    invalid.append(f"{citation} (missing file)")
+                    continue
+                try:
+                    lines = len(
+                        target.read_text(encoding="utf-8", errors="replace").splitlines()
+                    )
+                except OSError:
+                    invalid.append(f"{citation} (unreadable file)")
+                    continue
+                if start < 1 or end < start or end > lines:
+                    invalid.append(f"{citation} (file has {lines} lines)")
+    return _unique(invalid)
+
+
 def _report_issues(report: dict[str, Any] | None) -> list[str]:
     if not report:
         return []
@@ -1210,6 +1401,21 @@ ORIGINAL MANDATE
 """
 
 
+def _with_verification_commands(prompt: str, commands: Sequence[str]) -> str:
+    """Surface the gate's check commands to the implementer so it can self-verify."""
+    listing = "\n".join(f"- {command.strip()}" for command in commands if command.strip())
+    if not listing:
+        return prompt
+    return f"""{prompt.rstrip()}
+
+SELF-VERIFICATION (required)
+Before you finish, run these commands from the workspace and fix every failure:
+{listing}
+If the workspace is a single-file web app, also make sure initialization runs on load and
+every button is wired to a handler.
+"""
+
+
 def _run_is_finished(run_id: str) -> bool | None:
     events_path = DEFAULT_RUN_ROOT / run_id / "events.jsonl"
     if not events_path.is_file():
@@ -1261,10 +1467,13 @@ def _run_cycle(
     source = Path(args.workspace).expanduser().resolve()
 
     implementer: dict[str, Any]
+    implementer_changes: tuple[list[str], list[str], list[str]] = ([], [], [])
     if run_implementer:
         prompt = original_prompt if cycle == 1 else build_fix_prompt(original_prompt, previous_issues)
+        prompt = _with_verification_commands(prompt, args.check_command)
         _write_text(cycle_dir / "implementer" / "prompt.txt", prompt)
         progress(f"[cycle {cycle}] implementer start")
+        before_implementer = file_manifest(source)
         try:
             result = run_agent(
                 prompt,
@@ -1282,6 +1491,7 @@ def _run_cycle(
             implementer = _agent_result_dict(result)
         except Exception as exc:
             implementer = {"status": "error", "output": str(exc), "run_id": "", "log_path": ""}
+        implementer_changes = compare_manifests(before_implementer, file_manifest(source))
         _write_json(cycle_dir / "implementer" / "result.json", implementer)
         _copy_run_log(implementer, cycle_dir / "implementer" / "events.jsonl")
         progress(
@@ -1319,6 +1529,43 @@ def _run_cycle(
     )
     _save_checks(cycle_dir, checks)
     progress(f"[cycle {cycle}] deterministic checks: {sum(1 for c in checks if not c.passed)} failed")
+
+    if run_implementer:
+        impl_status = str(implementer.get("status") or "unknown")
+        impl_done = impl_status == "done"
+        checks.append(
+            CheckResult(
+                name="implementer_done",
+                command="coding agent result",
+                passed=impl_done,
+                required=True,
+                stdout=f"status={impl_status}; steps={implementer.get('steps')}",
+                error=""
+                if impl_done
+                else f"implementer did not finish successfully (status={impl_status})",
+            )
+        )
+        impl_changed, impl_removed, impl_added = implementer_changes
+        made_changes = bool(impl_changed or impl_removed or impl_added)
+        checks.append(
+            CheckResult(
+                name="implementer_changed_workspace",
+                command="workspace manifest comparison",
+                passed=made_changes,
+                required=True,
+                stdout="\n".join(
+                    [
+                        *(f"modified: {path}" for path in impl_changed),
+                        *(f"removed: {path}" for path in impl_removed),
+                        *(f"added: {path}" for path in impl_added),
+                    ]
+                ),
+                error=""
+                if made_changes
+                else "implementer finished without changing any workspace files",
+            )
+        )
+        _save_checks(cycle_dir, checks)
 
     verifier: dict[str, Any]
     verifier_report: dict[str, Any] | None = None
@@ -1407,6 +1654,20 @@ def _run_cycle(
             cycle_dir / "verifier" / "report.json",
             verifier_report if verifier_report is not None else {"parse_error": True, "raw_output": verifier.get("output")},
         )
+        invalid_citations = invalid_verifier_citations(verifier_report, source)
+        checks.append(
+            CheckResult(
+                name="verifier_evidence_valid",
+                command="verifier citation validation",
+                passed=not invalid_citations,
+                required=True,
+                stdout="\n".join(invalid_citations),
+                error=""
+                if not invalid_citations
+                else "verifier cited missing files or out-of-range lines",
+            )
+        )
+        _save_checks(cycle_dir, checks)
         verifier_status = str(verifier.get("status") or "unknown")
         progress(
             f"[cycle {cycle}] verifier {verifier_status} "

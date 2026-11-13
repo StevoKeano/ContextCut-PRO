@@ -73,6 +73,7 @@ Rules:
 8. Destructive and network commands are blocked; work within the allowlist.
 9. When finished, give a concise summary: what changed, which commands passed/failed, and any follow-ups.
 10. Do not ask the user for permission; the harness runs non-interactively.
+11. For web/UI deliverables, make initialization run on DOMContentLoaded (or at the end of the script) and wire every interactive control (addEventListener, onclick, or data-command) before finishing.
 """
 
 
@@ -501,6 +502,9 @@ def run_task(
     status = "done"
     output = ""
     steps = 0
+    idle_steps_limit = _env_int("CONTEXTCUT_CODING_IDLE_STEPS", 8)
+    last_mutation_step = 0
+    verified_since_mutation = False
     fingerprints: dict[str, int] = {}
     failure_seen = False
     empty_retries = 0
@@ -648,6 +652,11 @@ def run_task(
             failed = _tool_result_failed(name, result)
             if failed:
                 failure_seen = True
+            elif name in {"write_file", "edit_file", "append_file"}:
+                last_mutation_step = steps
+                verified_since_mutation = False
+            elif name == "run_command":
+                verified_since_mutation = True
             result = _clip(result)
             messages.append(
                 {"role": "tool", "tool_call_id": call.id, "content": result}
@@ -663,6 +672,25 @@ def run_task(
                 result=result[:3000],
                 failed=failed,
             )
+
+        if (
+            last_mutation_step
+            and verified_since_mutation
+            and steps - last_mutation_step >= idle_steps_limit
+        ):
+            status = "done"
+            output = (
+                content.strip()
+                if isinstance(content, str) and content.strip()
+                else f"Stopped after {idle_steps_limit} idle steps following the last file change."
+            )
+            log.event(
+                type="early_stop",
+                step=steps,
+                reason="idle_after_mutation",
+                idle_steps=steps - last_mutation_step,
+            )
+            break
 
         if max(fingerprints.values(), default=0) >= 4:
             status = "stalled"

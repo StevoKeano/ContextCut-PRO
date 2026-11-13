@@ -622,3 +622,190 @@ def test_run_is_finished_reads_finish_event(tmp_path, monkeypatch):
 
     assert orchestrator._run_is_finished(run_id) is True
     assert orchestrator._run_is_finished("missing") is None
+
+
+def test_invalid_verifier_citations_detects_missing_and_out_of_range(tmp_path):
+    (tmp_path / "index.html").write_text("line1\nline2\nline3\n", encoding="utf-8")
+    report = {
+        "mandates": [
+            {
+                "id": "M1",
+                "status": "pass",
+                "evidence": [
+                    "file:index.html:1-3: within range",
+                    "file:index.html:1-9: past end",
+                    "file:missing.py:1: gone",
+                ],
+            }
+        ]
+    }
+
+    invalid = orchestrator.invalid_verifier_citations(report, tmp_path)
+
+    assert any("1-9" in item for item in invalid)
+    assert any("missing.py" in item for item in invalid)
+    assert all("1-3" not in item for item in invalid)
+
+
+def test_run_cycle_gate_fails_when_implementer_errors_and_citations_invalid(tmp_path, monkeypatch):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    _run_git(repo, "init", "-q")
+    _run_git(repo, "config", "user.email", "test@example.com")
+    _run_git(repo, "config", "user.name", "Test User")
+    (repo / "app.py").write_text("VALUE = 1\n", encoding="utf-8")
+    _run_git(repo, "add", ".")
+    _run_git(repo, "commit", "-q", "-m", "initial")
+    baseline = _run_git(repo, "rev-parse", "HEAD").stdout.strip()
+
+    def fake_run_agent(prompt, **kwargs):
+        if "ORIGINAL_PROMPT_BEGIN" not in prompt:
+            return SimpleNamespace(
+                to_dict=lambda: {
+                    "status": "error",
+                    "run_id": "impl-err",
+                    "output": "Model returned an empty response twice.",
+                    "log_path": "",
+                    "steps": 3,
+                }
+            )
+        output = json.dumps(
+            {
+                "overall": "pass",
+                "mandates": [
+                    {
+                        "id": "M1",
+                        "status": "pass",
+                        "evidence": ["file:app.py:1-99: fabricated"],
+                        "issues": [],
+                    }
+                ],
+                "test_integrity": {"weakened": False, "notes": "unchanged"},
+                "unresolved": [],
+            }
+        )
+        return SimpleNamespace(
+            to_dict=lambda: {
+                "status": "done",
+                "run_id": "ver-1",
+                "output": output,
+                "log_path": "",
+                "steps": 1,
+            }
+        )
+
+    monkeypatch.setattr(orchestrator, "run_agent", fake_run_agent)
+    monkeypatch.setattr(orchestrator, "_run_tool_count", lambda _run_id: 1)
+    args = orchestrator.build_parser().parse_args(
+        [
+            "--workspace",
+            str(repo),
+            "--prompt",
+            "1. Keep the app valid.",
+            "--artifacts-dir",
+            str(tmp_path / "artifacts"),
+        ]
+    )
+
+    report = orchestrator._run_cycle(
+        cycle=1,
+        args=args,
+        original_prompt="1. Keep the app valid.",
+        mandates=[orchestrator.Mandate("M1", "Keep the app valid.", True)],
+        artifact_dir=tmp_path / "artifacts" / "run",
+        baseline=baseline,
+        run_implementer=True,
+        run_verifier=True,
+        previous_issues=[],
+        progress=lambda _message: None,
+    )
+
+    checks = {check["name"]: check for check in report["checks"]}
+    assert checks["implementer_done"]["passed"] is False
+    assert checks["implementer_changed_workspace"]["passed"] is False
+    assert checks["verifier_evidence_valid"]["passed"] is False
+    assert report["gate"]["passed"] is False
+    assert any("implementer" in failure for failure in report["gate"]["failures"])
+
+
+def test_web_app_check_flags_uninvoked_init_and_unwired_buttons(tmp_path):
+    (tmp_path / "index.html").write_text(
+        """<!DOCTYPE html><html><body>
+<button id="start-button">Start</button>
+<button id="play-btn">Play</button>
+<button class="cmd" data-command="up">Up</button>
+<script>
+function initGame() { return document.getElementById('start-button'); }
+document.getElementById('start-button').addEventListener('click', () => {});
+document.querySelectorAll('.cmd').forEach((b) => b.addEventListener('click', () => b.dataset.command));
+</script></body></html>""",
+        encoding="utf-8",
+    )
+
+    result = orchestrator.web_app_check(tmp_path)
+
+    assert result is not None
+    assert result.passed is False
+    assert "initGame" in result.stdout
+    assert "play-btn" in result.stdout
+    assert "button up" not in result.stdout
+
+
+def test_web_app_check_passes_wired_app(tmp_path):
+    (tmp_path / "index.html").write_text(
+        """<!DOCTYPE html><html><body>
+<button id="start-button">Start</button>
+<button class="cmd" data-command="up">Up</button>
+<script>
+function initGame() {}
+document.getElementById('start-button').addEventListener('click', initGame);
+document.querySelectorAll('.cmd').forEach((b) => b.addEventListener('click', () => b.dataset.command));
+initGame();
+</script></body></html>""",
+        encoding="utf-8",
+    )
+
+    result = orchestrator.web_app_check(tmp_path)
+
+    assert result is not None
+    assert result.passed is True
+
+
+def test_web_app_check_skips_external_scripts(tmp_path):
+    (tmp_path / "index.html").write_text(
+        '<html><body><button id="x">X</button><script src="app.js"></script></body></html>',
+        encoding="utf-8",
+    )
+
+    assert orchestrator.web_app_check(tmp_path) is None
+
+
+def test_with_verification_commands_appends_checks():
+    prompt = orchestrator._with_verification_commands(
+        "Do the task.", ["python3 check.py index.html"]
+    )
+
+    assert prompt.startswith("Do the task.")
+    assert "SELF-VERIFICATION" in prompt
+    assert "python3 check.py index.html" in prompt
+    assert orchestrator._with_verification_commands("Do the task.", []) == "Do the task."
+
+
+def test_web_app_check_accepts_variable_alias_wiring(tmp_path):
+    (tmp_path / "index.html").write_text(
+        """<html><body><button id="play-btn">Play</button>
+<button class="control-btn" id="up-btn">Up</button>
+<script>
+const playBtn = document.getElementById('play-btn');
+const upBtn = document.querySelector('#up-btn');
+playBtn.addEventListener('click', () => {});
+upBtn.addEventListener('click', () => {});
+window.addEventListener('load', () => {});
+</script></body></html>""",
+        encoding="utf-8",
+    )
+
+    result = orchestrator.web_app_check(tmp_path)
+
+    assert result is not None
+    assert result.passed is True
