@@ -19,6 +19,11 @@ Environment:
     CONTEXTCUT_CODING_ALLOWLIST         extra command executables (comma list)
     CONTEXTCUT_CODING_PASSTHROUGH_ENV   1 to keep secret env vars in subprocesses
     CONTEXTCUT_CTX_LIMIT                32768 (used for message trimming)
+    CONTEXTCUT_USE_OPENCODE             1 to run through `opencode run` instead of the native loop
+    CONTEXTCUT_OPENCODE_CACHE           1 to pass `-c` (continue last session) to `opencode run`
+    CONTEXTCUT_OPENCODE_MODEL           model passed to `opencode run --model` (provider/model)
+    CONTEXTCUT_OPENCODE_MODEL_BUILD     per-agent override for the implementer
+    CONTEXTCUT_OPENCODE_MODEL_PLAN      per-agent override for the verifier
 """
 
 from __future__ import annotations
@@ -27,6 +32,8 @@ import argparse
 import json
 import os
 import re
+import shutil
+import subprocess
 import sys
 import time
 import uuid
@@ -746,6 +753,247 @@ def _load_env() -> None:
             load_dotenv(candidate, override=False)
 
 
+OPENCODE_DEFAULT_TIMEOUT = 900.0
+_OPENCODE_TOOL_TYPES = {"tool_use", "tool-use", "tool"}
+_OPENCODE_STEP_FINISH_TYPES = {"step_finish", "step-finish"}
+_OPENCODE_STEP_START_TYPES = {"step_start", "step-start"}
+
+
+def _opencode_text(value: Any) -> str:
+    if isinstance(value, (bytes, bytearray)):
+        return bytes(value).decode("utf-8", errors="replace")
+    return value if isinstance(value, str) else ""
+
+
+def _opencode_error_text(event: dict[str, Any]) -> str:
+    part = event.get("part") if isinstance(event.get("part"), dict) else {}
+    for candidate in (
+        part.get("error"),
+        event.get("error"),
+        part.get("message"),
+        event.get("message"),
+    ):
+        if isinstance(candidate, str) and candidate.strip():
+            return candidate.strip()
+        if isinstance(candidate, dict):
+            text = candidate.get("message") or candidate.get("name")
+            if isinstance(text, str) and text.strip():
+                return text.strip()
+    return ""
+
+
+def _opencode_usage_add(usage: dict[str, int], tokens: Any) -> None:
+    if not isinstance(tokens, dict):
+        return
+    try:
+        prompt_tokens = int(tokens.get("input") or tokens.get("prompt") or 0)
+        completion_tokens = int(tokens.get("output") or tokens.get("completion") or 0)
+        reasoning_tokens = int(tokens.get("reasoning") or 0)
+    except (TypeError, ValueError):
+        return
+    usage["prompt_tokens"] += prompt_tokens
+    usage["completion_tokens"] += completion_tokens + reasoning_tokens
+    usage["total_tokens"] = usage["prompt_tokens"] + usage["completion_tokens"]
+
+
+def _opencode_binary() -> str:
+    """Resolve the OpenCode executable, honoring ``CONTEXTCUT_OPENCODE_BIN``."""
+    override = os.getenv("CONTEXTCUT_OPENCODE_BIN", "").strip()
+    if override:
+        return override
+    found = shutil.which("opencode")
+    if found:
+        return found
+    for candidate in (
+        Path.home() / ".npm-global" / "bin" / "opencode",
+        Path.home() / ".local" / "bin" / "opencode",
+    ):
+        if candidate.is_file():
+            return str(candidate)
+    return "opencode"
+
+
+def build_opencode_command(
+    prompt: str,
+    *,
+    agent: str = "build",
+    model: str | None = None,
+    cache: bool = False,
+) -> list[str]:
+    """Build the ``opencode run`` argv, including ``-c`` when cache is enabled."""
+    command = [_opencode_binary(), "run", prompt, "--format", "json", "--agent", agent]
+    if cache:
+        command.append("-c")
+    if model:
+        command.extend(["--model", model])
+    return command
+
+
+def run_opencode_task(
+    prompt: str,
+    *,
+    workspace: Path | str,
+    agent: str = "build",
+    model: str | None = None,
+    timeout: float | None = None,
+    cache: bool = False,
+    progress: Callable[[str], None] | None = None,
+    run_root: Path | None = None,
+) -> RunResult:
+    """Run one task through `opencode run` and normalize its JSON events.
+
+    Write phases use ``--agent build`` and read-only verification phases use
+    ``--agent plan``. The returned :class:`RunResult` matches the native loop so
+    the orchestrator and its gate checks need no special cases.
+    """
+    ws = Path(workspace).expanduser().resolve()
+    limit = float(timeout) if timeout is not None else OPENCODE_DEFAULT_TIMEOUT
+    run_id = datetime.now().strftime("opencode-%Y%m%d-%H%M%S") + "-" + uuid.uuid4().hex[:6]
+    logger = RunLogger(run_id=run_id, root=run_root or DEFAULT_RUN_ROOT)
+    raw_path = logger.root / "opencode.stdout.jsonl"
+
+    command = build_opencode_command(prompt, agent=agent, model=model, cache=cache)
+
+    def emit(message: str) -> None:
+        if progress is not None:
+            progress(message)
+
+    emit(f"[opencode] active agent={agent} model={model or '(default)'} cwd={ws}")
+    logger.event(
+        type="start",
+        mode="opencode",
+        agent=agent,
+        model=model or "",
+        prompt=prompt[:2000],
+    )
+
+    started = time.monotonic()
+    status = "done"
+    error_text = ""
+    stdout = ""
+    stderr = ""
+    returncode: int | None = None
+    try:
+        completed = subprocess.run(
+            command,
+            cwd=str(ws),
+            capture_output=True,
+            text=True,
+            timeout=limit,
+        )
+        stdout = _opencode_text(completed.stdout)
+        stderr = _opencode_text(completed.stderr)
+        returncode = completed.returncode
+    except FileNotFoundError:
+        status = "error"
+        error_text = "opencode binary was not found on PATH"
+    except subprocess.TimeoutExpired as exc:
+        status = "timeout"
+        stdout = _opencode_text(exc.stdout)
+        stderr = _opencode_text(exc.stderr)
+        error_text = f"opencode exceeded timeout={limit:.0f}s"
+    except OSError as exc:
+        status = "error"
+        error_text = f"could not start opencode: {exc}"
+
+    if stdout:
+        raw_path.write_text(stdout, encoding="utf-8")
+
+    output_parts: list[str] = []
+    steps = 0
+    tool_count = 0
+    finish_reasons: list[str] = []
+    usage = {"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0}
+    saw_error_event = False
+
+    for raw_line in stdout.splitlines():
+        line = raw_line.strip()
+        if not line:
+            continue
+        try:
+            event = json.loads(line)
+        except json.JSONDecodeError:
+            output_parts.append(line)
+            continue
+        if not isinstance(event, dict):
+            continue
+        event_type = str(event.get("type") or "").strip().lower()
+        part = event.get("part") if isinstance(event.get("part"), dict) else {}
+        if event_type == "text":
+            text = part.get("text") or event.get("text") or event.get("content")
+            if isinstance(text, str) and text:
+                output_parts.append(text)
+        elif event_type in _OPENCODE_TOOL_TYPES:
+            tool_count += 1
+            name = part.get("tool") or part.get("name") or event.get("tool") or event.get("name") or ""
+            arguments = part.get("input") or part.get("arguments") or event.get("input") or {}
+            state = part.get("state") if isinstance(part.get("state"), dict) else {}
+            tool_output = state.get("output") if isinstance(state.get("output"), str) else ""
+            logger.event(
+                type="tool",
+                name=str(name),
+                arguments=arguments if isinstance(arguments, dict) else {"input": arguments},
+                result=tool_output[:3000],
+                failed=str(state.get("status") or "").lower() in {"error", "failed"},
+            )
+        elif event_type in _OPENCODE_STEP_FINISH_TYPES:
+            steps += 1
+            reason = part.get("reason") or event.get("reason")
+            if reason:
+                finish_reasons.append(str(reason))
+            _opencode_usage_add(usage, part.get("tokens") or event.get("tokens"))
+        elif event_type in _OPENCODE_STEP_START_TYPES:
+            continue
+        elif event_type == "error":
+            saw_error_event = True
+            error_text = _opencode_error_text(event) or error_text
+            logger.event(type="error", step=steps, error=error_text)
+        else:
+            text = part.get("text") or event.get("text")
+            if isinstance(text, str) and text:
+                output_parts.append(text)
+
+    if steps == 0 and tool_count:
+        steps = tool_count
+    if status == "done" and (returncode not in (0, None) or saw_error_event):
+        status = "error"
+        if not error_text:
+            error_text = f"opencode exited with status {returncode}"
+    if status == "error" and stderr.strip() and not error_text:
+        error_text = stderr.strip().splitlines()[-1][:400]
+
+    output = "\n".join(part for part in output_parts if part).strip()
+    if status != "done" and error_text:
+        output = (output + "\n" if output else "") + f"Error: {error_text}"
+
+    duration = time.monotonic() - started
+    logger.event(type="assistant", step=steps, content=output[:2000], mode="opencode")
+    logger.event(
+        type="finish",
+        status=status,
+        steps=steps,
+        duration=round(duration, 3),
+        usage=usage,
+        tool_calls=tool_count,
+        finish_reasons=finish_reasons,
+        exit_code=returncode,
+    )
+    emit(
+        f"[opencode] exit={returncode if returncode is not None else 'n/a'} "
+        f"status={status} steps={steps} tool_calls={tool_count} duration={duration:.1f}s"
+    )
+    return RunResult(
+        output=output,
+        status=status,
+        run_id=run_id,
+        steps=steps,
+        duration=duration,
+        usage=usage,
+        log_path=str(logger.events_path),
+        workspace=str(ws),
+    )
+
+
 def main(argv: list[str] | None = None) -> int:
     _load_env()
     parser = argparse.ArgumentParser(
@@ -770,6 +1018,29 @@ def main(argv: list[str] | None = None) -> int:
         help="reasoning effort: auto, none, low, medium, high, or default",
     )
     parser.add_argument("--resume", default=None, metavar="RUN_ID")
+    parser.add_argument(
+        "--use-opencode",
+        action="store_true",
+        default=_env_flag("CONTEXTCUT_USE_OPENCODE"),
+        help="route the task through `opencode run` instead of the native loop",
+    )
+    parser.add_argument(
+        "--opencode-agent",
+        choices=("build", "plan"),
+        default="build",
+        help="opencode agent for --use-opencode (build writes, plan is read-only)",
+    )
+    parser.add_argument(
+        "--opencode-model",
+        default=_first_env("CONTEXTCUT_OPENCODE_MODEL") or None,
+        help="model for `opencode run --model` (provider/model)",
+    )
+    parser.add_argument(
+        "--opencode-cache",
+        action="store_true",
+        default=_env_flag("CONTEXTCUT_OPENCODE_CACHE"),
+        help="pass -c to `opencode run` to continue the last session",
+    )
     parser.add_argument("--json", action="store_true", help="print a JSON result")
     parser.add_argument("--quiet", action="store_true", help="suppress progress")
     parser.add_argument(
@@ -782,6 +1053,10 @@ def main(argv: list[str] | None = None) -> int:
     prompt = " ".join(args.prompt).strip()
     if not prompt and not args.resume:
         parser.error("a prompt is required (or use --resume RUN_ID)")
+    if args.use_opencode and not prompt:
+        parser.error("--use-opencode requires a prompt")
+    if args.use_opencode and args.resume:
+        parser.error("--use-opencode does not support --resume")
 
     if args.dry_run:
         print(
@@ -797,6 +1072,10 @@ def main(argv: list[str] | None = None) -> int:
                         args.reasoning or _first_env("CONTEXTCUT_CODING_REASONING")
                     ),
                     "allow_extra": list(default_allowlist()),
+                    "use_opencode": args.use_opencode,
+                    "opencode_agent": args.opencode_agent,
+                    "opencode_model": args.opencode_model,
+                    "opencode_cache": args.opencode_cache,
                 },
                 indent=2,
             )
@@ -804,19 +1083,30 @@ def main(argv: list[str] | None = None) -> int:
         return 0
 
     try:
-        result = run_task(
-            prompt,
-            workspace=args.workspace,
-            model=args.model,
-            base_url=args.base_url,
-            api_key=args.api_key,
-            max_steps=args.max_steps,
-            timeout=args.timeout,
-            reasoning=args.reasoning,
-            max_tokens=args.max_tokens,
-            resume_run_id=args.resume,
-            progress=None if args.quiet else _stderr_progress,
-        )
+        if args.use_opencode:
+            result = run_opencode_task(
+                prompt,
+                workspace=args.workspace,
+                agent=args.opencode_agent,
+                model=args.opencode_model,
+                timeout=args.timeout,
+                cache=args.opencode_cache,
+                progress=None if args.quiet else _stderr_progress,
+            )
+        else:
+            result = run_task(
+                prompt,
+                workspace=args.workspace,
+                model=args.model,
+                base_url=args.base_url,
+                api_key=args.api_key,
+                max_steps=args.max_steps,
+                timeout=args.timeout,
+                reasoning=args.reasoning,
+                max_tokens=args.max_tokens,
+                resume_run_id=args.resume,
+                progress=None if args.quiet else _stderr_progress,
+            )
     except Exception as exc:
         print(f"error: {exc}", file=sys.stderr)
         return 1

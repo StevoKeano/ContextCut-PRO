@@ -1259,6 +1259,15 @@ The orchestrator has no mid-run resume. To continue an interrupted implementer, 
 | `--json 1> ... 2> ...` | Final JSON on stdout, live progress on stderr. Omit `--quiet` so progress is actually written. |
 | no `cd ... &&` before `nohup` | `nohup`/`env` exec in place, so `$!` is the Python PID. A `cd ... &&` prefix backgrounds the wrapper subshell and stores the wrong PID. |
 | `--verifier-model qwen3:14b-q8_0` | Must differ from the implementer to avoid self-evaluation. |
+| `--use-opencode` | Routes agent turns through `opencode run --format json` instead of the native loop. Default is native. Also enabled by exporting `CONTEXTCUT_USE_OPENCODE=1` (the orchestrator does not load `.env`). |
+| `--opencode-model provider/model` | Model passed to `opencode run --model`. If omitted, the per-agent `CONTEXTCUT_OPENCODE_MODEL_BUILD` / `CONTEXTCUT_OPENCODE_MODEL_PLAN` (or `CONTEXTCUT_OPENCODE_MODEL`) is used, then a native model only if it already looks like `provider/model`. |
+| `--opencode-cache` | Passes `-c` to `opencode run`, continuing the last OpenCode session. Also enabled by `CONTEXTCUT_OPENCODE_CACHE=1`. In the dashboard, enable **⌨ OpenCode** in Params and tick **-c cache**. |
+
+### OpenCode mode
+
+With `--use-opencode`, the implementer runs as `opencode run ... --agent build` and the verifier as `--agent plan`, so read-only verification is preserved. Each phase runs with `cwd` set to its workspace copy and the existing implementer/verifier timeout. Newline-delimited JSON events on stdout are normalized into the same run log the native loop writes (`~/.contextcut/coding_runs/<run_id>/events.jsonl`), so `implementer_done`, `implementer_changed_workspace`, `verifier_inspected`, and `verifier_read_only` keep working unchanged. A missing `opencode` binary, a non-zero exit, or a `subprocess.TimeoutExpired` becomes `status=error`/`status=timeout` in the report instead of raising. Progress lines show `[cycle N] implementer start (opencode agent=build)` and `[opencode] exit=... status=...`.
+
+The dashboard has a matching **⌨ OpenCode** toggle in **Params ⚙**. When enabled, Agent-mode chat turns run through `opencode run --agent build` in `CONTEXTCUT_OPENCODE_WORKSPACE` (defaults to the proxy install directory) and stream JSON events back into the chat. The **-c cache** checkbox adds `-c` so OpenCode continues its previous session. Both settings persist to `.env` (`CONTEXTCUT_USE_OPENCODE`, `CONTEXTCUT_OPENCODE_CACHE`).
 
 Artifacts land in `~/.contextcut/orchestrations/<id>/` (per-cycle implementer/verifier prompts, results, git diffs, and checks), with the final report at `/tmp/robo-builder-orch.json`. See [5. Restart or re-audit](#5-restart-or-re-audit) for the verify-only command.
 

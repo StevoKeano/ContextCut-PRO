@@ -389,6 +389,169 @@ CLIENT_TIMEOUT_MS = int(os.getenv("CONTEXTCUT_CLIENT_TIMEOUT", "900")) * 1000
 UPSTREAM_TIMEOUT = int(os.getenv("CONTEXTCUT_UPSTREAM_TIMEOUT", "600"))
 AGENT_TIMEOUT = int(os.getenv("CONTEXTCUT_AGENT_TIMEOUT", "900"))
 
+
+def _env_bool(name: str, default: bool = False) -> bool:
+    raw = os.getenv(name, "")
+    if not raw:
+        return default
+    return raw.strip().lower() in ("1", "true", "yes", "on")
+
+
+USE_OPENCODE = _env_bool("CONTEXTCUT_USE_OPENCODE", False)
+OPENCODE_CACHE = _env_bool("CONTEXTCUT_OPENCODE_CACHE", False)
+OPENCODE_WORKSPACE = os.getenv(
+    "CONTEXTCUT_OPENCODE_WORKSPACE", str(Path(__file__).resolve().parent)
+)
+
+
+def _opencode_chat_model(model_name: str | None) -> str | None:
+    env_model = os.getenv("CONTEXTCUT_OPENCODE_MODEL", "").strip()
+    if env_model:
+        return env_model
+    if model_name and "/" in model_name:
+        return model_name
+    return None
+
+
+async def _run_opencode_chat(
+    prompt: str,
+    *,
+    model: str | None = None,
+    cache: bool = False,
+    emit=None,
+) -> tuple[str, str]:
+    """Run one chat turn through ``opencode run --format json``.
+
+    Returns ``(output, error_text)``. Text chunks and tool starts are forwarded
+    to *emit* (when provided) using the same dict shape as the native agent
+    stream so the dashboard renders them unchanged.
+    """
+    from coding_agent import build_opencode_command
+
+    cmd = build_opencode_command(prompt, agent="build", model=model, cache=cache)
+
+    workspace = Path(OPENCODE_WORKSPACE).expanduser()
+    if not workspace.is_dir():
+        return "", f"OpenCode workspace is not a directory: {workspace}"
+
+    try:
+        proc = await asyncio.create_subprocess_exec(
+            *cmd,
+            cwd=str(workspace),
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+        )
+    except FileNotFoundError:
+        return "", "opencode binary was not found on PATH"
+    except OSError as exc:
+        return "", f"could not start opencode: {exc}"
+
+    deadline = time.monotonic() + AGENT_TIMEOUT
+    output_parts: list[str] = []
+    error_text = ""
+    stderr_task = (
+        asyncio.create_task(proc.stderr.read())
+        if proc.stderr is not None
+        else None
+    )
+
+    try:
+        while True:
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                proc.kill()
+                await proc.wait()
+                raise asyncio.TimeoutError()
+            try:
+                raw_line = await asyncio.wait_for(
+                    proc.stdout.readline(), timeout=remaining
+                )
+            except asyncio.TimeoutError:
+                proc.kill()
+                await proc.wait()
+                raise
+            if not raw_line:
+                break
+            line = raw_line.decode("utf-8", errors="replace").strip()
+            if not line:
+                continue
+            try:
+                event = json.loads(line)
+            except json.JSONDecodeError:
+                output_parts.append(line)
+                if emit:
+                    emit({"token": line})
+                continue
+            if not isinstance(event, dict):
+                continue
+            event_type = str(event.get("type") or "").strip().lower()
+            part = event.get("part") if isinstance(event.get("part"), dict) else {}
+            if event_type == "text":
+                text = part.get("text") or event.get("text") or event.get("content")
+                if isinstance(text, str) and text:
+                    output_parts.append(text)
+                    if emit:
+                        emit({"token": text})
+            elif event_type in ("tool_use", "tool-use", "tool"):
+                name = (
+                    part.get("tool")
+                    or part.get("name")
+                    or event.get("tool")
+                    or event.get("name")
+                    or ""
+                )
+                arguments = (
+                    part.get("input")
+                    or part.get("arguments")
+                    or event.get("input")
+                    or {}
+                )
+                if emit:
+                    emit(
+                        {
+                            "name": str(name),
+                            "input": str(arguments)[:200],
+                            "type": "tool",
+                        }
+                    )
+            elif event_type == "error":
+                err = part.get("text") or event.get("text") or event.get("error")
+                if err:
+                    error_text = str(err)
+            else:
+                text = part.get("text") or event.get("text")
+                if isinstance(text, str) and text:
+                    output_parts.append(text)
+                    if emit:
+                        emit({"token": text})
+    finally:
+        if proc.returncode is None:
+            try:
+                await asyncio.wait_for(proc.wait(), timeout=5)
+            except asyncio.TimeoutError:
+                proc.kill()
+                await proc.wait()
+
+    stderr = b""
+    if stderr_task is not None:
+        try:
+            stderr = await stderr_task
+        except Exception:
+            pass
+    stderr_text = stderr.decode("utf-8", errors="replace").strip()
+    if proc.returncode not in (0, None) and not error_text:
+        error_text = (
+            stderr_text.splitlines()[-1][:400]
+            if stderr_text
+            else f"opencode exited with status {proc.returncode}"
+        )
+
+    output = "\n".join(part for part in output_parts if part).strip()
+    if error_text:
+        output = (output + "\n" if output else "") + f"Error: {error_text}"
+    return output, error_text
+
+
 # ── Token estimation ──────────────────────────────────────────────────────────
 try:
     import tiktoken
@@ -2598,6 +2761,19 @@ def make_dashboard():
 
     no_rows = '<tr><td colspan="6" class="empty">No requests yet — send a message below</td></tr>'
 
+    _timeout_choices = [120, 300, 600, 900, 1200, 1800, 2400, 3600, 5400, 7200]
+    if AGENT_TIMEOUT not in _timeout_choices:
+        _timeout_choices.append(AGENT_TIMEOUT)
+        _timeout_choices.sort()
+    timeout_options = "".join(
+        '<option value="{t}"{sel}>{label}</option>'.format(
+            t=t,
+            sel=" selected" if t == AGENT_TIMEOUT else "",
+            label=(f"{t // 60} min ({t}s)" if t >= 60 and t % 60 == 0 else f"{t}s"),
+        )
+        for t in _timeout_choices
+    )
+
     return f"""<!DOCTYPE html>
 <html lang="en">
 <head>
@@ -2882,6 +3058,13 @@ tr.cloud-off td{{background:#0a1a2e!important;color:#22c55e!important;border-top
             </select>
           </div>
           <div class="param-group">
+            <span class="param-label">Timeout:</span>
+            <select id="timeoutSelect" onchange="updateAgentTimeout(this.value)" title="Agent wall-clock timeout" style="background:var(--bg);border:1px solid var(--border);border-radius:2px;padding:2px 4px;color:var(--accent);font-size:10px;font-family:'JetBrains Mono',monospace">
+              {timeout_options}
+            </select>
+            <span class="param-val" id="timeoutVal">{AGENT_TIMEOUT}s</span>
+          </div>
+          <div class="param-group">
             <span class="param-label">Min score:</span>
             <input type="range" class="param-slider" id="minscoreSlider" min="0.0" max="1.0" step="0.05" value="{MIN_SCORE}" oninput="updateMinScore()">
             <span class="param-val" id="minscoreVal">{MIN_SCORE}</span>
@@ -2894,6 +3077,8 @@ tr.cloud-off td{{background:#0a1a2e!important;color:#22c55e!important;border-top
           <div class="param-group" style="border-top:1px solid var(--border);padding-top:6px;margin-top:4px">
             <span class="param-label">Mode:</span>
             <button class="agent-toggle" id="agentToggle" onclick="toggleAgentMode()" title="Toggle Agent mode (tool-use)" style="font-size:10px;padding:4px 8px">🤖 Agent OFF</button>
+            <button class="opencode-toggle" id="opencodeToggle" onclick="toggleOpenCodeMode()" title="Route Agent runs through the opencode CLI" style="background:{'var(--accent)' if USE_OPENCODE else 'transparent'};border:1px solid {'var(--accent)' if USE_OPENCODE else 'var(--border)'};color:{'#000' if USE_OPENCODE else 'var(--muted)'};border-radius:3px;padding:4px 8px;font-size:10px;cursor:pointer;font-family:'JetBrains Mono',monospace;font-weight:{'600' if USE_OPENCODE else '400'}">⌨ OpenCode {'ON' if USE_OPENCODE else 'OFF'}</button>
+            <label class="unattended-lbl{' show' if USE_OPENCODE else ''}" id="opencodeCacheLbl" title="Pass -c to continue the last OpenCode session"><input type="checkbox" id="opencodeCacheChk"{' checked' if OPENCODE_CACHE else ''} onchange="setOpenCodeCache(this.checked)"> -c cache</label>
             <button class="scan-toggle" id="scanToggle" onclick="toggleScanMode()" title="Scan responses for potential hallucinations" style="font-size:10px;padding:4px 8px">🧪 Scan OFF</button>
             <button class="scan-test" id="scanTestBtn" onclick="testScan()" title="Run a demo scan on known false claims to test highlighting" style="font-size:10px;padding:4px 8px">🔬 Test</button>
             <label class="scan-deep-lbl" id="deepLbl" title="Use Deep Agents harness with sub-agent verification"><input type="checkbox" id="deepChk" onchange="toggleDeepMode(this)"> DEEP</label>
@@ -2943,6 +3128,9 @@ let lastTaskId = null;
 let hybridMode = true;
 let typesafeMode = {'true' if ts_on else 'false'};
 let typesafeKeyPresent = {'true' if ts_key_present else 'false'};
+let opencodeMode = {'true' if USE_OPENCODE else 'false'};
+let opencodeCache = {'true' if OPENCODE_CACHE else 'false'};
+let clientTimeoutMs = {CLIENT_TIMEOUT_MS};
 
 function saveState() {{
   localStorage.setItem('cc_agentMode', agentMode ? '1' : '0');
@@ -3066,6 +3254,7 @@ function loadState() {{
       ? 'Agent: use tools, run code, search the web…'
       : 'Type a message… (Enter to send, Shift+Enter for newline). Try: /clear, /help';
   }}
+  updateOpenCodeUI();
 }}
 
 function resetDefaults() {{
@@ -3850,6 +4039,64 @@ function updateTopK() {{
   }}
 }}
 
+function updateAgentTimeout(secs) {{
+  const n = parseInt(secs, 10);
+  if (!n || n < 30) return;
+  clientTimeoutMs = n * 1000;
+  const val = document.getElementById('timeoutVal');
+  if (val) val.textContent = n + 's';
+  fetch('/api/settings', {{
+    method: 'POST',
+    headers: {{'Content-Type': 'application/json'}},
+    body: JSON.stringify({{agent_timeout: n}})
+  }}).then(r => r.json()).then(d => {{
+    if (d && d.client_timeout_ms) {{
+      clientTimeoutMs = d.client_timeout_ms;
+      if (val) val.textContent = d.agent_timeout + 's';
+    }}
+  }}).catch(e => console.warn('agent_timeout sync failed', e));
+  saveState();
+}}
+
+function updateOpenCodeUI() {{
+  const btn = document.getElementById('opencodeToggle');
+  if (btn) {{
+    btn.textContent = opencodeMode ? '⌨ OpenCode ON' : '⌨ OpenCode OFF';
+    btn.style.background = opencodeMode ? 'var(--accent)' : 'transparent';
+    btn.style.borderColor = opencodeMode ? 'var(--accent)' : 'var(--border)';
+    btn.style.color = opencodeMode ? '#000' : 'var(--muted)';
+    btn.style.fontWeight = opencodeMode ? '600' : '400';
+  }}
+  const lbl = document.getElementById('opencodeCacheLbl');
+  if (lbl) lbl.classList.toggle('show', opencodeMode);
+  const chk = document.getElementById('opencodeCacheChk');
+  if (chk) chk.checked = opencodeCache;
+}}
+
+function toggleOpenCodeMode() {{
+  opencodeMode = !opencodeMode;
+  updateOpenCodeUI();
+  fetch('/api/settings', {{
+    method: 'POST',
+    headers: {{'Content-Type': 'application/json'}},
+    body: JSON.stringify({{use_opencode: opencodeMode}})
+  }}).then(r => r.json()).then(d => {{
+    if (d && typeof d.opencode_cache === 'boolean') {{
+      opencodeCache = d.opencode_cache;
+      updateOpenCodeUI();
+    }}
+  }}).catch(e => console.warn('use_opencode sync failed', e));
+}}
+
+function setOpenCodeCache(checked) {{
+  opencodeCache = !!checked;
+  fetch('/api/settings', {{
+    method: 'POST',
+    headers: {{'Content-Type': 'application/json'}},
+    body: JSON.stringify({{opencode_cache: opencodeCache}})
+  }}).catch(e => console.warn('opencode_cache sync failed', e));
+}}
+
 function getGenerationParams() {{
   const temp = parseFloat(document.getElementById('tempSlider').value);
   const topP = parseFloat(document.getElementById('toppSlider').value);
@@ -4360,7 +4607,7 @@ async function sendMessage(taskIdOverride) {{
     if (agentTimeout) clearTimeout(agentTimeout);
     agentTimeout = setTimeout(() => {{
       if (abortController) abortController.abort();
-    }}, {CLIENT_TIMEOUT_MS});
+    }}, clientTimeoutMs);
   }}
   armAgentTimeout();
   setSendStop();
@@ -4535,7 +4782,7 @@ async function sendMessage(taskIdOverride) {{
     }} catch(e) {{
       removeTyping();
       if (e.name === 'AbortError') {{
-        if (!fullText) appendMsg('assistant', '⏹ Stopped after ' + Math.round({CLIENT_TIMEOUT_MS}/1000) + 's — no response from model.', '');
+        if (!fullText) appendMsg('assistant', '⏹ Stopped after ' + Math.round(clientTimeoutMs/1000) + 's — no response from model.', '');
       }} else {{
         appendMsg('assistant', '\u274c Agent network error: ' + e.message, '');
         input.focus();
@@ -4653,7 +4900,7 @@ async function sendMessage(taskIdOverride) {{
     clearTimeout(agentTimeout);
     removeTyping();
     if (e.name === 'AbortError') {{
-      if (!fullText) appendMsg('assistant', '⏹ Stopped after ' + Math.round({CLIENT_TIMEOUT_MS}/1000) + 's — no response from model.', '');
+      if (!fullText) appendMsg('assistant', '⏹ Stopped after ' + Math.round(clientTimeoutMs/1000) + 's — no response from model.', '');
     }} else {{
       appendMsg('assistant', '\u274c Network error: ' + e.message, '');
     }}
@@ -6240,6 +6487,7 @@ class DashboardHandler(_SuppressBrokenPipe, BaseHTTPRequestHandler):
             self.send_response(200)
             self.send_header("Content-Type", "text/html; charset=utf-8")
             self.send_header("Content-Length", str(len(page)))
+            self.send_header("Cache-Control", "no-cache, no-store, must-revalidate")
             self.end_headers()
             self.wfile.write(page)
 
@@ -6546,6 +6794,77 @@ class DashboardHandler(_SuppressBrokenPipe, BaseHTTPRequestHandler):
                         TOP_K = int(body["top_k"])
                     print(f"[contextcut] Top-K updated live: {TOP_K}")
                     resp = json.dumps({"ok": True, "top_k": TOP_K}).encode()
+                    self.send_response(200)
+                    self.send_header("Content-Type", "application/json")
+                    self.send_header("Content-Length", str(len(resp)))
+                    self.end_headers()
+                    self.wfile.write(resp)
+                    return
+                if "agent_timeout" in body:
+                    global AGENT_TIMEOUT, CLIENT_TIMEOUT_MS
+                    try:
+                        secs = int(float(body["agent_timeout"]))
+                    except (TypeError, ValueError):
+                        raise ValueError("agent_timeout must be a number")
+                    secs = max(30, min(7200, secs))
+                    with _lock:
+                        AGENT_TIMEOUT = secs
+                        CLIENT_TIMEOUT_MS = secs * 1000
+                    os.environ["CONTEXTCUT_AGENT_TIMEOUT"] = str(secs)
+                    os.environ["CONTEXTCUT_CLIENT_TIMEOUT"] = str(secs)
+                    _persist_env_key("CONTEXTCUT_AGENT_TIMEOUT", str(secs))
+                    _persist_env_key("CONTEXTCUT_CLIENT_TIMEOUT", str(secs))
+                    print(f"[contextcut] Agent timeout updated live: {AGENT_TIMEOUT}s")
+                    resp = json.dumps({
+                        "ok": True,
+                        "agent_timeout": AGENT_TIMEOUT,
+                        "client_timeout_ms": CLIENT_TIMEOUT_MS,
+                    }).encode()
+                    self.send_response(200)
+                    self.send_header("Content-Type", "application/json")
+                    self.send_header("Content-Length", str(len(resp)))
+                    self.end_headers()
+                    self.wfile.write(resp)
+                    return
+                if "use_opencode" in body or "opencode_cache" in body:
+                    global USE_OPENCODE, OPENCODE_CACHE
+                    if "use_opencode" in body:
+                        val = body.get("use_opencode")
+                        USE_OPENCODE = (
+                            val
+                            if isinstance(val, bool)
+                            else str(val).strip().lower() in ("1", "true", "yes", "on")
+                        )
+                        os.environ["CONTEXTCUT_USE_OPENCODE"] = (
+                            "1" if USE_OPENCODE else "0"
+                        )
+                        _persist_env_key(
+                            "CONTEXTCUT_USE_OPENCODE",
+                            "1" if USE_OPENCODE else "0",
+                        )
+                    if "opencode_cache" in body:
+                        val = body.get("opencode_cache")
+                        OPENCODE_CACHE = (
+                            val
+                            if isinstance(val, bool)
+                            else str(val).strip().lower() in ("1", "true", "yes", "on")
+                        )
+                        os.environ["CONTEXTCUT_OPENCODE_CACHE"] = (
+                            "1" if OPENCODE_CACHE else "0"
+                        )
+                        _persist_env_key(
+                            "CONTEXTCUT_OPENCODE_CACHE",
+                            "1" if OPENCODE_CACHE else "0",
+                        )
+                    print(
+                        "[contextcut] OpenCode "
+                        f"use={USE_OPENCODE} cache={OPENCODE_CACHE}"
+                    )
+                    resp = json.dumps({
+                        "ok": True,
+                        "use_opencode": USE_OPENCODE,
+                        "opencode_cache": OPENCODE_CACHE,
+                    }).encode()
                     self.send_response(200)
                     self.send_header("Content-Type", "application/json")
                     self.send_header("Content-Length", str(len(resp)))
@@ -7291,6 +7610,117 @@ class DashboardHandler(_SuppressBrokenPipe, BaseHTTPRequestHandler):
 
                 add_to_history(sid, "user", message)
                 session = _sessions[sid]
+
+                if USE_OPENCODE:
+                    oc_model = _opencode_chat_model(model_name)
+                    print(
+                        f"[{datetime.now().strftime('%H:%M:%S')}] [Agent] ⌨ OpenCode run "
+                        f"(model={oc_model or 'default'}, cache={OPENCODE_CACHE})",
+                        flush=True,
+                    )
+
+                    def _oc_emit(data):
+                        payload = dict(data)
+                        evt = payload.pop("type", "message")
+                        try:
+                            self.wfile.write(
+                                f"event: {evt}\ndata: {json.dumps(payload)}\n\n".encode()
+                            )
+                            self.wfile.flush()
+                        except (BrokenPipeError, ConnectionResetError, OSError):
+                            pass
+
+                    if not is_stream:
+                        try:
+                            output, _oc_err = asyncio.run(
+                                _run_opencode_chat(
+                                    message,
+                                    model=oc_model,
+                                    cache=OPENCODE_CACHE,
+                                )
+                            )
+                        except asyncio.TimeoutError:
+                            output = (
+                                f"Agent timed out ({AGENT_TIMEOUT}s wall-clock). "
+                                "Try simplifying the prompt."
+                            )
+                        add_to_history(sid, "assistant", output)
+                        record(
+                            {
+                                "ts": datetime.now().strftime("%H:%M:%S"),
+                                "query": message[:120],
+                                "tokens_before": count_tokens(message),
+                                "tokens_after": count_tokens(message)
+                                + count_tokens(output),
+                                "ctx_limit": CTX_LIMIT,
+                                "pct": round(
+                                    (count_tokens(message) + count_tokens(output))
+                                    / CTX_LIMIT
+                                    * 100,
+                                    1,
+                                ),
+                                "hits": [],
+                                "type": "agent",
+                            }
+                        )
+                        resp = json.dumps(
+                            {"response": output, "task_id": task_id}
+                        ).encode()
+                        self.send_response(200)
+                        self.send_header("Content-Type", "application/json")
+                        self.send_header("Content-Length", str(len(resp)))
+                        self.end_headers()
+                        self.wfile.write(resp)
+                    else:
+                        self.send_response(200)
+                        self.send_header("Content-Type", "text/event-stream")
+                        self.send_header("Cache-Control", "no-cache")
+                        self.send_header("Connection", "close")
+                        self.end_headers()
+                        try:
+                            output, _oc_err = asyncio.run(
+                                _run_opencode_chat(
+                                    message,
+                                    model=oc_model,
+                                    cache=OPENCODE_CACHE,
+                                    emit=_oc_emit,
+                                )
+                            )
+                        except asyncio.TimeoutError:
+                            output = (
+                                f"Agent timed out ({AGENT_TIMEOUT}s wall-clock). "
+                                "Try simplifying the prompt."
+                            )
+                            _oc_emit({"error": output})
+                        try:
+                            self.wfile.write(
+                                f"event: checkpoint\ndata: {json.dumps({'task_id': task_id})}\n\n".encode()
+                            )
+                            self.wfile.write(b"data: [DONE]\n\n")
+                            self.wfile.flush()
+                        except BrokenPipeError:
+                            pass
+                        add_to_history(sid, "assistant", output)
+                        record(
+                            {
+                                "ts": datetime.now().strftime("%H:%M:%S"),
+                                "query": message[:120],
+                                "tokens_before": count_tokens(message),
+                                "tokens_after": count_tokens(message)
+                                + count_tokens(output),
+                                "ctx_limit": CTX_LIMIT,
+                                "pct": round(
+                                    (count_tokens(message) + count_tokens(output))
+                                    / CTX_LIMIT
+                                    * 100,
+                                    1,
+                                ),
+                                "hits": [],
+                                "type": "agent",
+                            }
+                        )
+                    return
+
                 chat_history = build_messages_from_history(session["history"][:-1])
                 agent_warning = model_tool_template_warning(
                     model_name, get_current_upstream(), _provider_name

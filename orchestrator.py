@@ -20,6 +20,7 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+import os
 import re
 import shlex
 import shutil
@@ -43,6 +44,11 @@ DEFAULT_MAX_TOKENS = 16384
 DEFAULT_VERIFIER_MAX_TOKENS = 8192
 DEFAULT_CHECK_TIMEOUT = 300
 MAX_REPORT_CHARS = 12000
+
+
+def _env_flag(name: str) -> bool:
+    return os.environ.get(name, "").strip().lower() in ("1", "true", "yes", "on")
+
 
 IGNORE_DIRS = {
     ".git",
@@ -1308,6 +1314,24 @@ def gate_checks(checks: Sequence[CheckResult]) -> GateResult:
     return GateResult(passed=not failures, failures=_unique(failures), warnings=_unique(warnings))
 
 
+def _opencode_model(args: argparse.Namespace, agent: str) -> str | None:
+    explicit = getattr(args, "opencode_model", None)
+    if explicit:
+        return str(explicit)
+    specific = os.environ.get(f"CONTEXTCUT_OPENCODE_MODEL_{agent.upper()}", "").strip()
+    if specific:
+        return specific
+    general = os.environ.get("CONTEXTCUT_OPENCODE_MODEL", "").strip()
+    if general:
+        return general
+    native = getattr(args, "implementer_model", None)
+    if agent == "plan":
+        native = getattr(args, "verifier_model", None) or native
+    if native and "/" in str(native):
+        return str(native)
+    return None
+
+
 def run_agent(
     prompt: str,
     *,
@@ -1321,7 +1345,24 @@ def run_agent(
     max_tokens: int,
     ctx_limit: int,
     progress: Callable[[str], None],
+    use_opencode: bool = False,
+    agent_mode: str = "build",
+    opencode_model: str | None = None,
+    opencode_cache: bool = False,
 ) -> Any:
+    if use_opencode:
+        from coding_agent import run_opencode_task
+
+        return run_opencode_task(
+            prompt,
+            workspace=workspace,
+            agent=agent_mode,
+            model=opencode_model,
+            timeout=timeout,
+            cache=opencode_cache,
+            progress=progress,
+        )
+
     from coding_agent import run_task
 
     return run_task(
@@ -1472,7 +1513,11 @@ def _run_cycle(
         prompt = original_prompt if cycle == 1 else build_fix_prompt(original_prompt, previous_issues)
         prompt = _with_verification_commands(prompt, args.check_command)
         _write_text(cycle_dir / "implementer" / "prompt.txt", prompt)
-        progress(f"[cycle {cycle}] implementer start")
+        use_opencode = bool(getattr(args, "use_opencode", False))
+        progress(
+            f"[cycle {cycle}] implementer start "
+            f"({'opencode agent=build' if use_opencode else 'native'})"
+        )
         before_implementer = file_manifest(source)
         try:
             result = run_agent(
@@ -1487,6 +1532,10 @@ def _run_cycle(
                 max_tokens=args.max_tokens,
                 ctx_limit=args.ctx_limit,
                 progress=progress,
+                use_opencode=use_opencode,
+                agent_mode="build",
+                opencode_model=_opencode_model(args, "build"),
+                opencode_cache=bool(getattr(args, "opencode_cache", False)),
             )
             implementer = _agent_result_dict(result)
         except Exception as exc:
@@ -1588,7 +1637,11 @@ def _run_cycle(
             file_evidence,
         )
         _write_text(cycle_dir / "verifier" / "prompt.txt", verifier_prompt)
-        progress(f"[cycle {cycle}] verifier start")
+        use_opencode = bool(getattr(args, "use_opencode", False))
+        progress(
+            f"[cycle {cycle}] verifier start "
+            f"({'opencode agent=plan' if use_opencode else 'native'})"
+        )
         try:
             result = run_agent(
                 verifier_prompt,
@@ -1602,6 +1655,10 @@ def _run_cycle(
                 max_tokens=args.verifier_max_tokens,
                 ctx_limit=args.ctx_limit,
                 progress=progress,
+                use_opencode=use_opencode,
+                agent_mode="plan",
+                opencode_model=_opencode_model(args, "plan"),
+                opencode_cache=bool(getattr(args, "opencode_cache", False)),
             )
             verifier = _agent_result_dict(result)
         except Exception as exc:
@@ -1819,6 +1876,10 @@ def orchestrate(args: argparse.Namespace, original_prompt: str) -> dict[str, Any
             "baseline": baseline,
             "implementer_model": args.implementer_model,
             "verifier_model": args.verifier_model or args.implementer_model,
+            "use_opencode": bool(getattr(args, "use_opencode", False)),
+            "opencode_model": _opencode_model(args, "build"),
+            "opencode_model_verifier": _opencode_model(args, "plan"),
+            "opencode_cache": bool(getattr(args, "opencode_cache", False)),
             "artifacts": str(artifact_dir),
         },
         "overall": "pass" if final_gate["passed"] else "fail",
@@ -1870,6 +1931,25 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--implementer-run-id", default=None, help="existing implementer run id")
     parser.add_argument("--implementer-model", default=None)
     parser.add_argument("--verifier-model", default=None)
+    parser.add_argument(
+        "--use-opencode",
+        action="store_true",
+        default=_env_flag("CONTEXTCUT_USE_OPENCODE"),
+        help="route implementer/verifier turns through `opencode run` (env: CONTEXTCUT_USE_OPENCODE)",
+    )
+    parser.add_argument(
+        "--opencode-model",
+        default=os.environ.get("CONTEXTCUT_OPENCODE_MODEL", "").strip() or None,
+        help="model for `opencode run --model` (provider/model); per-agent overrides via "
+        "CONTEXTCUT_OPENCODE_MODEL_BUILD / CONTEXTCUT_OPENCODE_MODEL_PLAN",
+    )
+    parser.add_argument(
+        "--opencode-cache",
+        action="store_true",
+        default=_env_flag("CONTEXTCUT_OPENCODE_CACHE"),
+        help="pass -c to `opencode run` to continue the last session "
+        "(env: CONTEXTCUT_OPENCODE_CACHE)",
+    )
     parser.add_argument("--base-url", default=None)
     parser.add_argument("--api-key", default=None)
     parser.add_argument("--implementer-max-steps", type=int, default=DEFAULT_IMPLEMENTER_STEPS)
@@ -1923,6 +2003,10 @@ def main(argv: Sequence[str] | None = None) -> int:
                         "baseline": args.baseline,
                         "implementer_model": args.implementer_model,
                         "verifier_model": args.verifier_model or args.implementer_model,
+                        "use_opencode": args.use_opencode,
+                        "opencode_model": _opencode_model(args, "build"),
+                        "opencode_model_verifier": _opencode_model(args, "plan"),
+                        "opencode_cache": args.opencode_cache,
                         "implementer_max_steps": args.implementer_max_steps,
                         "verifier_max_steps": args.verifier_max_steps,
                         "implementer_timeout": args.implementer_timeout,

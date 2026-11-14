@@ -4,6 +4,7 @@ Tests for HTTP endpoint routing of ``DashboardHandler`` and ``ProxyHandler``.
 Uses the ``make_handler`` fixture to construct handlers without a running server.
 """
 
+import asyncio
 import json
 import urllib.error
 from pathlib import Path
@@ -69,6 +70,24 @@ class TestDashboardHandlerGET:
         assert "getElementById('unattendedChk')" not in load_state
         assert "async function syncShellModeFromUi()" in html
         assert "initSession().then(() => syncShellModeFromUi())" in html
+
+    def test_dashboard_has_timeout_dropdown(self, make_handler):
+        status, raw = make_handler("/", "GET")
+        assert status == 200
+        html = raw.decode("utf-8", errors="replace")
+        assert 'id="timeoutSelect"' in html
+        assert 'id="timeoutVal"' in html
+        assert "function updateAgentTimeout(" in html
+        assert "let clientTimeoutMs =" in html
+
+    def test_dashboard_has_opencode_controls(self, make_handler):
+        status, raw = make_handler("/", "GET")
+        assert status == 200
+        html = raw.decode("utf-8", errors="replace")
+        assert 'id="opencodeToggle"' in html
+        assert 'id="opencodeCacheChk"' in html
+        assert "function toggleOpenCodeMode(" in html
+        assert "function setOpenCodeCache(" in html
 
     def test_settings_returns_html(self, make_handler):
         status, raw = make_handler("/settings", "GET")
@@ -175,6 +194,69 @@ class TestDashboardHandlerPOST:
         from qdrant_proxy_final import TOP_K
 
         assert TOP_K == 10
+
+    def test_settings_agent_timeout(self, make_handler, monkeypatch):
+        import qdrant_proxy_final as qpf
+
+        monkeypatch.setattr(qpf, "_persist_env_key", lambda *a, **k: None)
+        old_agent, old_client = qpf.AGENT_TIMEOUT, qpf.CLIENT_TIMEOUT_MS
+        monkeypatch.setenv("CONTEXTCUT_AGENT_TIMEOUT", str(old_agent))
+        monkeypatch.setenv("CONTEXTCUT_CLIENT_TIMEOUT", str(old_client // 1000))
+        try:
+            body = json.dumps({"agent_timeout": 1800}).encode()
+            status, raw = make_handler("/api/settings", "POST", body)
+            assert status == 200
+            data = json.loads(raw.split(b"\r\n\r\n", 1)[-1])
+            assert data["agent_timeout"] == 1800
+            assert data["client_timeout_ms"] == 1800 * 1000
+            assert qpf.AGENT_TIMEOUT == 1800
+            assert qpf.CLIENT_TIMEOUT_MS == 1800 * 1000
+        finally:
+            qpf.AGENT_TIMEOUT = old_agent
+            qpf.CLIENT_TIMEOUT_MS = old_client
+
+    def test_settings_opencode_toggles(self, make_handler, monkeypatch):
+        import qdrant_proxy_final as qpf
+
+        monkeypatch.setattr(qpf, "_persist_env_key", lambda *a, **k: None)
+        old_use, old_cache = qpf.USE_OPENCODE, qpf.OPENCODE_CACHE
+        monkeypatch.setenv("CONTEXTCUT_USE_OPENCODE", "1" if old_use else "0")
+        monkeypatch.setenv("CONTEXTCUT_OPENCODE_CACHE", "1" if old_cache else "0")
+        try:
+            body = json.dumps({"use_opencode": True}).encode()
+            status, raw = make_handler("/api/settings", "POST", body)
+            assert status == 200
+            data = json.loads(raw.split(b"\r\n\r\n", 1)[-1])
+            assert data["use_opencode"] is True
+            assert qpf.USE_OPENCODE is True
+
+            body = json.dumps({"opencode_cache": True}).encode()
+            status, raw = make_handler("/api/settings", "POST", body)
+            assert status == 200
+            data = json.loads(raw.split(b"\r\n\r\n", 1)[-1])
+            assert data["opencode_cache"] is True
+            assert qpf.OPENCODE_CACHE is True
+        finally:
+            qpf.USE_OPENCODE = old_use
+            qpf.OPENCODE_CACHE = old_cache
+
+    def test_settings_agent_timeout_clamped(self, make_handler, monkeypatch):
+        import qdrant_proxy_final as qpf
+
+        monkeypatch.setattr(qpf, "_persist_env_key", lambda *a, **k: None)
+        old_agent, old_client = qpf.AGENT_TIMEOUT, qpf.CLIENT_TIMEOUT_MS
+        monkeypatch.setenv("CONTEXTCUT_AGENT_TIMEOUT", str(old_agent))
+        monkeypatch.setenv("CONTEXTCUT_CLIENT_TIMEOUT", str(old_client // 1000))
+        try:
+            body = json.dumps({"agent_timeout": 99999}).encode()
+            status, raw = make_handler("/api/settings", "POST", body)
+            assert status == 200
+            data = json.loads(raw.split(b"\r\n\r\n", 1)[-1])
+            assert data["agent_timeout"] == 7200
+            assert qpf.AGENT_TIMEOUT == 7200
+        finally:
+            qpf.AGENT_TIMEOUT = old_agent
+            qpf.CLIENT_TIMEOUT_MS = old_client
 
     @patch("qdrant_proxy_final.CredentialManager")
     def test_embed_config(self, mock_creds, make_handler):
@@ -314,3 +396,61 @@ class TestProxyHandler:
             status, _ = make_handler("/v1/models", "GET", handler_cls=ProxyHandler)
         assert status == 502
         assert m_urlopen.call_count == 1
+
+
+def test_opencode_chat_stream_parses_text_and_forwards_tokens(tmp_path, monkeypatch):
+    import qdrant_proxy_final as qpf
+
+    lines = [
+        json.dumps({"type": "text", "part": {"text": "hello"}}) + "\n",
+        json.dumps({"type": "tool_use", "part": {"tool": "bash"}}) + "\n",
+        json.dumps({"type": "text", "part": {"text": " world"}}) + "\n",
+    ]
+    captured = {}
+
+    class _Stream:
+        def __init__(self, data=b""):
+            self._lines = list(lines)
+            self._data = data
+
+        async def readline(self):
+            return self._lines.pop(0).encode() if self._lines else b""
+
+        async def read(self):
+            return self._data
+
+    class _Proc:
+        returncode = None
+
+        def __init__(self):
+            self.stdout = _Stream()
+            self.stderr = _Stream()
+
+        async def wait(self):
+            self.returncode = 0
+            return 0
+
+        def kill(self):
+            self.returncode = -9
+
+    async def fake_exec(*cmd, **kwargs):
+        captured["cmd"] = cmd
+        captured["cwd"] = kwargs.get("cwd")
+        return _Proc()
+
+    monkeypatch.setattr(qpf.asyncio, "create_subprocess_exec", fake_exec)
+    monkeypatch.setattr(qpf, "OPENCODE_WORKSPACE", str(tmp_path))
+
+    events = []
+    output, error = asyncio.run(
+        qpf._run_opencode_chat("hello", model="provider/model", cache=True, emit=events.append)
+    )
+
+    assert error == ""
+    assert output == "hello\n world"
+    assert {"token": "hello"} in events
+    assert {"token": " world"} in events
+    assert any(e.get("name") == "bash" for e in events)
+    assert "-c" in captured["cmd"]
+    assert "--model" in captured["cmd"]
+    assert captured["cwd"] == str(tmp_path)
