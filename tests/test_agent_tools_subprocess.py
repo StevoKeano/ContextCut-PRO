@@ -56,6 +56,16 @@ class TestShellExec:
             assert "BLOCKED" in result, f"{prefix!r} should be blocked"
         mock_subprocess.assert_not_called()
 
+    def test_uses_workspace_cwd(self, mock_subprocess, tmp_path, monkeypatch):
+        import agent_handler
+
+        monkeypatch.setattr(agent_handler, "AGENT_WORKSPACE", tmp_path)
+        mock_subprocess.return_value = subprocess.CompletedProcess(
+            args=["echo", "hi"], returncode=0, stdout="hello\n", stderr=""
+        )
+        agent_handler.shell_exec.invoke({"command": "echo hello"})
+        assert mock_subprocess.call_args[1]["cwd"] == str(tmp_path)
+
 
 class TestRunPython:
     def test_stdout_output(self, mock_subprocess):
@@ -91,6 +101,16 @@ class TestRunPython:
         )
         result = run_python.invoke({"code": "while True: pass", "timeout": 5})
         assert "timed out" in result.lower()
+
+    def test_uses_workspace_cwd(self, mock_subprocess, tmp_path, monkeypatch):
+        import agent_handler
+
+        monkeypatch.setattr(agent_handler, "AGENT_WORKSPACE", tmp_path)
+        mock_subprocess.return_value = subprocess.CompletedProcess(
+            args=["python3", "-c", "print('hi')"], returncode=0, stdout="hi\n", stderr=""
+        )
+        agent_handler.run_python.invoke({"code": "print('hi')", "timeout": 30})
+        assert mock_subprocess.call_args[1]["cwd"] == str(tmp_path)
 
 
 class TestDiffFiles:

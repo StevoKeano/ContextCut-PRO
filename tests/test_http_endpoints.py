@@ -86,8 +86,16 @@ class TestDashboardHandlerGET:
         html = raw.decode("utf-8", errors="replace")
         assert 'id="opencodeToggle"' in html
         assert 'id="opencodeCacheChk"' in html
+        assert 'id="opencodeNextRunHint"' in html
+        assert 'id="agentWorkspaceInput"' in html
+        assert 'id="agentWorkspaceHint"' in html
+        assert "applies to the next run" in html
         assert "function toggleOpenCodeMode(" in html
         assert "function setOpenCodeCache(" in html
+        assert "function setWorkspace(" in html
+        assert "data.type === 'done'" in html
+        assert "toolCount" in html
+        assert ".bubble:empty" in html
 
     def test_settings_returns_html(self, make_handler):
         status, raw = make_handler("/settings", "GET")
@@ -239,6 +247,88 @@ class TestDashboardHandlerPOST:
         finally:
             qpf.USE_OPENCODE = old_use
             qpf.OPENCODE_CACHE = old_cache
+
+    def test_settings_workspace(self, make_handler, monkeypatch, tmp_path):
+        import agent_handler
+        import qdrant_proxy_final as qpf
+
+        persisted = []
+        monkeypatch.setattr(
+            qpf, "_persist_env_key", lambda k, v: persisted.append((k, v))
+        )
+        old_agent_ws = qpf.AGENT_WORKSPACE
+        old_oc_ws = qpf.OPENCODE_WORKSPACE
+        old_handler_ws = agent_handler.AGENT_WORKSPACE
+        monkeypatch.setenv("CONTEXTCUT_AGENT_WORKSPACE", old_agent_ws)
+        monkeypatch.setenv("CONTEXTCUT_OPENCODE_WORKSPACE", old_oc_ws)
+        try:
+            body = json.dumps({"workspace": str(tmp_path)}).encode()
+            status, raw = make_handler("/api/settings", "POST", body)
+            assert status == 200
+            data = json.loads(raw.split(b"\r\n\r\n", 1)[-1])
+            expected = str(tmp_path.resolve())
+            assert data["workspace"] == expected
+            assert qpf.AGENT_WORKSPACE == expected
+            assert qpf.OPENCODE_WORKSPACE == expected
+            assert agent_handler.AGENT_WORKSPACE == tmp_path.resolve()
+            assert ("CONTEXTCUT_AGENT_WORKSPACE", expected) in persisted
+            assert ("CONTEXTCUT_OPENCODE_WORKSPACE", expected) in persisted
+        finally:
+            qpf.AGENT_WORKSPACE = old_agent_ws
+            qpf.OPENCODE_WORKSPACE = old_oc_ws
+            agent_handler.AGENT_WORKSPACE = old_handler_ws
+
+    def test_settings_workspace_rejects_missing_dir(
+        self, make_handler, monkeypatch, tmp_path
+    ):
+        import qdrant_proxy_final as qpf
+
+        monkeypatch.setattr(qpf, "_persist_env_key", lambda *a, **k: None)
+        old_agent_ws = qpf.AGENT_WORKSPACE
+        old_oc_ws = qpf.OPENCODE_WORKSPACE
+        try:
+            body = json.dumps({"workspace": str(tmp_path / "missing")}).encode()
+            status, _ = make_handler("/api/settings", "POST", body)
+            assert status == 400
+            assert qpf.AGENT_WORKSPACE == old_agent_ws
+            assert qpf.OPENCODE_WORKSPACE == old_oc_ws
+        finally:
+            qpf.AGENT_WORKSPACE = old_agent_ws
+            qpf.OPENCODE_WORKSPACE = old_oc_ws
+
+    def test_agent_opencode_non_stream_does_not_shadow_asyncio(
+        self, make_handler, monkeypatch
+    ):
+        import qdrant_proxy_final as qpf
+
+        class _FakeCheckpointManager:
+            def __init__(self, *args, **kwargs):
+                pass
+
+            def exists(self, task_id):
+                return False
+
+            def save_task_meta(self, *args, **kwargs):
+                return None
+
+            def build_resume_context(self, task_id):
+                return None
+
+        async def fake_run(prompt, **kwargs):
+            return ("opencode ok", "")
+
+        monkeypatch.setattr(qpf, "USE_OPENCODE", True)
+        monkeypatch.setattr(qpf, "OPENCODE_CACHE", False)
+        monkeypatch.setattr(qpf, "_run_opencode_chat", fake_run)
+        monkeypatch.setattr("agent_handler.CheckpointManager", _FakeCheckpointManager)
+
+        body = json.dumps(
+            {"message": "hello", "stream": False, "model": "test-model"}
+        ).encode()
+        status, raw = make_handler("/api/agent", "POST", body)
+        assert status == 200
+        data = json.loads(raw.split(b"\r\n\r\n", 1)[-1])
+        assert data["response"] == "opencode ok"
 
     def test_settings_agent_timeout_clamped(self, make_handler, monkeypatch):
         import qdrant_proxy_final as qpf
@@ -454,3 +544,17 @@ def test_opencode_chat_stream_parses_text_and_forwards_tokens(tmp_path, monkeypa
     assert "-c" in captured["cmd"]
     assert "--model" in captured["cmd"]
     assert captured["cwd"] == str(tmp_path)
+
+
+def test_agent_completion_text_fallback():
+    import qdrant_proxy_final as qpf
+
+    assert (
+        qpf.agent_completion_text(0)
+        == "✅ Agent finished but returned no textual response."
+    )
+    assert (
+        qpf.agent_completion_text(1)
+        == "✅ Agent finished after 1 tool call, but returned no textual summary."
+    )
+    assert "after 3 tool calls" in qpf.agent_completion_text(3)

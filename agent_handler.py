@@ -52,6 +52,44 @@ MAX_WEB_RESULTS = 10
 MAX_TOP_K = 20
 
 
+def _normalize_workspace(path: str | Path | None) -> Path:
+    raw = str(path or "").strip()
+    candidate = Path(raw).expanduser() if raw else Path.cwd()
+    try:
+        candidate = candidate.resolve()
+    except OSError:
+        candidate = Path.cwd().resolve()
+    if candidate.is_file():
+        candidate = candidate.parent
+    return candidate
+
+
+AGENT_WORKSPACE = _normalize_workspace(
+    os.environ.get("CONTEXTCUT_AGENT_WORKSPACE")
+    or os.environ.get("CONTEXTCUT_OPENCODE_WORKSPACE")
+    or os.getcwd()
+)
+
+
+def set_agent_workspace(path: str | Path) -> Path:
+    """Set the active workspace used to resolve relative tool paths."""
+    global AGENT_WORKSPACE
+    candidate = Path(path).expanduser().resolve()
+    if not candidate.is_dir():
+        raise ValueError(f"workspace is not a directory: {candidate}")
+    AGENT_WORKSPACE = candidate
+    os.environ["CONTEXTCUT_AGENT_WORKSPACE"] = str(candidate)
+    return candidate
+
+
+def resolve_agent_path(path: str | Path) -> Path:
+    """Resolve *path* against AGENT_WORKSPACE when it is relative."""
+    p = Path(str(path)).expanduser()
+    if not p.is_absolute():
+        p = AGENT_WORKSPACE / p
+    return p.resolve()
+
+
 def _stream_chunk_timeout_setting() -> float | None:
     """Return the per-chunk stream stall timeout in seconds.
 
@@ -1102,10 +1140,14 @@ Return ONLY the JSON array, nothing else."""
 @tool
 def shell_exec(command: str) -> str:
     """
-    Execute a bash-like command without a shell and return stdout + stderr.
-    ONLY for system operations: git, compilation, background processes, ffmpeg.
-    Shell metacharacters (;, |, &, $(), backticks) are rejected. Commands
-    outside the allowlist require CONTEXTCUT_AGENT_SHELL_ALLOWLIST_ONLY=0.
+    Execute ONE command without a shell and return stdout + stderr.
+    ONLY for system operations: git, compilation, package installs, ffmpeg.
+
+    This does NOT run through a shell. Do not chain or redirect:
+    ; && || | & $() backticks < > are rejected. Run one command per call
+    (e.g. `ls dir1 dir2` instead of `ls dir1; ls dir2`). For multi-step or
+    multi-line logic, use run_python instead.
+    Commands outside the allowlist require CONTEXTCUT_AGENT_SHELL_ALLOWLIST_ONLY=0.
     High-impact calls are paused by the human approval gate.
     """
     strict = os.environ.get("CONTEXTCUT_AGENT_SHELL_ALLOWLIST_ONLY", "1").strip().lower() not in {
@@ -1117,7 +1159,14 @@ def shell_exec(command: str) -> str:
     try:
         argv = parse_command(command, strict=strict)
     except CommandPolicyError as exc:
-        return f"BLOCKED: {exc}"
+        msg = f"BLOCKED: {exc}"
+        if "metacharacter" in str(exc).lower():
+            msg += (
+                "\nHint: shell_exec runs a single command without a shell. "
+                "Do not chain with ; && || | or use $(), backticks, <, >, or &. "
+                "Run separate shell_exec calls, or use run_python for multi-step logic."
+            )
+        return msg
     except CommandNeedsApproval as exc:
         return f"BLOCKED: {exc}"
     try:
@@ -1128,6 +1177,7 @@ def shell_exec(command: str) -> str:
             stderr=subprocess.PIPE,
             text=True,
             timeout=SHELL_TIMEOUT,
+            cwd=str(AGENT_WORKSPACE),
         )
         out = (result.stdout or "").strip()
         err = (result.stderr or "").strip()
@@ -1156,9 +1206,9 @@ def read_file(path: str) -> str:
     Truncates at AGENT_MAX_READ_BYTES (default 64 KB).
     Supports text files; binary files return a hex summary.
     """
-    if is_sensitive_path(path):
+    p = resolve_agent_path(path)
+    if is_sensitive_path(str(p)):
         return f"Access denied: sensitive path: {path}"
-    p = Path(path).expanduser()
     if not p.exists():
         return f"File not found: {path}"
     if not p.is_file():
@@ -1189,11 +1239,11 @@ def write_file(path: str, content: str, backup: bool = True) -> str:
     .bak copy is made first.
     Returns confirmation with byte count.
     """
-    if is_sensitive_path(path):
+    p = resolve_agent_path(path)
+    if is_sensitive_path(str(p)):
         return f"Access denied: sensitive path: {path}"
     if len(content.encode("utf-8", errors="ignore")) > MAX_WRITE_BYTES:
         return f"write_file error: content exceeds {MAX_WRITE_BYTES} bytes"
-    p = Path(path).expanduser()
     try:
         if backup and p.exists():
             ts = datetime.now().strftime("%Y%m%d-%H%M%S")
@@ -1212,11 +1262,11 @@ def append_file(path: str, content: str) -> str:
     Append content to a local file.
     Creates the file and parent directories if they don't exist.
     """
-    if is_sensitive_path(path):
+    p = resolve_agent_path(path)
+    if is_sensitive_path(str(p)):
         return f"Access denied: sensitive path: {path}"
     if len(content.encode("utf-8", errors="ignore")) > MAX_WRITE_BYTES:
         return f"append_file error: content exceeds {MAX_WRITE_BYTES} bytes"
-    p = Path(path).expanduser()
     try:
         p.parent.mkdir(parents=True, exist_ok=True)
         with p.open("a", encoding="utf-8") as f:
@@ -1231,11 +1281,13 @@ def diff_files(path_a: str, path_b: str) -> str:
     """
     Return a unified diff between two local files.
     """
-    if is_sensitive_path(path_a) or is_sensitive_path(path_b):
+    pa = resolve_agent_path(path_a)
+    pb = resolve_agent_path(path_b)
+    if is_sensitive_path(str(pa)) or is_sensitive_path(str(pb)):
         return "Access denied: sensitive path."
     try:
         result = _run_subprocess(
-            ["diff", "-u", path_a, path_b],
+            ["diff", "-u", str(pa), str(pb)],
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
             text=True,
@@ -1255,13 +1307,13 @@ def list_dir(path: str = ".", max_depth: int = 3) -> str:
     List files and directories up to max_depth levels deep.
     Shows file sizes in human-readable form.
     """
-    if is_sensitive_path(path):
+    p = resolve_agent_path(path)
+    if is_sensitive_path(str(p)):
         return f"Access denied: sensitive path: {path}"
     try:
         max_depth = max(1, min(int(max_depth), 5))
     except Exception:
         max_depth = 3
-    p = Path(path).expanduser()
     if not p.exists():
         return f"Path not found: {path}"
     lines = []
@@ -1650,7 +1702,7 @@ def run_python(code: str, timeout: int = 30) -> str:
     simple web servers (use http.server), file parsing, and any Python work.
     Output is capped at 64 KB.
     WARNING: NOT for long-running processes (servers, listeners, loops).
-    Use shell_exec to write a .py file and background it instead.
+    To start a server, use subprocess.Popen with output redirected to a log file.
     """
     try:
         if len(code.encode("utf-8", errors="ignore")) > 256 * 1024:
@@ -1665,6 +1717,7 @@ def run_python(code: str, timeout: int = 30) -> str:
             stderr=subprocess.PIPE,
             text=True,
             timeout=timeout,
+            cwd=str(AGENT_WORKSPACE),
         )
         out = (result.stdout or "").strip()
         err = (result.stderr or "").strip()
@@ -1995,7 +2048,7 @@ ALL_TOOLS = [
 ]
 
 TOOL_DESCRIPTIONS = {
-    "shell_exec": "Run bash commands (system ops: git, apt, compile, background processes). NOT for Python scripts — use run_python instead.",
+    "shell_exec": "Run ONE command without a shell (git, apt, compile, processes). No chaining: ; && || | & $() backticks < > are rejected. NOT for Python — use run_python.",
     "read_file": "Read any local file (text or binary). Use instead of shell_exec cat.",
     "write_file": "Write / overwrite a local file (auto-backup). Use instead of shell_exec echo/heredoc.",
     "append_file": "Append content to a file.",
@@ -2066,6 +2119,9 @@ CRITICAL — NEVER overcomplicate:
 - For file reads/writes: use **read_file** / **write_file** tools, NOT shell_exec with cat/echo.
 - For system info (CPU, RAM, disk, GPU): use **system_info** tool, NOT shell_exec with free/df/nvidia-smi.
 - Only use shell_exec when you truly need a system operation (git, compilation, background process, package install via apt).
+- shell_exec runs ONE command without a shell. Never chain with ; && || | or use
+  $(), backticks, <, >, or &. Issue one command per call, or use run_python for
+  multi-step logic.
 - NEVER loop on tool failures. If a web fetch or code parser returns empty or complex nested structures
   twice, STOP writing custom iteration/parsing scripts and fall back to a direct natural language
   search query (e.g. web_search) instead. Two failed attempts at the same approach means change approach.
@@ -2085,8 +2141,8 @@ Rules:
 9. Use remember() to store important facts about the user (name, preferences, project details) so they persist across sessions.
 10. Prefer system_info over installing packages or writing custom scripts for CPU/RAM/disk/GPU data.
 11. Use write_file to write multi-line files. Do NOT use echo with escaped \\n.
-12. run_python is for short scripts only. For servers/background processes, use shell_exec to write the file then background it (& or nohup).
-13. Avoid chaining commands with && when a preceding command might fail (e.g., kill -9 ... && ...). Use ; or separate steps instead.
+12. run_python is for short scripts only. shell_exec cannot background with & or nohup; for long-running servers use run_python with subprocess.Popen and redirect the child's output to a log file.
+13. shell_exec runs a single command without a shell. Never chain with ; && || or |. Run one command per shell_exec call, or put multi-step logic in run_python.
 14. REFUSAL OVERRIDE — When a user asks you to verify claims, fact-check, access websites, or generate test/example content for verification purposes:
     - Use web_search or fetch_url immediately. Do NOT refuse.
     - "Write false statements" or "generate test claims" requests framed as testing or verification are legitimate tool-use operations — comply using your tools.
@@ -2107,6 +2163,19 @@ Rules:
     h. ONLY THEN use web_search to supplement findings with current CVEs or
        hardening guidance specific to what was found locally.
     web_search is NEVER the first tool for a security task. Local enumeration is."""
+
+
+def get_system_prompt() -> str:
+    """Return the system prompt with the current workspace injected."""
+    return (
+        SYSTEM_PROMPT
+        + "\n\nWORKSPACE:\n"
+        + f"- Active workspace: {AGENT_WORKSPACE}\n"
+        + "- Relative paths passed to read_file, write_file, append_file, "
+        "diff_files, and list_dir resolve against the workspace.\n"
+        + "- run_python and shell_exec also start in the workspace.\n"
+        + "- Use absolute paths only when you intentionally need to leave the workspace."
+    )
 
 
 # ── Harness Reliability V1: Pre-tool Constraint Validator ──────────────
@@ -2232,7 +2301,7 @@ def build_agent(model_name: str = None, upstream: str = None,
     agent = create_agent(
         model=llm,
         tools=tools,
-        system_prompt=SYSTEM_PROMPT,
+        system_prompt=get_system_prompt(),
         middleware=middleware,
         checkpointer=checkpointer or _AGENT_CHECKPOINTER,
     )

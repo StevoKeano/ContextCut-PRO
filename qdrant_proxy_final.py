@@ -399,8 +399,14 @@ def _env_bool(name: str, default: bool = False) -> bool:
 
 USE_OPENCODE = _env_bool("CONTEXTCUT_USE_OPENCODE", False)
 OPENCODE_CACHE = _env_bool("CONTEXTCUT_OPENCODE_CACHE", False)
-OPENCODE_WORKSPACE = os.getenv(
-    "CONTEXTCUT_OPENCODE_WORKSPACE", str(Path(__file__).resolve().parent)
+_DEFAULT_WORKSPACE = str(Path(__file__).resolve().parent)
+_ENV_AGENT_WORKSPACE = os.getenv("CONTEXTCUT_AGENT_WORKSPACE", "").strip()
+_ENV_OPENCODE_WORKSPACE = os.getenv("CONTEXTCUT_OPENCODE_WORKSPACE", "").strip()
+OPENCODE_WORKSPACE = (
+    _ENV_OPENCODE_WORKSPACE or _ENV_AGENT_WORKSPACE or _DEFAULT_WORKSPACE
+)
+AGENT_WORKSPACE = (
+    _ENV_AGENT_WORKSPACE or _ENV_OPENCODE_WORKSPACE or _DEFAULT_WORKSPACE
 )
 
 
@@ -411,6 +417,16 @@ def _opencode_chat_model(model_name: str | None) -> str | None:
     if model_name and "/" in model_name:
         return model_name
     return None
+
+
+def agent_completion_text(tool_count: int) -> str:
+    """Fallback summary when an Agent run ends without textual output."""
+    if tool_count:
+        return (
+            f"✅ Agent finished after {tool_count} tool call"
+            f"{'s' if tool_count != 1 else ''}, but returned no textual summary."
+        )
+    return "✅ Agent finished but returned no textual response."
 
 
 async def _run_opencode_chat(
@@ -1167,6 +1183,13 @@ if _env_path.exists():
             _k, _v = _k.strip(), _v.strip().strip('"').strip("'")
             if _k and _k not in os.environ:
                 os.environ[_k] = _v
+
+# Re-read workspace overrides after .env is loaded.
+_ENV_AGENT_WORKSPACE = os.getenv("CONTEXTCUT_AGENT_WORKSPACE", "").strip()
+_ENV_OPENCODE_WORKSPACE = os.getenv("CONTEXTCUT_OPENCODE_WORKSPACE", "").strip()
+if _ENV_AGENT_WORKSPACE or _ENV_OPENCODE_WORKSPACE:
+    AGENT_WORKSPACE = _ENV_AGENT_WORKSPACE or _ENV_OPENCODE_WORKSPACE
+    OPENCODE_WORKSPACE = _ENV_OPENCODE_WORKSPACE or _ENV_AGENT_WORKSPACE
 
 # ── Lazy clients ──────────────────────────────────────────────────────────────
 _vc = None
@@ -2849,6 +2872,7 @@ tr:hover td{{background:var(--surf2)}}
 .msg{{max-width:88%}}
 .msg.user{{align-self:flex-end}}.msg.assistant{{align-self:flex-start}}
 .bubble{{padding:9px 13px;border-radius:var(--r);line-height:1.6;white-space:pre-wrap;word-break:break-word;font-size:13px}}
+.bubble:empty{{display:none}}
 .msg.user .bubble{{background:var(--accent);color:#000;font-weight:500}}
 .msg.assistant .bubble{{background:var(--surf2);border:1px solid var(--border)}}
 .msg-meta{{font-size:10px;color:var(--muted);margin-top:3px;padding:0 4px}}
@@ -3044,7 +3068,7 @@ tr.cloud-off td{{background:#0a1a2e!important;color:#22c55e!important;border-top
           </div>
           <div class="param-group">
             <span class="param-label">Max tokens:</span>
-            <input type="number" class="param-slider" id="maxTokInput" min="0" max="32768" step="64" value="{DEFAULT_MAX_TK}" style="width:70px;background:var(--bg);border:1px solid var(--border);border-radius:2px;padding:2px 4px;color:var(--accent);font-size:10px;font-family:'JetBrains Mono',monospace">
+            <input type="number" class="param-slider" id="maxTokInput" min="0" max="32768" step="64" value="{DEFAULT_MAX_TK}" style="width:70px;height:20px;box-sizing:border-box;background:var(--bg);border:1px solid var(--border);border-radius:2px;padding:2px 4px;color:var(--accent);font-size:10px;font-family:'JetBrains Mono',monospace">
             <span class="param-val" id="maxTokVal">{DEFAULT_MAX_TK}</span>
           </div>
           <div class="param-group">
@@ -3077,8 +3101,9 @@ tr.cloud-off td{{background:#0a1a2e!important;color:#22c55e!important;border-top
           <div class="param-group" style="border-top:1px solid var(--border);padding-top:6px;margin-top:4px">
             <span class="param-label">Mode:</span>
             <button class="agent-toggle" id="agentToggle" onclick="toggleAgentMode()" title="Toggle Agent mode (tool-use)" style="font-size:10px;padding:4px 8px">🤖 Agent OFF</button>
-            <button class="opencode-toggle" id="opencodeToggle" onclick="toggleOpenCodeMode()" title="Route Agent runs through the opencode CLI" style="background:{'var(--accent)' if USE_OPENCODE else 'transparent'};border:1px solid {'var(--accent)' if USE_OPENCODE else 'var(--border)'};color:{'#000' if USE_OPENCODE else 'var(--muted)'};border-radius:3px;padding:4px 8px;font-size:10px;cursor:pointer;font-family:'JetBrains Mono',monospace;font-weight:{'600' if USE_OPENCODE else '400'}">⌨ OpenCode {'ON' if USE_OPENCODE else 'OFF'}</button>
-            <label class="unattended-lbl{' show' if USE_OPENCODE else ''}" id="opencodeCacheLbl" title="Pass -c to continue the last OpenCode session"><input type="checkbox" id="opencodeCacheChk"{' checked' if OPENCODE_CACHE else ''} onchange="setOpenCodeCache(this.checked)"> -c cache</label>
+            <button class="opencode-toggle" id="opencodeToggle" onclick="toggleOpenCodeMode()" title="Route Agent runs through the opencode CLI (changes apply to the next run)" style="background:{'var(--accent)' if USE_OPENCODE else 'transparent'};border:1px solid {'var(--accent)' if USE_OPENCODE else 'var(--border)'};color:{'#000' if USE_OPENCODE else 'var(--muted)'};border-radius:3px;padding:4px 8px;font-size:10px;cursor:pointer;font-family:'JetBrains Mono',monospace;font-weight:{'600' if USE_OPENCODE else '400'}">⌨ OpenCode {'ON' if USE_OPENCODE else 'OFF'}</button>
+            <label class="unattended-lbl{' show' if USE_OPENCODE else ''}" id="opencodeCacheLbl" title="Pass -c to continue the last OpenCode session. If you change the workspace, -c may resume a different session. Applies to the next run."><input type="checkbox" id="opencodeCacheChk"{' checked' if OPENCODE_CACHE else ''} onchange="setOpenCodeCache(this.checked)"> -c cache</label>
+            <span id="opencodeNextRunHint" title="OpenCode changes apply to the next Agent run; an in-flight run keeps its current mode" style="font-size:9px;color:var(--muted);margin:0 4px;white-space:nowrap">⏭ applies to the next run</span>
             <button class="scan-toggle" id="scanToggle" onclick="toggleScanMode()" title="Scan responses for potential hallucinations" style="font-size:10px;padding:4px 8px">🧪 Scan OFF</button>
             <button class="scan-test" id="scanTestBtn" onclick="testScan()" title="Run a demo scan on known false claims to test highlighting" style="font-size:10px;padding:4px 8px">🔬 Test</button>
             <label class="scan-deep-lbl" id="deepLbl" title="Use Deep Agents harness with sub-agent verification"><input type="checkbox" id="deepChk" onchange="toggleDeepMode(this)"> DEEP</label>
@@ -3092,6 +3117,12 @@ tr.cloud-off td{{background:#0a1a2e!important;color:#22c55e!important;border-top
             <button class="hybrid-toggle" id="hybridToggle" onclick="toggleHybridMode()" title="Combine vector search + BM25 keyword search (hybrid retrieval)" style="background:transparent;border:1px solid var(--border);color:var(--muted);border-radius:3px;padding:4px 8px;font-size:10px;cursor:pointer;font-family:'JetBrains Mono',monospace">🔍 Hybrid ON</button>
             <button class="typesafe-toggle" id="typesafeToggle" onclick="toggleTypesafeMode()" title="Verify claims with TypeSafe.ai (cloud). Requires TYPESAFE_API_KEY in .env." style="background:{'var(--accent)' if ts_on else 'transparent'};border:1px solid {'var(--accent)' if ts_on else 'var(--border)'};color:{'#000' if ts_on else 'var(--muted)'};border-radius:3px;padding:4px 8px;font-size:10px;cursor:pointer;font-family:'JetBrains Mono',monospace;font-weight:{'600' if ts_on else '400'}">🛡 TypeSafe {'ON' if ts_on else 'OFF'}</button>
             <button class="clear-btn" id="defaultBtn" onclick="resetDefaults()" title="Reset all settings to defaults" style="font-size:9px;padding:4px 8px;margin-left:auto">Default</button>
+          </div>
+          <div class="param-group" style="border-top:1px solid var(--border);padding-top:6px;margin-top:4px">
+            <span class="param-label">Workspace:</span>
+            <input type="text" id="agentWorkspaceInput" value="{html.escape(AGENT_WORKSPACE, quote=True)}" title="Active workspace for Agent and OpenCode runs. Relative paths resolve here. Applies to the next run." style="flex:1;min-width:0;background:var(--panel);border:1px solid var(--border);color:var(--text);border-radius:3px;padding:4px 6px;font-size:10px;font-family:'JetBrains Mono',monospace" onkeydown="if(event.key==='Enter'){{event.preventDefault();setWorkspace();}}">
+            <button class="clear-btn" onclick="setWorkspace()" title="Save workspace (applies to the next run)" style="font-size:9px;padding:4px 8px">Apply</button>
+            <span id="agentWorkspaceHint" title="Workspace applies to the next Agent/OpenCode run" style="font-size:9px;color:var(--muted);white-space:nowrap">next run</span>
           </div>
           <div style="font-size:9px;color:var(--muted);margin-top:6px;border-top:1px solid var(--border);padding-top:6px">
             ⚡ 128K context = 5GB VRAM for KV cache. If responses take &gt;5s, your GPU is swapping models — set <code>OLLAMA_CONTEXT_LENGTH=32768</code> on the Ollama host to fit both embed &amp; chat models in VRAM.
@@ -4090,11 +4121,37 @@ function toggleOpenCodeMode() {{
 
 function setOpenCodeCache(checked) {{
   opencodeCache = !!checked;
+  const hint = document.getElementById('agentWorkspaceHint');
+  if (hint && opencodeCache) hint.textContent = '⚠ -c resumes last session';
   fetch('/api/settings', {{
     method: 'POST',
     headers: {{'Content-Type': 'application/json'}},
     body: JSON.stringify({{opencode_cache: opencodeCache}})
   }}).catch(e => console.warn('opencode_cache sync failed', e));
+}}
+
+function setWorkspace() {{
+  const inp = document.getElementById('agentWorkspaceInput');
+  const hint = document.getElementById('agentWorkspaceHint');
+  if (!inp) return;
+  const value = (inp.value || '').trim();
+  if (!value) {{
+    if (hint) hint.textContent = '⚠ enter a directory';
+    return;
+  }}
+  if (hint) hint.textContent = 'saving…';
+  fetch('/api/settings', {{
+    method: 'POST',
+    headers: {{'Content-Type': 'application/json'}},
+    body: JSON.stringify({{workspace: value}})
+  }}).then(async r => {{
+    const d = await r.json().catch(() => ({{}}));
+    if (!r.ok) throw new Error(d.error || 'invalid workspace');
+    inp.value = d.workspace || value;
+    if (hint) hint.textContent = opencodeCache ? '✓ saved · -c resumes last session' : '✓ saved · next run';
+  }}).catch(e => {{
+    if (hint) hint.textContent = '⚠ ' + e.message;
+  }});
 }}
 
 function getGenerationParams() {{
@@ -4324,6 +4381,7 @@ function appendMsg(role, text, statHtml) {{
 }}
 
 function showTyping() {{
+  if (document.getElementById('typing-indicator')) return;
   const box = document.getElementById('messages');
   const div = document.createElement('div');
   div.className = 'msg assistant'; div.id = 'typing-indicator';
@@ -4680,6 +4738,7 @@ async function sendMessage(taskIdOverride) {{
       const decoder = new TextDecoder();
       let buf = '';
       let toolDetails = null;
+      let toolCount = 0;
       function getToolDiv() {{
         if (!toolDetails) {{
           ensureBubble();
@@ -4741,6 +4800,7 @@ async function sendMessage(taskIdOverride) {{
               }} else if (data.reasoning) {{
                 updateThinking(data.reasoning);
               }} else if (data.token) {{
+                removeTyping();
                 if (thinkingBlock) thinkingBlock.open = false;
                 fullText += data.token;
                 ensureBubble();
@@ -4749,29 +4809,60 @@ async function sendMessage(taskIdOverride) {{
                 const td = getToolDiv();
                 const div = document.createElement('div');
                 div.className = 'tool-call-entry';
+                if (data.run_id) div.dataset.runId = data.run_id;
                 div.innerHTML = '<span style="color:var(--yellow)">\u2699 ' + esc(data.name) + '</span>' +
                   '<div class="tool-input">' + esc(typeof data.input === 'string' ? data.input : JSON.stringify(data.input, null, 2)) + '</div>';
                 td.appendChild(div);
+                toolCount += 1;
+                if (!fullText) showTyping();
               }} else if (data.name && data.result) {{
-                const existing = assistantDiv ? assistantDiv.querySelector('.tool-call-entry:last-child') : null;
-                if (existing && !existing.querySelector('.tool-result')) {{
-                  const rdiv = document.createElement('div');
-                  rdiv.className = 'tool-result';
-                  rdiv.textContent = typeof data.result === 'string' ? data.result.substring(0,2000) : JSON.stringify(data.result).substring(0,2000);
-                  existing.appendChild(rdiv);
+                let existing = null;
+                if (assistantDiv) {{
+                  if (data.run_id) {{
+                    existing = Array.from(assistantDiv.querySelectorAll('.tool-call-entry'))
+                      .find(el => el.dataset.runId === data.run_id) || null;
+                  }}
+                  if (!existing) existing = assistantDiv.querySelector('.tool-call-entry:last-child');
                 }}
+                if (existing) {{
+                  let rdiv = existing.querySelector('.tool-result');
+                  if (!rdiv) {{
+                    rdiv = document.createElement('div');
+                    rdiv.className = 'tool-result';
+                    existing.appendChild(rdiv);
+                  }}
+                  rdiv.textContent = typeof data.result === 'string' ? data.result.substring(0,2000) : JSON.stringify(data.result).substring(0,2000);
+                }}
+                if (!fullText) showTyping();
               }} else if (data.type === 'correction') {{
                 ensureBubble();
                 const corrDiv = document.createElement('div');
                 corrDiv.style.cssText = 'font-size:9px;color:#f59e0b;padding:2px 6px;margin-top:2px;border-top:1px solid var(--border)';
                 corrDiv.textContent = '\\ud83d\\udd04 Correction: ' + (data.reasons || '');
                 assistantDiv.appendChild(corrDiv);
+              }} else if (data.type === 'done') {{
+                removeTyping();
+                if (thinkingBlock) thinkingBlock.open = false;
+                const doneText = typeof data.response === 'string' ? data.response : '';
+                if (doneText.trim()) {{
+                  fullText = doneText;
+                  ensureBubble();
+                  bubble.innerHTML = stripDeadKnowledgeLinks(linkCitations(esc(fullText)));
+                }} else if (!fullText) {{
+                  ensureBubble();
+                  const n = toolCount;
+                  bubble.innerHTML = '<span style="color:var(--green)">\u2705 Agent finished' +
+                    (n ? ' after ' + n + ' tool call' + (n === 1 ? '' : 's') : '') +
+                    ' — no textual summary was returned.</span>';
+                }}
               }} else if (data.response) {{
+                removeTyping();
                 if (thinkingBlock) thinkingBlock.open = false;
                 fullText = data.response;
                 ensureBubble();
                 bubble.innerHTML = stripDeadKnowledgeLinks(linkCitations(esc(fullText)));
               }} else if (data.error) {{
+                removeTyping();
                 ensureBubble();
                 bubble.innerHTML = '\u274c Agent error: ' + esc(data.error);
               }}
@@ -4797,6 +4888,11 @@ async function sendMessage(taskIdOverride) {{
           doScan(fullText, assistantDiv, bubble);
           return;
         }}
+      }} else if (bubble && !bubble.textContent.trim()) {{
+        const n = toolCount;
+        bubble.innerHTML = '<span style="color:var(--green)">\u2705 Agent finished' +
+          (n ? ' after ' + n + ' tool call' + (n === 1 ? '' : 's') : '') +
+          ' — no textual summary was returned.</span>';
       }}
       resetSendButton();
     }}
@@ -6826,6 +6922,56 @@ class DashboardHandler(_SuppressBrokenPipe, BaseHTTPRequestHandler):
                     self.end_headers()
                     self.wfile.write(resp)
                     return
+                if "workspace" in body:
+                    global AGENT_WORKSPACE, OPENCODE_WORKSPACE
+                    raw_workspace = str(body.get("workspace") or "").strip()
+                    if not raw_workspace:
+                        raise ValueError("workspace is required")
+                    try:
+                        workspace_path = Path(raw_workspace).expanduser().resolve()
+                    except OSError as exc:
+                        raise ValueError(f"invalid workspace: {exc}")
+                    if not workspace_path.is_dir():
+                        raise ValueError(
+                            f"workspace is not a directory: {workspace_path}"
+                        )
+                    with _lock:
+                        AGENT_WORKSPACE = str(workspace_path)
+                        OPENCODE_WORKSPACE = str(workspace_path)
+                    os.environ["CONTEXTCUT_AGENT_WORKSPACE"] = str(workspace_path)
+                    os.environ["CONTEXTCUT_OPENCODE_WORKSPACE"] = str(workspace_path)
+                    _persist_env_key(
+                        "CONTEXTCUT_AGENT_WORKSPACE", str(workspace_path)
+                    )
+                    _persist_env_key(
+                        "CONTEXTCUT_OPENCODE_WORKSPACE", str(workspace_path)
+                    )
+                    try:
+                        import agent_handler as _agent_handler
+
+                        _agent_handler.set_agent_workspace(str(workspace_path))
+                    except Exception as exc:
+                        print(
+                            f"[contextcut] Agent workspace update warning: {exc}",
+                            flush=True,
+                        )
+                    print(
+                        f"[{datetime.now().strftime('%H:%M:%S')}] [Settings] "
+                        f"Workspace = {workspace_path}",
+                        flush=True,
+                    )
+                    resp = json.dumps({
+                        "ok": True,
+                        "workspace": str(workspace_path),
+                        "agent_workspace": str(workspace_path),
+                        "opencode_workspace": str(workspace_path),
+                    }).encode()
+                    self.send_response(200)
+                    self.send_header("Content-Type", "application/json")
+                    self.send_header("Content-Length", str(len(resp)))
+                    self.end_headers()
+                    self.wfile.write(resp)
+                    return
                 if "use_opencode" in body or "opencode_cache" in body:
                     global USE_OPENCODE, OPENCODE_CACHE
                     if "use_opencode" in body:
@@ -6857,13 +7003,16 @@ class DashboardHandler(_SuppressBrokenPipe, BaseHTTPRequestHandler):
                             "1" if OPENCODE_CACHE else "0",
                         )
                     print(
-                        "[contextcut] OpenCode "
-                        f"use={USE_OPENCODE} cache={OPENCODE_CACHE}"
+                        f"[{datetime.now().strftime('%H:%M:%S')}] [Settings] "
+                        f"OpenCode use={USE_OPENCODE} cache={OPENCODE_CACHE} "
+                        f"workspace={OPENCODE_WORKSPACE}",
+                        flush=True,
                     )
                     resp = json.dumps({
                         "ok": True,
                         "use_opencode": USE_OPENCODE,
                         "opencode_cache": OPENCODE_CACHE,
+                        "workspace": OPENCODE_WORKSPACE,
                     }).encode()
                     self.send_response(200)
                     self.send_header("Content-Type", "application/json")
@@ -7621,7 +7770,7 @@ class DashboardHandler(_SuppressBrokenPipe, BaseHTTPRequestHandler):
 
                     def _oc_emit(data):
                         payload = dict(data)
-                        evt = payload.pop("type", "message")
+                        evt = payload.get("type", "message")
                         try:
                             self.wfile.write(
                                 f"event: {evt}\ndata: {json.dumps(payload)}\n\n".encode()
@@ -7631,6 +7780,7 @@ class DashboardHandler(_SuppressBrokenPipe, BaseHTTPRequestHandler):
                             pass
 
                     if not is_stream:
+                        output, _oc_err = "", ""
                         try:
                             output, _oc_err = asyncio.run(
                                 _run_opencode_chat(
@@ -7643,6 +7793,13 @@ class DashboardHandler(_SuppressBrokenPipe, BaseHTTPRequestHandler):
                             output = (
                                 f"Agent timed out ({AGENT_TIMEOUT}s wall-clock). "
                                 "Try simplifying the prompt."
+                            )
+                        except Exception as opencode_exc:
+                            output = f"❌ OpenCode failed: {opencode_exc}"
+                        if not output.strip():
+                            output = (
+                                _oc_err
+                                or "✅ OpenCode finished but returned no textual response."
                             )
                         add_to_history(sid, "assistant", output)
                         record(
@@ -7677,6 +7834,7 @@ class DashboardHandler(_SuppressBrokenPipe, BaseHTTPRequestHandler):
                         self.send_header("Cache-Control", "no-cache")
                         self.send_header("Connection", "close")
                         self.end_headers()
+                        output, _oc_err = "", ""
                         try:
                             output, _oc_err = asyncio.run(
                                 _run_opencode_chat(
@@ -7691,14 +7849,24 @@ class DashboardHandler(_SuppressBrokenPipe, BaseHTTPRequestHandler):
                                 f"Agent timed out ({AGENT_TIMEOUT}s wall-clock). "
                                 "Try simplifying the prompt."
                             )
-                            _oc_emit({"error": output})
+                            _oc_emit({"type": "error", "error": output})
+                        except Exception as opencode_exc:
+                            output = f"❌ OpenCode failed: {opencode_exc}"
+                            _oc_err = output
+                            _oc_emit({"type": "error", "error": output})
+                        if not output.strip():
+                            output = (
+                                _oc_err
+                                or "✅ OpenCode finished but returned no textual response."
+                            )
+                        _oc_emit({"type": "done", "response": output})
                         try:
                             self.wfile.write(
                                 f"event: checkpoint\ndata: {json.dumps({'task_id': task_id})}\n\n".encode()
                             )
                             self.wfile.write(b"data: [DONE]\n\n")
                             self.wfile.flush()
-                        except BrokenPipeError:
+                        except (BrokenPipeError, ConnectionResetError, OSError):
                             pass
                         add_to_history(sid, "assistant", output)
                         record(
@@ -7781,8 +7949,6 @@ class DashboardHandler(_SuppressBrokenPipe, BaseHTTPRequestHandler):
                     ))
 
                 shell_mode = session.get("shell_confirm_mode", "ask")
-
-                import asyncio
 
                 def _content_text(content) -> str:
                     if isinstance(content, str):
@@ -7916,6 +8082,15 @@ class DashboardHandler(_SuppressBrokenPipe, BaseHTTPRequestHandler):
                                                 and chunk.content
                                             ):
                                                 text = chunk.content
+                                                if isinstance(text, list):
+                                                    text = "".join(
+                                                        block.get("text", "")
+                                                        if isinstance(block, dict)
+                                                        else str(block)
+                                                        for block in text
+                                                    )
+                                                elif isinstance(text, dict):
+                                                    text = text.get("text", "")
                                                 if isinstance(text, str) and text:
                                                     collected.append(text)
                                                     raw_markers = (
@@ -7933,6 +8108,7 @@ class DashboardHandler(_SuppressBrokenPipe, BaseHTTPRequestHandler):
                                                         emit({'token': text})
                                         elif kind == "on_tool_start":
                                             tool_name = event.get("name", "unknown")
+                                            tool_run_id = str(event.get("run_id", "") or "")
                                             local_tools.add(tool_name)
                                             tool_input = event.get("data", {}).get("input", {})
                                             if isinstance(tool_input, dict):
@@ -7946,17 +8122,18 @@ class DashboardHandler(_SuppressBrokenPipe, BaseHTTPRequestHandler):
                                                 cmd = str(tool_input)[:200]
                                             print(f"[{datetime.now().strftime('%H:%M:%S')}] [Agent] \U0001f9e0 {tool_name}({cmd[:120]})", flush=True)
                                             if tool_name == "shell_exec" and not _shell_is_safe(cmd):
-                                                emit({'name': tool_name, 'input': cmd, 'shell_mode': shell_mode})
-                                                emit({'name': tool_name, 'result': 'Blocked by safety policy (dangerous pattern).', 'type': 'tool_result'})
+                                                emit({'name': tool_name, 'input': cmd, 'shell_mode': shell_mode, 'run_id': tool_run_id})
+                                                emit({'name': tool_name, 'result': 'Blocked by safety policy (dangerous pattern).', 'type': 'tool_result', 'run_id': tool_run_id})
                                             else:
-                                                emit({'name': tool_name, 'input': cmd, 'shell_mode': shell_mode})
+                                                emit({'name': tool_name, 'input': cmd, 'shell_mode': shell_mode, 'run_id': tool_run_id})
                                                 if (
                                                     tool_name == "shell_exec"
                                                     and shell_mode == "reject"
                                                 ):
-                                                    emit({'name': tool_name, 'result': 'Rejected by policy.', 'type': 'tool_result'})
+                                                    emit({'name': tool_name, 'result': 'Rejected by policy.', 'type': 'tool_result', 'run_id': tool_run_id})
                                         elif kind == "on_tool_end":
                                             tool_name = event.get("name", "unknown")
+                                            tool_run_id = str(event.get("run_id", "") or "")
                                             output_data = event.get("data", {}).get(
                                                 "output", ""
                                             )
@@ -7964,7 +8141,7 @@ class DashboardHandler(_SuppressBrokenPipe, BaseHTTPRequestHandler):
                                                 str(output_data)[:2000] if output_data else ""
                                             )
                                             print(f"[{datetime.now().strftime('%H:%M:%S')}] [Agent] \u2705 {tool_name} -> {output_str[:80]}", flush=True)
-                                            emit({'name': tool_name, 'result': output_str, 'type': 'tool_result'})
+                                            emit({'name': tool_name, 'result': output_str, 'type': 'tool_result', 'run_id': tool_run_id})
                                             emit_alerts()
                                             # Save streaming checkpoint
                                             try:
@@ -8192,6 +8369,9 @@ class DashboardHandler(_SuppressBrokenPipe, BaseHTTPRequestHandler):
                         except Exception as scan_e:
                             emit({'error': str(scan_e), 'type': 'correction'})
 
+                    if not final_output.strip():
+                        final_output = agent_completion_text(len(called_tools))
+
                     leftover_raw = extract_textual_tool_calls(final_output)
                     if leftover_raw:
                         cleaned = strip_textual_tool_calls(final_output)
@@ -8252,15 +8432,31 @@ class DashboardHandler(_SuppressBrokenPipe, BaseHTTPRequestHandler):
                     self.send_header("Connection", "close")
                     self.end_headers()
 
-                    full_output = asyncio.run(_run_agent_stream(
-                        lambda data: self.wfile.write(f"event: {data.pop('type', 'message')}\ndata: {json.dumps(data)}\n\n".encode()) or self.wfile.flush()
-                    ))
+                    def _agent_sse(data):
+                        payload = dict(data)
+                        evt = payload.get("type", "message")
+                        self.wfile.write(
+                            f"event: {evt}\ndata: {json.dumps(payload)}\n\n".encode()
+                        )
+                        self.wfile.flush()
+
+                    try:
+                        full_output = asyncio.run(_run_agent_stream(_agent_sse))
+                    except Exception as stream_exc:
+                        import traceback
+                        traceback.print_exc()
+                        full_output = f"❌ Agent stream failed: {stream_exc}"
+                        try:
+                            _agent_sse({"type": "error", "error": full_output})
+                            _agent_sse({"type": "done", "response": full_output})
+                        except Exception:
+                            pass
 
                     try:
                         self.wfile.write(f"event: checkpoint\ndata: {json.dumps({'task_id': task_id})}\n\n".encode())
                         self.wfile.write(b"data: [DONE]\n\n")
                         self.wfile.flush()
-                    except BrokenPipeError:
+                    except (BrokenPipeError, ConnectionResetError, OSError):
                         pass
 
                     add_to_history(sid, "assistant", full_output)

@@ -125,6 +125,43 @@ class TestListDir:
         assert "not found" in result.lower()
 
 
+class TestWorkspaceResolution:
+    def test_relative_paths_resolve_to_workspace(self, tmp_path, monkeypatch):
+        import agent_handler
+
+        monkeypatch.setattr(agent_handler, "AGENT_WORKSPACE", tmp_path)
+
+        result = agent_handler.write_file.invoke(
+            {"path": "nested/file.txt", "content": "workspace", "backup": False}
+        )
+        assert "Wrote" in result
+        assert (tmp_path / "nested" / "file.txt").read_text() == "workspace"
+
+        result = agent_handler.read_file.invoke({"path": "nested/file.txt"})
+        assert "workspace" in result
+
+        result = agent_handler.append_file.invoke(
+            {"path": "nested/file.txt", "content": "!"}
+        )
+        assert "Appended" in result
+        assert (tmp_path / "nested" / "file.txt").read_text() == "workspace!"
+
+        listing = agent_handler.list_dir.invoke({"path": ".", "max_depth": 2})
+        assert "nested/" in listing
+        assert "file.txt" in listing
+
+    def test_absolute_paths_are_unchanged(self, tmp_path, monkeypatch):
+        import agent_handler
+
+        monkeypatch.setattr(agent_handler, "AGENT_WORKSPACE", tmp_path / "workspace")
+        (tmp_path / "workspace").mkdir()
+        outside = tmp_path / "outside.txt"
+        outside.write_text("outside")
+
+        result = agent_handler.read_file.invoke({"path": str(outside)})
+        assert "outside" in result
+
+
 class TestUntrustedBoundaries:
     def test_read_file_is_wrapped(self, tmp_path):
         from agent_handler import read_file
