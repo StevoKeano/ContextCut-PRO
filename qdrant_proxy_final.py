@@ -46,6 +46,7 @@ from http.server import HTTPServer, BaseHTTPRequestHandler
 from socketserver import ThreadingMixIn
 
 from untrusted_content import wrap_untrusted
+from capabilities import CAPABILITIES_BLURB, capabilities_block, is_meta_question
 from scan_sanitize import sanitize_scan_html
 from injection_guard import get_alerts_since, get_recent_alerts, latest_seq
 
@@ -1562,10 +1563,12 @@ SYSTEM_BASE = (
     "claim you make from the context. "
     "If the context does not contain relevant information, say so clearly "
     "rather than fabricating details."
+    "\n\n"
+    + CAPABILITIES_BLURB
 )
 
 
-def inject_context(body: dict, context: str) -> dict:
+def inject_context(body: dict, context: str, query: str = "") -> dict:
     messages = body.get("messages", [])
     has_system = bool(messages and messages[0].get("role") == "system")
     ctx_block = ""
@@ -1578,14 +1581,19 @@ def inject_context(body: dict, context: str) -> dict:
             + safe_context
             + "\n\n---"
         )
+    meta_block = capabilities_block() if query and is_meta_question(query) else ""
     if has_system:
         existing = messages[0]["content"]
         parts = [existing, SYSTEM_BASE]
+        if meta_block:
+            parts.append(meta_block)
         if ctx_block:
             parts.append(ctx_block)
         messages[0]["content"] = "\n\n".join(parts)
     else:
         parts = [SYSTEM_BASE]
+        if meta_block:
+            parts.append(meta_block)
         if ctx_block:
             parts.append(ctx_block)
         messages.insert(0, {"role": "system", "content": "\n\n".join(parts)})
@@ -1931,7 +1939,7 @@ class ProxyHandler(_SuppressBrokenPipe, BaseHTTPRequestHandler):
                     session = _sessions.get(session_id)
                     if session:
                         session["_kb_context"] = ctx
-                    body = inject_context(body, ctx)
+                    body = inject_context(body, ctx, query)
                     tok_after = count_body_tokens(body)
                     if tok_after > CTX_LIMIT:
                         pruned = 0
@@ -4270,6 +4278,13 @@ function handleCommand(text) {{
       '/resume &lt;task_id&gt; — Resume an interrupted agent task\\n' +
       '/swarm — Open Swarm Research page (parallel company research with verification)\\n' +
       '/help — Show this help\\n\\n' +
+      'What ContextCut PRO can do:\\n' +
+      '• Normal chat (Agent OFF) — answers with automatic knowledge-base retrieval\\n' +
+      '• Agent mode (Agent ON) — tools for shell, files, web, Python, KB search, planning, memory\\n' +
+      '• Coding — Agent mode with a Workspace, the headless coding_agent.py worker, or the two-agent orchestrator.py\\n' +
+      '• Reliability — checkpoints + /resume, memory, Scan/DEEP/TypeSafe verification\\n' +
+      '• Knowledge — drop files in ~/contextcut/knowledge or upload via the File Browser\\n' +
+      'Ask "what can you do" or "how do I use you to code" for a fuller answer.\\n\\n' +
       'Natural commands:\\n' +
       '"stop" / "that\\'s enough" — Stop current response\\n' +
       '"continue" / "go on" — Continue previous response\\n' +
@@ -7946,6 +7961,11 @@ class DashboardHandler(_SuppressBrokenPipe, BaseHTTPRequestHandler):
                             + safe_ctx
                             + "\n\n---"
                         )
+                    ))
+
+                if is_meta_question(message):
+                    input_messages.insert(0, SystemMessage(
+                        content=capabilities_block()
                     ))
 
                 shell_mode = session.get("shell_confirm_mode", "ask")

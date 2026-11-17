@@ -23,10 +23,11 @@ import concurrent.futures
 from langchain.tools import tool
 from langchain_openai import ChatOpenAI
 from langchain.agents import create_agent
-from langchain_core.messages import HumanMessage, AIMessage, SystemMessage
+from langchain_core.messages import HumanMessage, AIMessage, SystemMessage, ToolMessage
 from langchain_core.callbacks import BaseCallbackHandler
 from qdrant_proxy_final import qdrant_context
 from untrusted_content import SAFETY_WARNING, wrap_untrusted
+from capabilities import CAPABILITIES_BLURB, capabilities_text
 from agent_policy import (
     CommandNeedsApproval,
     CommandPolicyError,
@@ -37,11 +38,12 @@ from agent_policy import (
 
 try:
     from langgraph.checkpoint.memory import InMemorySaver
-    from langchain.agents.middleware import HumanInTheLoopMiddleware
+    from langchain.agents.middleware import AgentMiddleware, HumanInTheLoopMiddleware
 
     _AGENT_CHECKPOINTER = InMemorySaver()
 except Exception:  # pragma: no cover - optional dependency drift
     InMemorySaver = None
+    AgentMiddleware = None
     HumanInTheLoopMiddleware = None
     _AGENT_CHECKPOINTER = None
 
@@ -50,6 +52,52 @@ MAX_WRITE_BYTES = int(os.environ.get("AGENT_MAX_WRITE_BYTES", str(2 * 1024 * 102
 MAX_LIST_ENTRIES = int(os.environ.get("AGENT_MAX_LIST_ENTRIES", "2000"))
 MAX_WEB_RESULTS = 10
 MAX_TOP_K = 20
+
+
+def _env_int(name: str, default: int) -> int:
+    """Parse an integer env var, falling back to *default* when invalid."""
+    try:
+        return int(str(os.environ.get(name, default)).strip())
+    except (TypeError, ValueError):
+        return default
+
+
+# Context tuning: keep large tool results and follow-up reasoning turns small.
+TOOL_OUTPUT_MAX_CHARS = _env_int("CONTEXTCUT_TOOL_OUTPUT_MAX_CHARS", 4000)
+READ_FILE_OUTPUT_MAX_CHARS = _env_int("CONTEXTCUT_READ_FILE_OUTPUT_MAX_CHARS", 12000)
+SEARCH_OUTPUT_MAX_CHARS = _env_int("CONTEXTCUT_SEARCH_OUTPUT_MAX_CHARS", 6000)
+TOOL_TURN_MAX_TOKENS = _env_int("CONTEXTCUT_TOOL_TURN_MAX_TOKENS", 8192)
+TOOL_TURN_REASONING = os.environ.get(
+    "CONTEXTCUT_TOOL_TURN_REASONING", "low"
+).strip().lower()
+if TOOL_TURN_REASONING in {"", "default", "off", "none", "false"}:
+    TOOL_TURN_REASONING = ""
+
+_TOOL_OUTPUT_LIMITS = {
+    "read_file": READ_FILE_OUTPUT_MAX_CHARS,
+    "vector_search": SEARCH_OUTPUT_MAX_CHARS,
+}
+
+
+def tool_output_limit(tool_name: str | None) -> int:
+    """Return the max characters kept for *tool_name* (0 disables the cap)."""
+    return _TOOL_OUTPUT_LIMITS.get(tool_name or "", TOOL_OUTPUT_MAX_CHARS)
+
+
+def clamp_tool_output(text: str, limit: int) -> str:
+    """Head+tail clamp *text* to roughly *limit* characters.
+
+    Keeps 60% of the head and 40% of the tail so error tracebacks and
+    untrusted-content end markers survive. Existing markers stay intact
+    because only the middle is replaced.
+    """
+    if limit <= 0 or len(text) <= limit:
+        return text
+    marker = f"\n… [output truncated: {len(text):,} chars total] …\n"
+    budget = max(2, limit - len(marker))
+    head = int(budget * 0.6)
+    tail = budget - head
+    return text[:head] + marker + text[-tail:]
 
 
 def _normalize_workspace(path: str | Path | None) -> Path:
@@ -1695,6 +1743,17 @@ def delete_knowledge(filename: str) -> str:
 
 
 @tool
+def contextcut_help() -> str:
+    """
+    Return ContextCut PRO's own capabilities and usage guide.
+    Call this for questions about what you can do, your features, or how to use
+    ContextCut PRO (e.g. "what can you do", "how do I use you to code",
+    "what are your tools", "how do I get started").
+    """
+    return capabilities_text()
+
+
+@tool
 def run_python(code: str, timeout: int = 30) -> str:
     """
     Execute Python code inline and return stdout + stderr.
@@ -2038,6 +2097,7 @@ ALL_TOOLS = [
     ingest_file,
     list_knowledge,
     delete_knowledge,
+    contextcut_help,
     run_python,
     run_sql,
     plan,
@@ -2063,6 +2123,7 @@ TOOL_DESCRIPTIONS = {
     "ingest_file": "Re-ingest a knowledge file into Qdrant.",
     "list_knowledge": "List all files in KB with chunk counts from Qdrant.",
     "delete_knowledge": "Delete vectors for a file from Qdrant (not the file itself).",
+    "contextcut_help": "Return ContextCut PRO's capabilities and usage guide. Use for questions about your own features or how to use ContextCut PRO.",
     "run_python": "Execute Python code inline (calculations, data analysis, text processing, quick scripts). PREFER this over shell_exec for Python work. NOT for long-running processes.",
     "run_sql": "Run a SELECT query on the session database.",
     "plan": "Create a structured multi-step plan for complex tasks that need multiple tool calls.",
@@ -2088,6 +2149,7 @@ You have access to:
 - ingest_file: Re-ingest a knowledge file into Qdrant
 - list_knowledge: List all files in KB with chunk counts from Qdrant
 - delete_knowledge: Delete vectors for a file from Qdrant
+- contextcut_help: Return ContextCut PRO's capabilities and usage guide
 - run_python: Execute Python code in a subprocess (NOT for long-running processes; use shell_exec instead)
 - run_sql: Run a SELECT query on the session database
 - plan: Create a structured multi-step plan for complex tasks
@@ -2110,6 +2172,12 @@ DOCUMENT / REPORT RULE:
 - Do not use list_dir or read_file merely because the user mentions files. Use
   them only when the user explicitly asks to inspect local files or when the
   document text is not already available in the injected context.
+
+SELF-KNOWLEDGE RULE:
+- For questions about your own capabilities, features, tools, or how to use
+  ContextCut PRO (e.g. "what can you do", "how do I use you to code", "how do I
+  get started"), call contextcut_help() and answer from it.
+- Do not invent ContextCut PRO features. If the help doc does not cover it, say so.
 
 CRITICAL — NEVER overcomplicate:
 - NEVER create Python virtual environments for simple tasks.
@@ -2169,6 +2237,8 @@ def get_system_prompt() -> str:
     """Return the system prompt with the current workspace injected."""
     return (
         SYSTEM_PROMPT
+        + "\n\n"
+        + CAPABILITIES_BLURB
         + "\n\nWORKSPACE:\n"
         + f"- Active workspace: {AGENT_WORKSPACE}\n"
         + "- Relative paths passed to read_file, write_file, append_file, "
@@ -2251,6 +2321,67 @@ def apply_harness(tools: list, user_message: str = None) -> list:
     return modified
 
 
+if AgentMiddleware is not None:
+
+    class ContextTuningMiddleware(AgentMiddleware):
+        """Trim large tool results and shrink follow-up reasoning turns.
+
+        - ``wrap_tool_call`` / ``awrap_tool_call`` head+tail clamp tool output
+          so agent state and checkpoints stay small.
+        - ``wrap_model_call`` / ``awrap_model_call`` cap ``max_tokens`` and
+          lower ``reasoning_effort`` on the model call that follows a tool
+          result, so a large result does not trigger another long reasoning
+          pass.
+        """
+
+        def __init__(self, provider: str | None = None):
+            self.provider = (provider or "").strip().lower()
+
+        def _tune_model_request(self, request):
+            messages = request.messages or []
+            if not messages or not isinstance(messages[-1], ToolMessage):
+                return request
+            model = request.model
+            if not hasattr(model, "model_copy"):
+                return request
+            updates = {}
+            if TOOL_TURN_REASONING and self.provider != "ollama":
+                extra_body = dict(getattr(model, "extra_body", None) or {})
+                extra_body["reasoning_effort"] = TOOL_TURN_REASONING
+                updates["extra_body"] = extra_body
+            if TOOL_TURN_MAX_TOKENS > 0:
+                current = getattr(model, "max_tokens", None)
+                if not current or current > TOOL_TURN_MAX_TOKENS:
+                    updates["max_tokens"] = TOOL_TURN_MAX_TOKENS
+            if not updates:
+                return request
+            return request.override(model=model.model_copy(update=updates))
+
+        def wrap_model_call(self, request, handler):
+            return handler(self._tune_model_request(request))
+
+        async def awrap_model_call(self, request, handler):
+            return await handler(self._tune_model_request(request))
+
+        @staticmethod
+        def _clamp_result(result):
+            if isinstance(result, ToolMessage) and isinstance(result.content, str):
+                limit = tool_output_limit(result.name)
+                clamped = clamp_tool_output(result.content, limit)
+                if clamped != result.content:
+                    result = result.model_copy(update={"content": clamped})
+            return result
+
+        def wrap_tool_call(self, request, handler):
+            return self._clamp_result(handler(request))
+
+        async def awrap_tool_call(self, request, handler):
+            return self._clamp_result(await handler(request))
+
+else:  # pragma: no cover - optional dependency drift
+    ContextTuningMiddleware = None
+
+
 def build_agent(model_name: str = None, upstream: str = None,
                 api_key: str = None, task_id: str = None, goal: str = None,
                 user_message: str = None, provider: str = None,
@@ -2298,6 +2429,8 @@ def build_agent(model_name: str = None, upstream: str = None,
                 description_prefix="High-impact tool requires approval",
             )
         )
+    if ContextTuningMiddleware is not None:
+        middleware.append(ContextTuningMiddleware(provider=provider))
     agent = create_agent(
         model=llm,
         tools=tools,
