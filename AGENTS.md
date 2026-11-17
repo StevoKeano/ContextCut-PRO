@@ -45,6 +45,18 @@
 - Deep-dive RAG: `ContextCut_README.md`, `ContextCut_USER_GUIDE.md`, `ContextCut_CUSTOMER_SETUP.md`
   are ingested into the KB under distinct filenames (the KB's own `README.md` is unrelated).
 
+## Approval (HITL)
+- The approval list is defined in exactly one place: `HumanInTheLoopMiddleware(interrupt_on=...)`
+  in `build_agent()` (`agent_handler.py`). There is no `.env` var or second definition.
+- Tools that pause for Allow/Deny: `shell_exec`, `content_write`, `publish_content`,
+  `delete_knowledge` (all `allowed_decisions: ["approve", "reject"]`).
+- `run_python`, `write_file`, and `append_file` do NOT prompt.
+- `_shell_is_safe()` (`agent_handler.py`) + `agent_policy.py` are an extra safety gate that
+  applies only to `shell_exec`, independent of the approval list.
+- The dashboard **Unattended** toggle sets `shell_confirm_mode="always"`, which auto-approves
+  ALL HITL actions (not just shell). Default is `ask`.
+- `content_write`/`publish_content` come from `aeo/tools.py` (added via `build_agent(extra_tools=...)`).
+
 ## Fullscreen Behavior
 - When shell_exec permission is requested (Allow/Deny), the code auto-exits fullscreen mode and scrolls to show the buttons.
 - Fullscreen toggle: `.right` element gets/removes `fullscreen` class.

@@ -2419,9 +2419,6 @@ def build_agent(model_name: str = None, upstream: str = None,
             HumanInTheLoopMiddleware(
                 interrupt_on={
                     "shell_exec": {"allowed_decisions": ["approve", "reject"]},
-                    "run_python": {"allowed_decisions": ["approve", "reject"]},
-                    "write_file": {"allowed_decisions": ["approve", "reject"]},
-                    "append_file": {"allowed_decisions": ["approve", "reject"]},
                     "content_write": {"allowed_decisions": ["approve", "reject"]},
                     "publish_content": {"allowed_decisions": ["approve", "reject"]},
                     "delete_knowledge": {"allowed_decisions": ["approve", "reject"]},

@@ -125,6 +125,31 @@ class TestStreamChunkTimeoutConfig:
         assert mock_chat.call_args[1]["stream_chunk_timeout"] is None
 
 
+class TestContextTuningWiring:
+    @patch("agent_handler.ChatOpenAI")
+    @patch("agent_handler.create_agent")
+    @patch("agent_handler._get_dynamic_tools", return_value=[])
+    def test_middleware_and_reasoning_params(
+        self, mock_dyn, mock_create_agent, mock_chat
+    ):
+        from agent_handler import ContextTuningMiddleware, build_agent
+
+        mock_create_agent.return_value = MagicMock()
+        build_agent(
+            upstream="http://localhost:11434",
+            provider="DeepSeek",
+            reasoning_effort="high",
+            max_tokens=24576,
+        )
+
+        call_kwargs = mock_chat.call_args[1]
+        assert call_kwargs["extra_body"] == {"reasoning_effort": "high"}
+        assert call_kwargs["max_tokens"] == 24576
+
+        middleware = mock_create_agent.call_args[1]["middleware"]
+        assert any(isinstance(item, ContextTuningMiddleware) for item in middleware)
+
+
 class TestBuildMessagesFromHistory:
     def test_converts_user_assistant_system(self):
         from agent_handler import build_messages_from_history

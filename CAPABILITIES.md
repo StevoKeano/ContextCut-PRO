@@ -46,20 +46,23 @@ either mode.
 
 ## Agent tools
 
-Local, zero per-call cost. High-impact tools pause for Allow/Deny approval.
+Local, zero per-call cost. Four high-impact tools pause for Allow/Deny approval before
+running: **`shell_exec`**, **`content_write`**, **`publish_content`**, and
+**`delete_knowledge`**. All other tools run without prompting.
 
 | Tool | Purpose |
 |---|---|
-| `shell_exec` | Run allowlisted shell commands (argv, `shell=False`). |
+| `shell_exec` | Run allowlisted shell commands (argv, `shell=False`). **Approval required.** |
 | `read_file` / `write_file` / `append_file` / `diff_files` / `list_dir` | File operations jailed to the workspace. |
 | `vector_search` | Search the Qdrant KB directly. |
 | `web_search` / `fetch_url` | DuckDuckGo search and SSRF-guarded URL fetch. |
 | `run_python` / `run_sql` | Execute Python and SQL. |
-| `ingest_file` / `list_knowledge` / `delete_knowledge` | Manage KB contents. |
+| `ingest_file` / `list_knowledge` / `delete_knowledge` | Manage KB contents (`delete_knowledge` requires approval). |
 | `system_info` / `get_context_logs` / `get_session_stats` | System and session introspection. |
 | `plan` | Structured multi-step planning. |
 | `remember` / `recall` / `forget` | Persistent memory. |
 | `compose_tool` | Define a new compound tool at runtime, callable on later turns. |
+| `content_list` / `content_read` / `content_write` / `publish_content` | AEO content workspace (Markdown); `content_write` and `publish_content` require approval. |
 
 Tools are extendable at runtime: `run_python`, `shell_exec`, and `compose_tool` let the
 agent generate code and new tools on the fly.
@@ -99,6 +102,9 @@ executable allowlist. Point `--workspace` at a throwaway directory when using an
   The dashboard shows a Task badge; click **↩ Resume** or type `/resume <task_id>` to continue
   without redoing work. Stale checkpoints (>24h) are purged on startup.
 - **Memory** — `remember` / `recall` / `forget` persist facts across sessions.
+- **Human approval** — `shell_exec`, `content_write`, `publish_content`, and
+  `delete_knowledge` pause for Allow/Deny before running (Unattended auto-approves
+  shell commands).
 - **Untrusted-content hygiene** — tool output, retrieved chunks, web pages, and diffs are
   wrapped in `<<<UNTRUSTED_BEGIN ...>>>` boundaries and secret-looking values redacted.
 - **Security alerts** — suspicious untrusted content is logged to
