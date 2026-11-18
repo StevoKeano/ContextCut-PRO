@@ -85,7 +85,7 @@ class TestFetchUrl:
     @patch("requests.get")
     def test_fetch_is_wrapped(self, mock_get):
         from agent_handler import fetch_url
-        from untrusted_content import END_MARKER, SAFETY_WARNING
+        from untrusted_content import END_MARKER, BEGIN_PREFIX
 
         mock_resp = MagicMock()
         mock_resp.headers = {"content-type": "text/plain"}
@@ -94,15 +94,15 @@ class TestFetchUrl:
         mock_get.return_value = mock_resp
 
         result = fetch_url.invoke({"url": "https://evil.example/x", "timeout": 15})
-        assert result.startswith(SAFETY_WARNING)
+        assert result.startswith(BEGIN_PREFIX)
         assert 'source="https://evil.example/x"' in result
         assert result.rstrip().endswith(END_MARKER)
 
     @patch("requests.get")
     def test_fetch_error_is_not_wrapped(self, mock_get):
         from agent_handler import fetch_url
-        from untrusted_content import SAFETY_WARNING
+        from untrusted_content import BEGIN_PREFIX
 
         mock_get.side_effect = RuntimeError("boom")
         result = fetch_url.invoke({"url": "https://example.com", "timeout": 1})
-        assert not result.startswith(SAFETY_WARNING)
+        assert not result.startswith(BEGIN_PREFIX)

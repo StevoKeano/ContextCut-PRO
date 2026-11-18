@@ -56,11 +56,11 @@ class TestClampToolOutput:
 
     def test_preserves_untrusted_markers(self):
         from agent_handler import clamp_tool_output
-        from untrusted_content import END_MARKER, SAFETY_WARNING, wrap_untrusted
+        from untrusted_content import END_MARKER, BEGIN_PREFIX, wrap_untrusted
 
         wrapped = wrap_untrusted("Z" * 20_000, source="run_python", kind="command-output")
         result = clamp_tool_output(wrapped, 4000)
-        assert result.startswith(SAFETY_WARNING)
+        assert result.startswith(BEGIN_PREFIX)
         assert result.endswith(END_MARKER)
         assert "output truncated" in result
 

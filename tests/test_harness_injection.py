@@ -4,7 +4,7 @@ Tests for the harness wrapper's prompt-injection defenses.
 Unit-level tests verify that ``make_harness_web_search``:
   - Blocks first security-topic web_search calls
   - Passes through non-security queries
-  - Prepends SAFETY_WARNING to all pass-through results
+  - Prepends BEGIN_PREFIX to all pass-through results
   - Does NOT strip the warning even when the search result itself
     contains injection text (e.g. "ignore previous instructions")
 
@@ -74,7 +74,7 @@ class TestHarnessWrapperUnit:
         assert "shell_exec BEFORE" in result
 
     def test_non_security_query_passes_with_warning(self, harnessed_web_search):
-        """Non-security query passes through and result starts with SAFETY_WARNING."""
+        """Non-security query passes through and result starts with BEGIN_PREFIX."""
         # First call is a security query to consume the first_call flag,
         # since the fixture only gives one harness wrapper instance.
         harnessed_web_search.invoke({"query": "whos on my network", "max_results": 5})
@@ -83,8 +83,8 @@ class TestHarnessWrapperUnit:
             "query": "weather in tokyo",
             "max_results": 5,
         })
-        from agent_handler import SAFETY_WARNING
-        assert result.startswith(SAFETY_WARNING)
+        from agent_handler import BEGIN_PREFIX
+        assert result.startswith(BEGIN_PREFIX)
 
     def test_subsequent_security_query_passes_with_warning(self, harnessed_web_search):
         """After first call is consumed, even security queries pass through."""
@@ -93,31 +93,31 @@ class TestHarnessWrapperUnit:
             "query": "find nmap documentation",
             "max_results": 5,
         })
-        from agent_handler import SAFETY_WARNING
-        assert result.startswith(SAFETY_WARNING)
+        from agent_handler import BEGIN_PREFIX
+        assert result.startswith(BEGIN_PREFIX)
 
     def test_safety_warning_prepended_to_injection_result(self, harnessed_web_search):
-        """Injection content in search result still gets SAFETY_WARNING prepended."""
+        """Injection content in search result still gets BEGIN_PREFIX prepended."""
         harnessed_web_search.invoke({"query": "whos on my network", "max_results": 5})
         result = harnessed_web_search.invoke({
             "query": "weather in tokyo",
             "max_results": 5,
         })
-        from agent_handler import SAFETY_WARNING
-        assert result.startswith(SAFETY_WARNING)
+        from agent_handler import BEGIN_PREFIX
+        assert result.startswith(BEGIN_PREFIX)
         assert INJECTION in result, (
             "The underlying search result (including injection text) must "
             "still be visible after the warning prefix"
         )
 
     def test_safety_warning_not_in_blocked_message(self, harnessed_web_search):
-        """Blocked messages do NOT get the SAFETY_WARNING prefix."""
+        """Blocked messages do NOT get the BEGIN_PREFIX prefix."""
         result = harnessed_web_search.invoke({
             "query": "scan my network for vulnerabilities",
             "max_results": 5,
         })
-        from agent_handler import SAFETY_WARNING
-        assert SAFETY_WARNING not in result
+        from agent_handler import BEGIN_PREFIX
+        assert BEGIN_PREFIX not in result
         assert "[⛔ Harness" in result
 
     def test_passthrough_result_has_data_boundary(self, harnessed_web_search):
@@ -179,7 +179,7 @@ class TestLiveInjectionDefense:
 
     Stages:
       1. Send a non-security prompt that triggers web_search
-      2. The harnessed web_search wraps the result with SAFETY_WARNING
+      2. The harnessed web_search wraps the result with BEGIN_PREFIX
       3. Inspect the final response — if shell_exec was called, its
          ToolMessage will appear in the agent's output messages
     """

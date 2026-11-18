@@ -26,6 +26,22 @@
   Must be different from the agent model to avoid self-evaluation.
   E.g. `qwen3:4b` or `llama3.2:1b-instruct-q4_K_M`
 
+## Local Diffusion (separate GPU worker)
+- `diffusion/worker.py` runs on the Windows RTX 4090 host in native Windows Python (`Z:\contextcut\diffusion-venv`), not on Ubuntu; stdlib `http.server` binds `DIFFUSION_HOST:DIFFUSION_PORT` (default `0.0.0.0:8189`).
+- Ubuntu proxy setting `DIFFUSION_WORKER_URL` must be `http://192.168.137.1:8189`; `DIFFUSION_ENABLED` (default true) is editable under Settings → LLM Provider.
+- Remote workers return absolute image URLs (`http://192.168.137.1:8189/outputs/images/<name>`); override with `DIFFUSION_IMAGE_BASE_URL`. The worker serves those files from its own `DIFFUSION_OUTPUT_DIR` (default `.\outputs\images`).
+- Worker-side `DIFFUSION_PUBLIC_HOST` controls the host in generated URLs (default `127.0.0.1`; Windows start script sets `192.168.137.1`).
+- `DIFFUSION_IDLE_TIMEOUT` (default 300s) unloads the single active pipeline when idle and no generation lock is held.
+- Before image requests the proxy evicts all loaded Ollama models; before any LLM chat/completion request (including agent turns) it calls `POST /internal/unload`. Both now act on the same Windows 4090.
+- Settings → LLM Provider has a Test Worker button (`GET /api/diffusion/test?url=...`) that probes `/health` from the proxy host; dashboard chat renders `/outputs/images/*.png` inline when the URL origin is the proxy or configured image base.
+- Image tool calls show an indeterminate progress card in dashboard chat (model, prompt, elapsed timer); worker-driven real step progress is deferred.
+- Worker `/health` samples `nvidia-smi` every 5s (`DIFFUSION_GPU_SAMPLE_INTERVAL`) for GPU util/memory/temp/power; dashboard polls `/api/diffusion/status` every 5s during image generation.
+- Scripts: PowerShell `install-diffusion.ps1` (admin; one combined `pip install` with matched `torch`/`torchvision` cu126 pair plus unpinned diffusers stack, CUDA assert + import smoke test, `pip freeze > requirements-diffusion.lock.txt`, inbound firewall rule for TCP 8189 from `192.168.137.0/24`), `start-diffusion.ps1`, `stop-diffusion.ps1`. Stop falls back to a command-line/port scan when the PID file is stale; start checks port 8189 before launching, waits for a Python worker process to own that port instead of probing HTTP (the first `nvidia-smi` sample can be slow), and rewrites the PID file to the actual owner. Python 3.13.5 is supported. Linux bash scripts remain for local/WSL use.
+- Stage 1 model keys: `z-image-turbo`, `flux2-klein`, `flux1-dev`, `flux1-kontext`, `auto`; FP8 single-file, GGUF, and other quantized variants are intentionally out of scope.
+- Worker `DIFFUSION_MODEL_ROOT` (default `Z:\contextcut\models\official`, set by `start-diffusion.ps1`) points to self-contained diffusers directories; a missing directory falls back to the HF repo ID.
+- Worker `DIFFUSION_AUTO_TEXT_MODEL`, `DIFFUSION_AUTO_EDIT_MODEL`, `DIFFUSION_AUTO_INPAINT_MODEL`, and `DIFFUSION_AUTO_MULTIREF_MODEL` override `auto`; defaults are text/inpaint `z-image-turbo`, edits/multi-reference `flux2-klein`.
+- Proxy `diffusion_client.model_ids()` caches worker `/v1/models` for 30s so dashboard and `/v1/models` lists follow the worker without code edits; fallback list is used if the worker is offline.
+
 ## Context Tuning
 - `ContextTuningMiddleware` (`agent_handler.py`) head+tail clamps tool output and shrinks the model call that follows a tool result.
 - `CONTEXTCUT_TOOL_OUTPUT_MAX_CHARS` — default tool output clamp (default 4000; 0 disables)

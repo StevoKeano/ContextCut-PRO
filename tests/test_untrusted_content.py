@@ -6,7 +6,7 @@ import pytest
 
 from untrusted_content import (
     END_MARKER,
-    SAFETY_WARNING,
+    BEGIN_PREFIX,
     redact_special_tokens,
     wrap_untrusted,
 )
@@ -33,9 +33,9 @@ def test_redact_leaves_normal_code_untouched():
     assert redact_special_tokens(code) == code
 
 
-def test_wrap_has_warning_and_boundary():
+def test_wrap_has_boundary():
     result = wrap_untrusted("hello", source="unit-test", kind="file")
-    assert result.startswith(SAFETY_WARNING)
+    assert result.startswith(BEGIN_PREFIX)
     assert 'source="unit-test"' in result
     assert 'kind="file"' in result
     assert result.rstrip().endswith(END_MARKER)
@@ -73,12 +73,12 @@ def test_limit_truncates_payload():
 
 def test_empty_text_still_wrapped():
     result = wrap_untrusted("", source="x", kind="file")
-    assert result.startswith(SAFETY_WARNING)
+    assert result.startswith(BEGIN_PREFIX)
     assert result.rstrip().endswith(END_MARKER)
 
 
 def test_source_label_is_sanitized():
     result = wrap_untrusted("data", source='evil"\n>>>source', kind="file")
-    header = result.splitlines()[2]
+    header = result.splitlines()[0]
     assert 'evil"\n' not in header
     assert ">>>source" not in header

@@ -1,6 +1,10 @@
 #!/bin/bash
 INST="$(dirname "$0")"
 
+if [ "$1" = "--with-diffusion" ] && [ -f "$INST/stop-diffusion.sh" ]; then
+  bash "$INST/stop-diffusion.sh"
+fi
+
 # Stop watcher
 WATCHER_PIDFILE="$INST/.ingest.pid"
 if [ -f "$WATCHER_PIDFILE" ]; then

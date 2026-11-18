@@ -17,6 +17,10 @@ Configuration via environment variables (all optional — defaults shown):
   CONTEXTCUT_TOP_K           5                        Max Qdrant chunks to retrieve
   CONTEXTCUT_MIN_SCORE       0.30                     Minimum relevance score (0.0-1.0)
   CONTEXTCUT_MODEL                                    Default model name for chat tab
+  DIFFUSION_WORKER_URL       http://127.0.0.1:8189    Sibling diffusion worker endpoint
+  DIFFUSION_IMAGE_BASE_URL   (auto)                   Override returned image link base URL
+  DIFFUSION_ENABLED          true                     Expose local image generation/edits
+  DIFFUSION_OUTPUT_DIR       ./outputs/images         Shared generated-image directory
   VOYAGE_API_KEY             (required)               Voyage AI API key
 """
 
@@ -45,7 +49,9 @@ from datetime import datetime
 from http.server import HTTPServer, BaseHTTPRequestHandler
 from socketserver import ThreadingMixIn
 
-from untrusted_content import wrap_untrusted
+from diffusion import client as diffusion_client
+from diffusion.tools import make_image_tools
+from untrusted_content import UNTRUSTED_GUIDANCE, wrap_untrusted
 from capabilities import CAPABILITIES_BLURB, capabilities_block, is_meta_question
 from scan_sanitize import sanitize_scan_html
 from injection_guard import get_alerts_since, get_recent_alerts, latest_seq
@@ -243,6 +249,26 @@ DEFAULT_MODEL = os.getenv("CONTEXTCUT_MODEL", "qwen3:14b-q8_0")
 PROXY_RETRIES = int(os.getenv("CONTEXTCUT_RETRIES", "2"))
 PROXY_RETRY_BACKOFF = float(os.getenv("CONTEXTCUT_RETRY_BACKOFF", "1.0"))
 
+DIFFUSION_WORKER_URL = os.getenv("DIFFUSION_WORKER_URL", "http://127.0.0.1:8189")
+DIFFUSION_ENABLED = os.getenv("DIFFUSION_ENABLED", "true").strip().lower() in (
+    "1",
+    "true",
+    "yes",
+    "on",
+)
+OUTPUTS_DIR = Path(
+    os.getenv(
+        "DIFFUSION_OUTPUT_DIR",
+        str(Path(__file__).resolve().parent / "outputs" / "images"),
+    )
+).expanduser().resolve()
+diffusion_client.configure(DIFFUSION_WORKER_URL, DIFFUSION_ENABLED)
+
+
+def diffusion_model_names() -> list:
+    return list(diffusion_client.model_ids()) if DIFFUSION_ENABLED else []
+
+
 # ── Dynamic Provider Settings ────────────────────────────────────────────────
 PROVIDERS = {
     "Ollama": {"url": "http://localhost:11434", "key_required": False},
@@ -267,9 +293,16 @@ def load_saved_credentials():
         _ollama_url, \
         _api_key, \
         _free_only, \
-        _local_only
+        _local_only, \
+        DIFFUSION_WORKER_URL, \
+        DIFFUSION_ENABLED
     global _EMBED_MODE, _VK, _LOCAL_EMBED
     creds = CredentialManager.load_all()
+    if creds.get("diffusion_worker_url"):
+        DIFFUSION_WORKER_URL = creds["diffusion_worker_url"]
+    if creds.get("diffusion_enabled") is not None:
+        DIFFUSION_ENABLED = bool(creds["diffusion_enabled"])
+    diffusion_client.configure(DIFFUSION_WORKER_URL, DIFFUSION_ENABLED)
     _provider_name = creds.get("provider", "Ollama")
     _custom_base_url = creds.get("custom_url", "")
     _ollama_url = creds.get("ollama_url", "")
@@ -1564,6 +1597,8 @@ SYSTEM_BASE = (
     "If the context does not contain relevant information, say so clearly "
     "rather than fabricating details."
     "\n\n"
+    + UNTRUSTED_GUIDANCE
+    + "\n\n"
     + CAPABILITIES_BLURB
 )
 
@@ -1663,6 +1698,84 @@ class ProxyHandler(_SuppressBrokenPipe, BaseHTTPRequestHandler):
     def log_message(self, fmt, *args):
         pass
 
+    def _send_json(self, status: int, payload: dict):
+        body = json.dumps(payload).encode("utf-8")
+        self.send_response(status)
+        self.send_header("Content-Type", "application/json; charset=utf-8")
+        self.send_header("Content-Length", str(len(body)))
+        self.end_headers()
+        self.wfile.write(body)
+
+    def _serve_output_image(self):
+        name = urllib.parse.unquote(self.path.split("?", 1)[0].rsplit("/", 1)[-1])
+        target = (OUTPUTS_DIR / name).resolve() if name else OUTPUTS_DIR
+        if (
+            not name
+            or name != os.path.basename(name)
+            or not target.is_relative_to(OUTPUTS_DIR)
+            or target.suffix.lower() != ".png"
+            or not target.is_file()
+        ):
+            self._send_json(404, {"error": "not found"})
+            return
+        body = target.read_bytes()
+        self.send_response(200)
+        self.send_header("Content-Type", "image/png")
+        self.send_header("Content-Length", str(len(body)))
+        self.end_headers()
+        self.wfile.write(body)
+
+    def _models_with_diffusion(self) -> bool:
+        try:
+            req = urllib.request.Request(
+                get_current_upstream().rstrip("/") + "/v1/models", method="GET"
+            )
+            api_key = get_current_api_key()
+            if api_key:
+                req.add_header("Authorization", f"Bearer {api_key}")
+            with urllib.request.urlopen(req, timeout=UPSTREAM_TIMEOUT) as resp:
+                data = json.loads(resp.read().decode("utf-8"))
+        except urllib.error.HTTPError as exc:
+            err_body = exc.read()
+            self.send_response(exc.code)
+            self.send_header("Content-Type", "text/plain")
+            self.send_header("Content-Length", str(len(err_body)))
+            self.end_headers()
+            self.wfile.write(err_body)
+            return True
+        except Exception as exc:
+            self.send_response(502)
+            self.end_headers()
+            self.wfile.write(str(exc).encode())
+            return True
+        items = data.get("data") if isinstance(data, dict) else None
+        if isinstance(items, list):
+            known = {item.get("id") for item in items if isinstance(item, dict)}
+            for name in diffusion_model_names():
+                if name not in known:
+                    items.append(
+                        {"id": name, "object": "model", "owned_by": "local"}
+                    )
+        self._send_json(200, data)
+        return True
+
+    def _handle_image_request(self, raw_body: bytes, content_type: str):
+        if not DIFFUSION_ENABLED:
+            self._send_json(503, {"error": "local image diffusion is disabled"})
+            return
+        ollama_url = get_current_upstream() if _provider_name == "Ollama" else None
+        try:
+            status, payload = diffusion_client.forward_raw(
+                urllib.parse.urlparse(self.path).path,
+                raw_body,
+                content_type,
+                ollama_url=ollama_url,
+            )
+        except Exception as exc:
+            self._send_json(502, {"error": str(exc)[:500]})
+            return
+        self._send_json(status, payload)
+
     def _forward(
         self,
         method: str,
@@ -1671,6 +1784,11 @@ class ProxyHandler(_SuppressBrokenPipe, BaseHTTPRequestHandler):
         session_id: str = None,
     ):
         upstream = get_current_upstream()
+
+        if method == "POST" and self.path.startswith(
+            ("/v1/chat/completions", "/v1/completions", "/api/chat", "/api/generate")
+        ):
+            diffusion_client.unload_if_active()
 
         # Cloud providers use {base}/v1/chat/completions, Ollama uses {base}/v1/chat/completions too
         upstream_url = upstream + self.path
@@ -1836,6 +1954,13 @@ class ProxyHandler(_SuppressBrokenPipe, BaseHTTPRequestHandler):
 
     def do_GET(self):
         try:
+            route = urllib.parse.urlparse(self.path).path
+            if route.startswith("/outputs/images/"):
+                self._serve_output_image()
+                return
+            if route.rstrip("/") == "/v1/models" and DIFFUSION_ENABLED:
+                self._models_with_diffusion()
+                return
             self._forward("GET", b"")
         except Exception:
             import traceback
@@ -1867,6 +1992,14 @@ class ProxyHandler(_SuppressBrokenPipe, BaseHTTPRequestHandler):
                 self.close_connection = True
                 return
             raw_body = self.rfile.read(length)
+            if urllib.parse.urlparse(self.path).path in (
+                "/v1/images/generations",
+                "/v1/images/edits",
+            ):
+                self._handle_image_request(
+                    raw_body, self.headers.get("Content-Type", "")
+                )
+                return
             try:
                 body = json.loads(raw_body)
             except Exception:
@@ -2099,6 +2232,8 @@ def make_settings_page():
         else PROVIDERS.get(current_provider, {}).get("url", "")
     )
     ollama_input_url = _ollama_url if _ollama_url else UPSTREAM
+    diffusion_input_url = DIFFUSION_WORKER_URL
+    diffusion_checked = " checked" if DIFFUSION_ENABLED else ""
     has_key = bool(_api_key)
     masked_key = "••••••••••••••••" if has_key else ""
     provider_opts = "".join(
@@ -2182,6 +2317,20 @@ body{{background:var(--bg);color:var(--text);font-family:'JetBrains Mono',monosp
     <div class="form-group hidden" id="customUrlGroup">
       <label>Base URL</label>
       <input type="text" id="customUrl" placeholder="http://localhost:8080">
+    </div>
+
+    <div class="form-group">
+      <label>Diffusion Worker URL</label>
+      <input type="text" id="diffusionWorkerUrl" value="{diffusion_input_url}" placeholder="http://127.0.0.1:8189">
+      <label style="cursor:pointer;display:flex;align-items:center;gap:8px;margin-top:8px">
+        <input type="checkbox" id="diffusionEnabled" style="width:auto;accent-color:var(--accent)"{diffusion_checked}>
+        Enable local image generation / editing
+      </label>
+      <div style="font-size:10px;color:var(--muted);margin-top:4px">Requires a separate diffusion worker and venv. Ollama weights are unloaded before generation.</div>
+      <div class="btn-row">
+        <button type="button" class="btn btn-secondary" id="testDiffusionBtn" onclick="testDiffusionWorker()">🔌 Test Worker</button>
+        <span class="status" id="diffusionTestStatus"></span>
+      </div>
     </div>
 
     <div class="form-group">
@@ -2322,12 +2471,14 @@ async function saveSettings() {{
     const apiKey = document.getElementById('apiKey').value;
     const customUrl = document.getElementById('customUrl').value;
     const ollamaUrl = document.getElementById('ollamaUrl').value;
+    const diffusionWorkerUrl = document.getElementById('diffusionWorkerUrl').value;
+    const diffusionEnabled = document.getElementById('diffusionEnabled').checked;
     const freeOnly = document.getElementById('freeOnly').checked;
     const localOnly = document.getElementById('ollamaLocalOnly').checked;
     const resp = await fetch('/api/settings/provider', {{
       method: 'POST',
       headers: {{'Content-Type': 'application/json'}},
-      body: JSON.stringify({{provider, api_key: apiKey, custom_url: customUrl, ollama_url: ollamaUrl, free_only: freeOnly, local_only: localOnly, model: selectedModelName}})
+      body: JSON.stringify({{provider, api_key: apiKey, custom_url: customUrl, ollama_url: ollamaUrl, diffusion_worker_url: diffusionWorkerUrl, diffusion_enabled: diffusionEnabled, free_only: freeOnly, local_only: localOnly, model: selectedModelName}})
     }});
     const data = await resp.json();
     if (data.ok) {{
@@ -2345,6 +2496,31 @@ async function saveSettings() {{
   }} catch(e) {{
     status.textContent = 'Failed: ' + e.message;
     status.className = 'status err';
+  }} finally {{
+    btn.disabled = false;
+  }}
+}}
+
+async function testDiffusionWorker() {{
+  const btn = document.getElementById('testDiffusionBtn');
+  const status = document.getElementById('diffusionTestStatus');
+  const url = document.getElementById('diffusionWorkerUrl').value.trim();
+  btn.disabled = true;
+  status.className = 'status';
+  status.textContent = 'Testing ' + url + ' ...';
+  try {{
+    const resp = await fetch('/api/diffusion/test?url=' + encodeURIComponent(url));
+    const data = await resp.json();
+    if (data.ok) {{
+      status.className = 'status ok';
+      status.textContent = 'OK (' + data.latency_ms + 'ms) ' + (data.models || []).length + ' models' + (data.enabled ? '' : ' — disabled');
+    }} else {{
+      status.className = 'status err';
+      status.textContent = 'Failed: ' + (data.error || 'unknown error');
+    }}
+  }} catch(e) {{
+    status.className = 'status err';
+    status.textContent = 'Failed: ' + e.message;
   }} finally {{
     btn.disabled = false;
   }}
@@ -2748,6 +2924,12 @@ def make_dashboard():
     ts_key_present = bool(os.environ.get("TYPESAFE_API_KEY", "").strip())
     ts_backend = os.environ.get("CONTEXTCUT_SCAN_BACKEND", "llm").strip().lower()
     ts_on = ts_backend == "typesafe" and ts_key_present
+    diffusion_parsed = urllib.parse.urlparse(diffusion_client._image_base_url())
+    diffusion_origin = (
+        f"{diffusion_parsed.scheme}://{diffusion_parsed.netloc}"
+        if diffusion_parsed.scheme and diffusion_parsed.netloc
+        else ""
+    )
 
     is_cloud = _provider_name != "Ollama" or not _local_only
 
@@ -2883,6 +3065,22 @@ tr:hover td{{background:var(--surf2)}}
 .bubble:empty{{display:none}}
 .msg.user .bubble{{background:var(--accent);color:#000;font-weight:500}}
 .msg.assistant .bubble{{background:var(--surf2);border:1px solid var(--border)}}
+.generated-images{{display:flex;flex-wrap:wrap;gap:8px;margin-top:8px}}
+.generated-image{{max-width:100%;max-height:360px;border:1px solid var(--border);border-radius:6px;display:block;cursor:zoom-in}}
+.gen-progress{{border-left:3px solid var(--yellow);padding:10px 13px;background:var(--surf2);border:1px solid var(--border);border-radius:var(--r);max-width:min(620px,90%);margin:6px 0}}
+.gen-progress.done{{border-left-color:var(--green)}}
+.gen-head{{display:flex;align-items:center;gap:8px;font-size:12px}}
+.gen-spinner{{width:11px;height:11px;border:2px solid var(--border);border-top-color:var(--yellow);border-radius:50%;display:inline-block;animation:cc-spin .8s linear infinite}}
+.gen-check{{color:var(--green);font-weight:bold}}
+.gen-elapsed{{margin-left:auto;color:var(--muted);font-variant-numeric:tabular-nums}}
+.gen-bar{{height:5px;background:var(--border);border-radius:3px;overflow:hidden;margin:8px 0 6px}}
+.gen-bar-fill{{height:100%;width:35%;background:linear-gradient(90deg,transparent,var(--yellow),transparent);animation:cc-indeterminate 1.4s ease-in-out infinite}}
+.gen-progress.done .gen-bar-fill{{animation:none;background:var(--green);width:100%}}
+.gen-meta{{font-size:10px;color:var(--muted);word-break:break-word}}
+.gen-note{{font-size:10px;color:var(--muted);margin-top:4px;opacity:.85}}
+.gen-gpu{{font-size:10px;color:var(--muted);margin-top:3px;font-variant-numeric:tabular-nums}}
+@keyframes cc-spin{{to{{transform:rotate(360deg)}}}}
+@keyframes cc-indeterminate{{0%{{transform:translateX(-100%)}}100%{{transform:translateX(300%)}}}}
 .msg-meta{{font-size:10px;color:var(--muted);margin-top:3px;padding:0 4px}}
 .msg.user .msg-meta{{text-align:right}}
 .msg-stat{{display:inline-flex;gap:6px;align-items:center;flex-wrap:wrap}}
@@ -3151,6 +3349,7 @@ tr.cloud-off td{{background:#0a1a2e!important;color:#22c55e!important;border-top
 </div>
 
 <script>
+window.__CC_DIFFUSION_ORIGIN = {json.dumps(diffusion_origin)};
 let sessionId = null;
 let conversationHistory = [];
 let inputHistory = [];
@@ -3626,6 +3825,47 @@ async function testScan() {{
 function esc(s) {{
   return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;')
     .replace(/"/g,'&quot;').replace(/'/g,'&#39;').replace(/\\n/g,'<br>');
+}}
+
+function _diffusionImageAllowed(raw) {{
+  try {{
+    const u = new URL(raw, window.location.href);
+    if (u.protocol !== 'http:' && u.protocol !== 'https:') return false;
+    if (!u.pathname.startsWith('/outputs/images/')) return false;
+    if (!u.pathname.toLowerCase().endsWith('.png')) return false;
+    return u.origin === window.location.origin ||
+      (window.__CC_DIFFUSION_ORIGIN && u.origin === window.__CC_DIFFUSION_ORIGIN);
+  }} catch(e) {{ return false; }}
+}}
+
+function attachDiffusionImages(root, text) {{
+  if (!root || !text) return;
+  const old = root.querySelector('.generated-images');
+  if (old) old.remove();
+  const found = new Set();
+  const re = /(?:https?:\\/\\/[^\\s"'<>]+|\\/outputs\\/images\\/[^\\s"'<>]+?)\\.png/gi;
+  let m;
+  while ((m = re.exec(text)) !== null) {{
+    if (_diffusionImageAllowed(m[0])) found.add(m[0]);
+  }}
+  if (!found.size) return;
+  const wrap = document.createElement('div');
+  wrap.className = 'generated-images';
+  for (const url of found) {{
+    const link = document.createElement('a');
+    link.href = url;
+    link.target = '_blank';
+    link.rel = 'noopener';
+    const img = document.createElement('img');
+    img.src = url;
+    img.alt = 'Generated image';
+    img.className = 'generated-image';
+    img.loading = 'lazy';
+    img.onerror = function() {{ img.replaceWith(document.createTextNode('[image unavailable] ')); }};
+    link.appendChild(img);
+    wrap.appendChild(link);
+  }}
+  root.appendChild(wrap);
 }}
 
 function sanitizeScanHtml(html) {{
@@ -4392,6 +4632,7 @@ function appendMsg(role, text, statHtml) {{
     `<div class="bubble">${{display}}</div>` +
     (statHtml ? `<div class="msg-meta"><div class="msg-stat">${{statHtml}}</div></div>` : '');
   box.appendChild(div);
+  attachDiffusionImages(div.querySelector('.bubble'), text);
   div.scrollIntoView({{behavior:'smooth', block:'start'}});
 }}
 
@@ -4408,6 +4649,97 @@ function showTyping() {{
 function removeTyping() {{
   const el = document.getElementById('typing-indicator');
   if (el) el.remove();
+}}
+
+let _genProgressTimer = null;
+let _genStatsTimer = null;
+async function refreshGenerationStats() {{
+  const card = document.getElementById('generation-progress');
+  if (!card) return;
+  const el = card.querySelector('.gen-gpu');
+  if (!el) return;
+  try {{
+    const resp = await fetch('/api/diffusion/status', {{cache:'no-store'}});
+    const data = await resp.json();
+    if (!data.ok) {{
+      el.textContent = data.error ? 'GPU stats unavailable: ' + data.error : 'GPU stats unavailable';
+      return;
+    }}
+    if (data.gpu_name) card.title = data.gpu_name;
+    const parts = [];
+    if (data.gpu_utilization_percent !== null && data.gpu_utilization_percent !== undefined) parts.push('GPU ' + data.gpu_utilization_percent + '%');
+    if (data.gpu_memory_used_bytes && data.gpu_memory_total_bytes) parts.push((data.gpu_memory_used_bytes/1073741824).toFixed(1) + '/' + (data.gpu_memory_total_bytes/1073741824).toFixed(1) + ' GB');
+    if (data.gpu_temperature_c !== null && data.gpu_temperature_c !== undefined) parts.push(data.gpu_temperature_c + '°C');
+    if (data.gpu_power_watts !== null && data.gpu_power_watts !== undefined) parts.push(Math.round(data.gpu_power_watts) + 'W');
+    if (data.active_model) parts.push(data.active_model);
+    if (!parts.length && data.gpu_error) parts.push(data.gpu_error);
+    el.textContent = parts.length ? parts.join(' · ') : 'GPU stats unavailable';
+  }} catch(e) {{
+    el.textContent = 'GPU stats unavailable';
+  }}
+}}
+function _genProgressInput(input) {{
+  if (typeof input === 'string') {{
+    try {{ return JSON.parse(input); }} catch(e) {{ return {{prompt: input}}; }}
+  }}
+  return input || {{}};
+}}
+function startGenerationProgress(name, input) {{
+  const box = document.getElementById('messages');
+  if (!box) return;
+  removeTyping();
+  const info = _genProgressInput(input);
+  let card = document.getElementById('generation-progress');
+  if (!card) {{
+    card = document.createElement('div');
+    card.id = 'generation-progress';
+    card.className = 'msg assistant gen-progress';
+    box.appendChild(card);
+  }}
+  const model = esc(info.model || (name === 'edit_image' ? 'auto' : 'z-image-turbo'));
+  const prompt = esc(String(info.prompt || '').slice(0, 160) || 'No prompt');
+  const start = Date.now();
+  let slowNoted = false;
+  card.innerHTML =
+    '<div class="gen-head"><span class="gen-spinner"></span><strong>Generating image</strong>' +
+    '<span class="gen-elapsed" id="genElapsed">0s</span></div>' +
+    '<div class="gen-bar"><div class="gen-bar-fill"></div></div>' +
+    '<div class="gen-meta">Model: ' + model + ' · Prompt: ' + prompt + '</div>' +
+    '<div class="gen-note">Preparing GPU → loading model → denoising. Keep this tab open; first runs can take a few minutes.</div>' +
+    '<div class="gen-gpu">GPU stats: contacting worker…</div>';
+  card.scrollIntoView({{behavior:'smooth', block:'start'}});
+  if (_genProgressTimer) clearInterval(_genProgressTimer);
+  if (_genStatsTimer) clearInterval(_genStatsTimer);
+  refreshGenerationStats();
+  _genStatsTimer = setInterval(refreshGenerationStats, 5000);
+  _genProgressTimer = setInterval(() => {{
+    const el = document.getElementById('genElapsed');
+    if (!el) {{ clearInterval(_genProgressTimer); return; }}
+    const s = Math.floor((Date.now() - start) / 1000);
+    el.textContent = s < 60 ? s + 's' : Math.floor(s / 60) + 'm ' + (s % 60) + 's';
+    if (!slowNoted && s > 45) {{
+      const note = card.querySelector('.gen-note');
+      if (note) note.textContent = 'First run loads ~20 GB of weights; longer waits are normal.';
+      slowNoted = true;
+    }}
+  }}, 1000);
+}}
+function markGenerationProgressDone() {{
+  const card = document.getElementById('generation-progress');
+  if (!card) return;
+  if (_genProgressTimer) {{ clearInterval(_genProgressTimer); _genProgressTimer = null; }}
+  if (_genStatsTimer) {{ clearInterval(_genStatsTimer); _genStatsTimer = null; }}
+  card.classList.add('done');
+  const head = card.querySelector('.gen-head');
+  if (head) head.innerHTML = '<span class="gen-check">✓</span><strong>Image generated</strong>';
+  const note = card.querySelector('.gen-note');
+  if (note) note.textContent = 'Preview should appear in the tool result below.';
+}}
+function finishGenerationProgress() {{
+  if (_genProgressTimer) {{ clearInterval(_genProgressTimer); _genProgressTimer = null; }}
+  if (_genStatsTimer) {{ clearInterval(_genStatsTimer); _genStatsTimer = null; }}
+  const card = document.getElementById('generation-progress');
+  if (card) card.remove();
 }}
 
 function updateStats(d) {{
@@ -4820,6 +5152,7 @@ async function sendMessage(taskIdOverride) {{
                 fullText += data.token;
                 ensureBubble();
                 bubble.innerHTML = stripDeadKnowledgeLinks(linkCitations(esc(fullText)));
+                attachDiffusionImages(bubble, fullText);
               }} else if (data.name && data.input && !data.result) {{
                 const td = getToolDiv();
                 const div = document.createElement('div');
@@ -4829,7 +5162,9 @@ async function sendMessage(taskIdOverride) {{
                   '<div class="tool-input">' + esc(typeof data.input === 'string' ? data.input : JSON.stringify(data.input, null, 2)) + '</div>';
                 td.appendChild(div);
                 toolCount += 1;
-                if (!fullText) showTyping();
+                if (data.name === 'generate_image' || data.name === 'edit_image') {{
+                  startGenerationProgress(data.name, data.input);
+                }} else if (!fullText) showTyping();
               }} else if (data.name && data.result) {{
                 let existing = null;
                 if (assistantDiv) {{
@@ -4846,9 +5181,13 @@ async function sendMessage(taskIdOverride) {{
                     rdiv.className = 'tool-result';
                     existing.appendChild(rdiv);
                   }}
-                  rdiv.textContent = typeof data.result === 'string' ? data.result.substring(0,2000) : JSON.stringify(data.result).substring(0,2000);
+                  const resultText = typeof data.result === 'string' ? data.result.substring(0,2000) : JSON.stringify(data.result).substring(0,2000);
+                  rdiv.textContent = resultText;
+                  attachDiffusionImages(rdiv, resultText);
                 }}
-                if (!fullText) showTyping();
+                if (data.name === 'generate_image' || data.name === 'edit_image') {{
+                  markGenerationProgressDone();
+                }} else if (!fullText) showTyping();
               }} else if (data.type === 'correction') {{
                 ensureBubble();
                 const corrDiv = document.createElement('div');
@@ -4857,12 +5196,14 @@ async function sendMessage(taskIdOverride) {{
                 assistantDiv.appendChild(corrDiv);
               }} else if (data.type === 'done') {{
                 removeTyping();
+                finishGenerationProgress();
                 if (thinkingBlock) thinkingBlock.open = false;
                 const doneText = typeof data.response === 'string' ? data.response : '';
                 if (doneText.trim()) {{
                   fullText = doneText;
                   ensureBubble();
                   bubble.innerHTML = stripDeadKnowledgeLinks(linkCitations(esc(fullText)));
+                  attachDiffusionImages(bubble, fullText);
                 }} else if (!fullText) {{
                   ensureBubble();
                   const n = toolCount;
@@ -4876,8 +5217,10 @@ async function sendMessage(taskIdOverride) {{
                 fullText = data.response;
                 ensureBubble();
                 bubble.innerHTML = stripDeadKnowledgeLinks(linkCitations(esc(fullText)));
+                attachDiffusionImages(bubble, fullText);
               }} else if (data.error) {{
                 removeTyping();
+                finishGenerationProgress();
                 ensureBubble();
                 bubble.innerHTML = '\u274c Agent error: ' + esc(data.error);
               }}
@@ -4887,6 +5230,7 @@ async function sendMessage(taskIdOverride) {{
       }}
     }} catch(e) {{
       removeTyping();
+      finishGenerationProgress();
       if (e.name === 'AbortError') {{
         if (!fullText) appendMsg('assistant', '⏹ Stopped after ' + Math.round(clientTimeoutMs/1000) + 's — no response from model.', '');
       }} else {{
@@ -4896,6 +5240,7 @@ async function sendMessage(taskIdOverride) {{
     }} finally {{
       clearTimeout(agentTimeout);
       removeTyping();
+      finishGenerationProgress();
       if (thinkingBlock) thinkingBlock.open = false;
       if (fullText) {{
         conversationHistory.push({{role:'assistant', content:fullText}});
@@ -4954,6 +5299,7 @@ async function sendMessage(taskIdOverride) {{
             fullText += '\\n\\n\\u26a0 ' + em;
             ensureBubble();
             bubble.innerHTML = stripDeadKnowledgeLinks(linkCitations(esc(fullText)));
+            attachDiffusionImages(bubble, fullText);
             continue;
           }}
           const delta = chunk.choices && chunk.choices[0] && chunk.choices[0].delta;
@@ -4966,6 +5312,7 @@ async function sendMessage(taskIdOverride) {{
           fullText += token;
           ensureBubble();
           bubble.innerHTML = stripDeadKnowledgeLinks(linkCitations(esc(fullText)));
+          attachDiffusionImages(bubble, fullText);
         }} catch(e) {{}}
       }}
     }}
@@ -5739,6 +6086,55 @@ class DashboardHandler(_SuppressBrokenPipe, BaseHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(body)
 
+    def _handle_diffusion_test(self):
+        started = time.monotonic()
+        parsed = urllib.parse.urlparse(self.path)
+        qs = urllib.parse.parse_qs(parsed.query)
+        url = (qs.get("url") or [""])[0].strip() or DIFFUSION_WORKER_URL
+        result = {
+            "ok": False,
+            "enabled": DIFFUSION_ENABLED,
+            "url": url,
+            "latency_ms": 0,
+        }
+        try:
+            with urllib.request.urlopen(
+                url.rstrip("/") + "/health", timeout=5
+            ) as resp:
+                payload = json.loads(resp.read().decode("utf-8"))
+            result.update(
+                {
+                    "ok": payload.get("status") == "ok",
+                    "status": payload.get("status", ""),
+                    "models": payload.get("models", []),
+                    "active_model": payload.get("active_model"),
+                    "vram_allocated_bytes": payload.get("vram_allocated_bytes", 0),
+                }
+            )
+            if not result["ok"]:
+                result["error"] = "worker returned a non-ok status"
+        except Exception as exc:
+            result["error"] = str(exc)[:300]
+        result["latency_ms"] = int((time.monotonic() - started) * 1000)
+        self._send_json(result)
+
+    def _handle_diffusion_status(self):
+        if not DIFFUSION_ENABLED:
+            self._send_json(200, {"ok": False, "enabled": False,
+                                  "error": "local image diffusion is disabled"})
+            return
+        try:
+            payload = diffusion_client._get_json(
+                DIFFUSION_WORKER_URL + "/health", timeout=5
+            )
+        except Exception as exc:
+            self._send_json(200, {"ok": False, "enabled": True,
+                                  "error": str(exc)[:300]})
+            return
+        result = {"ok": payload.get("status") == "ok", "enabled": True}
+        result.update(payload)
+        self._send_json(result)
+
     def _experiment_supervisor(self):
         from supervisor import Supervisor
 
@@ -5871,6 +6267,12 @@ class DashboardHandler(_SuppressBrokenPipe, BaseHTTPRequestHandler):
             self._send_json({"ok": False, "error": str(exc)}, 400)
 
     def do_GET(self):
+        if urllib.parse.urlparse(self.path).path == "/api/diffusion/test":
+            self._handle_diffusion_test()
+            return
+        if urllib.parse.urlparse(self.path).path == "/api/diffusion/status":
+            self._handle_diffusion_status()
+            return
         if self.path.startswith("/api/experiments") or self.path.startswith(
             "/api/approvals"
         ):
@@ -6065,6 +6467,17 @@ class DashboardHandler(_SuppressBrokenPipe, BaseHTTPRequestHandler):
                         body = json.dumps({"models": models}, ensure_ascii=True).encode(
                             "utf-8"
                         )
+
+                if DIFFUSION_ENABLED:
+                    known = {m["name"] for m in models}
+                    models.extend(
+                        {"name": name}
+                        for name in diffusion_model_names()
+                        if name not in known
+                    )
+                    body = json.dumps({"models": models}, ensure_ascii=True).encode(
+                        "utf-8"
+                    )
 
                 self.send_response(200)
                 self.send_header("Content-Type", "application/json")
@@ -6696,13 +7109,21 @@ class DashboardHandler(_SuppressBrokenPipe, BaseHTTPRequestHandler):
                     _api_key, \
                     _free_only, \
                     _local_only, \
-                    UPSTREAM
+                    UPSTREAM, \
+                    DIFFUSION_WORKER_URL, \
+                    DIFFUSION_ENABLED
                 _provider_name = body.get("provider", "Ollama")
                 _custom_base_url = normalize_custom_base(body.get("custom_url", ""))
                 incoming_key = body.get("api_key", "").strip()
                 ollama_url = body.get("ollama_url", "").strip()
+                diffusion_worker_url = body.get("diffusion_worker_url", "").strip()
                 _free_only = body.get("free_only", False)
                 _local_only = body.get("local_only", False)
+                if diffusion_worker_url:
+                    DIFFUSION_WORKER_URL = diffusion_worker_url
+                if "diffusion_enabled" in body:
+                    DIFFUSION_ENABLED = bool(body["diffusion_enabled"])
+                diffusion_client.configure(DIFFUSION_WORKER_URL, DIFFUSION_ENABLED)
 
                 # If frontend sent masked value, keep server-side key
                 if incoming_key and incoming_key != "••••••••••••••••":
@@ -6715,6 +7136,8 @@ class DashboardHandler(_SuppressBrokenPipe, BaseHTTPRequestHandler):
                 CredentialManager.save("provider", _provider_name)
                 CredentialManager.save("custom_url", _custom_base_url)
                 CredentialManager.save("ollama_url", ollama_url)
+                CredentialManager.save("diffusion_worker_url", DIFFUSION_WORKER_URL)
+                CredentialManager.save("diffusion_enabled", DIFFUSION_ENABLED)
                 CredentialManager.save("free_only", _free_only)
                 CredentialManager.save("local_only", _local_only)
                 if _api_key:
@@ -6837,6 +7260,12 @@ class DashboardHandler(_SuppressBrokenPipe, BaseHTTPRequestHandler):
                             models = sorted(
                                 [m.get("id", str(m)) for m in data.get("data", [])]
                             )
+
+                if DIFFUSION_ENABLED:
+                    known = set(models)
+                    models.extend(
+                        name for name in diffusion_model_names() if name not in known
+                    )
 
                 # Ensure ASCII-safe response
                 resp = json.dumps({"models": models}, ensure_ascii=True).encode("utf-8")
@@ -7924,6 +8353,16 @@ class DashboardHandler(_SuppressBrokenPipe, BaseHTTPRequestHandler):
                         provider=_provider_name,
                         reasoning_effort=reasoning_effort,
                         max_tokens=max_tokens,
+                        extra_tools=(
+                            make_image_tools(
+                                ollama_url=get_current_upstream()
+                                if _provider_name == "Ollama"
+                                else None,
+                                provider=_provider_name,
+                            )
+                            if DIFFUSION_ENABLED
+                            else []
+                        ),
                     )
                 except Exception as e:
                     err_str = str(e)

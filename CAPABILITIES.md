@@ -67,6 +67,26 @@ running: **`shell_exec`**, **`content_write`**, **`publish_content`**, and
 Tools are extendable at runtime: `run_python`, `shell_exec`, and `compose_tool` let the
 agent generate code and new tools on the fly.
 
+## Local image generation
+
+When the diffusion worker is enabled, Agent mode has `generate_image` and `edit_image`.
+Stage 1 uses self-contained diffusers repos only:
+
+| Model key | Best for | Notes |
+|---|---|---|
+| `z-image-turbo` | Fast text-to-image and masked inpainting | Default; fastest. |
+| `flux2-klein` | Fast text-to-image and multi-reference edits | Default for edits/multi-reference. |
+| `flux1-dev` | Higher-quality text-to-image or single-image edits | Slower. |
+| `flux1-kontext` | Character/style consistency across edits | Edits only; specify explicitly. |
+| `auto` | Task-based default | Text/inpaint → `z-image-turbo`; edits → `flux2-klein`. |
+
+Pass `model=` to either tool to override `auto`. Display names like `FLUX.1-dev` are
+accepted aliases. Automatic choices are configurable with `DIFFUSION_AUTO_TEXT_MODEL`,
+`DIFFUSION_AUTO_EDIT_MODEL`, `DIFFUSION_AUTO_INPAINT_MODEL`, and
+`DIFFUSION_AUTO_MULTIREF_MODEL` on the worker. Local model directories are read from
+`DIFFUSION_MODEL_ROOT` (default `Z:\contextcut\models\official`); if a directory is absent,
+the worker falls back to the Hugging Face repo ID.
+
 ## Coding with ContextCut
 
 Three ways to code with it:

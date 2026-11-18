@@ -25,8 +25,14 @@ from langchain_openai import ChatOpenAI
 from langchain.agents import create_agent
 from langchain_core.messages import HumanMessage, AIMessage, SystemMessage, ToolMessage
 from langchain_core.callbacks import BaseCallbackHandler
+from diffusion.client import chat_client_kwargs
 from qdrant_proxy_final import qdrant_context
-from untrusted_content import SAFETY_WARNING, wrap_untrusted
+from untrusted_content import (
+    BEGIN_PREFIX,
+    SAFETY_WARNING,
+    UNTRUSTED_GUIDANCE,
+    wrap_untrusted,
+)
 from capabilities import CAPABILITIES_BLURB, capabilities_text
 from agent_policy import (
     CommandNeedsApproval,
@@ -2239,6 +2245,8 @@ def get_system_prompt() -> str:
         SYSTEM_PROMPT
         + "\n\n"
         + CAPABILITIES_BLURB
+        + "\n\nUNTRUSTED CONTENT:\n"
+        + UNTRUSTED_GUIDANCE
         + "\n\nWORKSPACE:\n"
         + f"- Active workspace: {AGENT_WORKSPACE}\n"
         + "- Relative paths passed to read_file, write_file, append_file, "
@@ -2407,6 +2415,7 @@ def build_agent(model_name: str = None, upstream: str = None,
         streaming=True,
         stream_chunk_timeout=_stream_chunk_timeout_setting(),
         **extra,
+        **chat_client_kwargs(),
     )
 
     tools = apply_harness(
