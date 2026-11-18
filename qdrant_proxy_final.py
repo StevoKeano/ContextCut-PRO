@@ -6120,16 +6120,20 @@ class DashboardHandler(_SuppressBrokenPipe, BaseHTTPRequestHandler):
 
     def _handle_diffusion_status(self):
         if not DIFFUSION_ENABLED:
-            self._send_json(200, {"ok": False, "enabled": False,
-                                  "error": "local image diffusion is disabled"})
+            self._send_json(
+                {"ok": False, "enabled": False,
+                 "error": "local image diffusion is disabled"}
+            )
             return
         try:
             payload = diffusion_client._get_json(
                 DIFFUSION_WORKER_URL + "/health", timeout=5
             )
         except Exception as exc:
-            self._send_json(200, {"ok": False, "enabled": True,
-                                  "error": str(exc)[:300]})
+            print(f"[diffusion] status error: {exc}", flush=True)
+            self._send_json(
+                {"ok": False, "enabled": True, "error": str(exc)[:300]}
+            )
             return
         result = {"ok": payload.get("status") == "ok", "enabled": True}
         result.update(payload)

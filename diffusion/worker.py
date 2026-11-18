@@ -69,6 +69,8 @@ class ModelSpec:
     guidance_scale: float = 0.0
     local_dir: str | None = None
     max_reference_images: int = 1
+    offload_mode: str | None = None
+    agent_visible: bool = True
 
 
 MODEL_REGISTRY = {
@@ -105,6 +107,8 @@ MODEL_REGISTRY = {
         steps=28,
         guidance_scale=3.5,
         local_dir="FLUX.1-dev",
+        offload_mode="sequential",
+        agent_visible=False,
     ),
     "flux1-kontext": ModelSpec(
         model_id="black-forest-labs/FLUX.1-Kontext-dev",
@@ -116,6 +120,11 @@ MODEL_REGISTRY = {
         max_reference_images=4,
     ),
 }
+
+PUBLIC_MODEL_KEYS = tuple(
+    key for key, spec in MODEL_REGISTRY.items() if spec.agent_visible
+)
+PUBLIC_MODEL_IDS = PUBLIC_MODEL_KEYS + (AUTO_MODEL_KEY,)
 
 
 def _model_source(spec: ModelSpec) -> str:
@@ -297,6 +306,12 @@ class PipelineManager:
             pipe = pipeline_class.from_pretrained(source, dtype=dtype)
         except TypeError:
             pipe = pipeline_class.from_pretrained(source, torch_dtype=dtype)
+        if spec.offload_mode == "sequential":
+            pipe.enable_sequential_cpu_offload()
+            return pipe
+        if spec.offload_mode == "model":
+            pipe.enable_model_cpu_offload()
+            return pipe
         return pipe.to("cuda")
 
     def _unload_locked(self):
@@ -573,7 +588,7 @@ class DiffusionHandler(BaseHTTPRequestHandler):
         return self.rfile.read(length) if length > 0 else b""
 
     def _status_payload(self) -> dict:
-        payload = {"status": "ok", "models": list(MODEL_IDS)}
+        payload = {"status": "ok", "models": list(PUBLIC_MODEL_IDS)}
         payload.update(self.manager.status())
         payload.update(_gpu_stats())
         return payload
@@ -590,7 +605,7 @@ class DiffusionHandler(BaseHTTPRequestHandler):
                     "object": "list",
                     "data": [
                         {"id": model, "object": "model", "owned_by": "local"}
-                        for model in MODEL_IDS
+                        for model in PUBLIC_MODEL_IDS
                     ],
                 },
             )

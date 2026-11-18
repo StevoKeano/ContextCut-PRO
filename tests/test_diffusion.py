@@ -71,6 +71,44 @@ class TestModelRegistry:
         assert resolve_model("FLUX.1-dev") == "flux1-dev"
         assert resolve_model("FLUX.1-Kontext-dev") == "flux1-kontext"
 
+    def test_flux1_dev_is_hidden_but_explicitly_resolvable(self):
+        from diffusion.worker import MODEL_REGISTRY, PUBLIC_MODEL_IDS, resolve_model
+
+        assert "flux1-dev" not in PUBLIC_MODEL_IDS
+        assert set(PUBLIC_MODEL_IDS) == {
+            "z-image-turbo",
+            "flux2-klein",
+            "flux1-kontext",
+            "auto",
+        }
+        assert MODEL_REGISTRY["flux1-dev"].offload_mode == "sequential"
+        assert resolve_model("flux1-dev") == "flux1-dev"
+
+    def test_flux1_dev_uses_sequential_cpu_offload(self, monkeypatch):
+        import sys
+
+        from diffusion.worker import PipelineManager
+
+        calls = []
+        pipe = SimpleNamespace(
+            enable_sequential_cpu_offload=lambda: calls.append("sequential"),
+            enable_model_cpu_offload=lambda: calls.append("model"),
+            to=lambda device: calls.append(device),
+        )
+        pipeline_class = SimpleNamespace(
+            from_pretrained=lambda source, **kwargs: pipe
+        )
+        monkeypatch.setitem(
+            sys.modules, "torch", SimpleNamespace(bfloat16="bfloat16")
+        )
+        monkeypatch.setitem(
+            sys.modules, "diffusers", SimpleNamespace(FluxPipeline=pipeline_class)
+        )
+
+        manager = PipelineManager(idle_timeout=1)
+        assert manager._load_pipeline("flux1-dev", "text") is pipe
+        assert calls == ["sequential"]
+
     def test_auto_policy_env(self, monkeypatch):
         from diffusion.worker import resolve_model
 
@@ -415,7 +453,7 @@ class TestProxyRoutes:
             assert _request_url(request).endswith("/v1/models")
             return _FakeResponse({"object": "list", "data": [{"id": "llama"}]})
 
-        models = ["z-image-turbo", "flux2-klein", "flux1-dev", "flux1-kontext", "auto"]
+        models = ["z-image-turbo", "flux2-klein", "flux1-kontext", "auto"]
         with patch("qdrant_proxy_final.urllib.request.urlopen", side_effect=fake_urlopen):
             with patch("qdrant_proxy_final.diffusion_model_names", return_value=models):
                 status, raw = make_handler("/v1/models", "GET", handler_cls=ProxyHandler)
@@ -534,6 +572,24 @@ class TestDashboardDiffusionTest:
         assert data["gpu_utilization_percent"] == 97
         assert data["gpu_memory_total_bytes"] == 25768876000
         assert data["active_model"] == "z-image-turbo"
+
+    def test_status_endpoint_reports_worker_error(self, make_handler, monkeypatch, capsys):
+        import qdrant_proxy_final as proxy
+
+        monkeypatch.setattr(proxy, "DIFFUSION_ENABLED", True)
+        monkeypatch.setattr(proxy, "DIFFUSION_WORKER_URL", "http://worker:8189")
+        with patch(
+            "qdrant_proxy_final.diffusion_client._get_json",
+            side_effect=OSError("worker timeout"),
+        ):
+            status, raw = make_handler("/api/diffusion/status", "GET")
+
+        assert status == 200
+        data = json.loads(raw.split(b"\r\n\r\n", 1)[-1])
+        assert data["ok"] is False
+        assert data["enabled"] is True
+        assert data["error"] == "worker timeout"
+        assert "[diffusion] status error: worker timeout" in capsys.readouterr().out
 
 
 class TestDashboardGenerationProgress:

@@ -27,8 +27,8 @@ def make_image_tools(ollama_url=None, provider=None) -> list:
     ) -> str:
         """Generate a local image from a text prompt.
 
-        Model choices: z-image-turbo (fast default), flux2-klein (fast FLUX),
-        flux1-dev (higher quality). Returns JSON with an image URL.
+        Use only these model choices: z-image-turbo (fast default) or
+        flux2-klein (fast FLUX). Returns JSON with an image URL.
         """
         payload = {
             "prompt": prompt,
@@ -58,8 +58,8 @@ def make_image_tools(ollama_url=None, provider=None) -> list:
     ) -> str:
         """Edit one or more base64 images locally, optionally with a mask.
 
-        Model choices: auto (default), flux2-klein (fast, multi-reference),
-        flux1-kontext (character/style consistency), flux1-dev (single image).
+        Use only these model choices: auto (default), flux2-klein (fast,
+        multi-reference), or flux1-kontext (character/style consistency).
         Returns JSON with an image URL.
         """
         payload = {

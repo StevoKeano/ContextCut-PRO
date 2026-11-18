@@ -76,12 +76,15 @@ Stage 1 uses self-contained diffusers repos only:
 |---|---|---|
 | `z-image-turbo` | Fast text-to-image and masked inpainting | Default; fastest. |
 | `flux2-klein` | Fast text-to-image and multi-reference edits | Default for edits/multi-reference. |
-| `flux1-dev` | Higher-quality text-to-image or single-image edits | Slower. |
+| `flux1-dev` | Hidden manual override only | Sequential CPU offload; very slow. |
 | `flux1-kontext` | Character/style consistency across edits | Edits only; specify explicitly. |
 | `auto` | Task-based default | Text/inpaint → `z-image-turbo`; edits → `flux2-klein`. |
 
-Pass `model=` to either tool to override `auto`. Display names like `FLUX.1-dev` are
-accepted aliases. Automatic choices are configurable with `DIFFUSION_AUTO_TEXT_MODEL`,
+The agent normally chooses only the visible models above. `flux1-dev` is hidden from
+`/v1/models` and tool guidance but still works if you explicitly pass
+`model="flux1-dev"`; it uses sequential CPU offload because its full bfloat16 weights
+do not fit in 24GB VRAM. Display names like `FLUX.1-dev` are accepted aliases.
+Automatic choices are configurable with `DIFFUSION_AUTO_TEXT_MODEL`,
 `DIFFUSION_AUTO_EDIT_MODEL`, `DIFFUSION_AUTO_INPAINT_MODEL`, and
 `DIFFUSION_AUTO_MULTIREF_MODEL` on the worker. Local model directories are read from
 `DIFFUSION_MODEL_ROOT` (default `Z:\contextcut\models\official`); if a directory is absent,
