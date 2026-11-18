@@ -1588,6 +1588,44 @@ def qdrant_context(query: str) -> tuple[str, list[dict]]:
         return "", []
 
 
+_IMAGE_REQUEST_RE = re.compile(
+    r"\b(gen|generate|create|make|draw|render|edit|redraw|redo|modify|change|adjust)\b"
+    r"[^\n]{0,120}\b(image|images|photo|photos|picture|pictures|render|scene|shot)\b"
+    r"|\b(image|images|photo|photos|picture|pictures)\s+of\b"
+    r"|\b(generate_image|edit_image)\b",
+    re.IGNORECASE,
+)
+
+
+def image_markdown_from_tool_output(output: str) -> str:
+    text = str(output or "")
+    match = re.search(
+        r"https?://[^\s\"'<>)]+/outputs/images/[^\s\"'<>)]+",
+        text,
+    )
+    if match:
+        return f"![Generated image]({match.group(0)})"
+    match = re.search(r"(/outputs/images/[^\s\"'<>)]+)", text)
+    if not match:
+        return ""
+    return f"![Generated image]({match.group(1)})"
+
+
+def is_image_request(text: str, history=None) -> bool:
+    query = str(text or "")
+    if _IMAGE_REQUEST_RE.search(query):
+        return True
+    for entry in history or []:
+        if isinstance(entry, dict):
+            content = entry.get("content", "")
+        else:
+            content = getattr(entry, "content", entry)
+        content = str(content)
+        if "/outputs/images/" in content or "generate_image" in content:
+            return True
+    return False
+
+
 # ── Context injection ─────────────────────────────────────────────────────────
 SYSTEM_BASE = (
     "You are a helpful AI assistant. "
@@ -2061,6 +2099,18 @@ class ProxyHandler(_SuppressBrokenPipe, BaseHTTPRequestHandler):
 
                     add_to_history(session_id, "user", new_user_content)
 
+                    session = _sessions.get(session_id)
+                    image_followup = (
+                        session.pop("last_image_tool_content", None)
+                        if session
+                        else None
+                    )
+                    if image_followup:
+                        body["messages"].insert(
+                            max(0, len(body["messages"]) - 1),
+                            {"role": "assistant", "content": image_followup},
+                        )
+
                 for msg in reversed(body["messages"]):
                     if msg.get("role") == "user":
                         c = msg.get("content", "")
@@ -2068,7 +2118,10 @@ class ProxyHandler(_SuppressBrokenPipe, BaseHTTPRequestHandler):
                         break
                 tok_before = count_body_tokens(body)
                 if query:
-                    ctx, hits_meta = qdrant_context(query)
+                    if is_image_request(query, body.get("messages")):
+                        ctx, hits_meta = "", []
+                    else:
+                        ctx, hits_meta = qdrant_context(query)
                     session = _sessions.get(session_id)
                     if session:
                         session["_kb_context"] = ctx
@@ -4553,6 +4606,7 @@ function abortGeneration() {{
     abortController.abort();
     abortController = null;
   }}
+  fetch('/api/diffusion/cancel', {{method:'POST'}}).catch(() => {{}});
   const sendBtn = document.getElementById('sendBtn');
   if (sendBtn) {{
     sendBtn.textContent = 'Send \\u2191';
@@ -4719,7 +4773,7 @@ function startGenerationProgress(name, input) {{
     el.textContent = s < 60 ? s + 's' : Math.floor(s / 60) + 'm ' + (s % 60) + 's';
     if (!slowNoted && s > 45) {{
       const note = card.querySelector('.gen-note');
-      if (note) note.textContent = 'First run loads ~20 GB of weights; longer waits are normal.';
+      if (note) note.textContent = 'Still generating; long runs are cancelled automatically after about 4 minutes.';
       slowNoted = true;
     }}
   }}, 1000);
@@ -4988,6 +5042,7 @@ async function sendMessage(taskIdOverride) {{
   const text    = input.value.trim();
   if (!text) return;
   if (!model) {{ alert('Enter a model name first.'); return; }}
+  finishGenerationProgress();
   if (!taskIdOverride && handleCommand(text)) {{ input.value = ''; return; }}
   if (_prevModel === null) {{
     _prevModel = model;
@@ -5061,7 +5116,7 @@ async function sendMessage(taskIdOverride) {{
         method: 'POST',
         headers: {{'Content-Type':'application/json'}},
         signal: abortController.signal,
-        body: JSON.stringify({{message: text, session_id: sessionId, model, stream: true, deep: deepMode, scan: scanMode, loop_retries: loopMode ? maxRetries : 0, task_id: taskIdOverride || lastTaskId || '', reasoning_effort: genParams.reasoning_effort || 'low', max_tokens: genParams.max_tokens || 0}})
+        body: JSON.stringify({{message: text, session_id: sessionId, model, stream: true, deep: deepMode, scan: scanMode, loop_retries: loopMode ? maxRetries : 0, resume: !!taskIdOverride, task_id: taskIdOverride || '', reasoning_effort: genParams.reasoning_effort || 'low', max_tokens: genParams.max_tokens || 0}})
       }});
       if (!resp.ok) {{
         removeTyping();
@@ -6118,6 +6173,15 @@ class DashboardHandler(_SuppressBrokenPipe, BaseHTTPRequestHandler):
         result["latency_ms"] = int((time.monotonic() - started) * 1000)
         self._send_json(result)
 
+    def _handle_diffusion_cancel(self):
+        try:
+            diffusion_client._post_json(
+                DIFFUSION_WORKER_URL + "/internal/cancel", {}, 5
+            )
+        except Exception as exc:
+            print(f"[diffusion] cancel error: {exc}", flush=True)
+        self._send_json({"ok": True})
+
     def _handle_diffusion_status(self):
         if not DIFFUSION_ENABLED:
             self._send_json(
@@ -7097,6 +7161,10 @@ class DashboardHandler(_SuppressBrokenPipe, BaseHTTPRequestHandler):
             self.close_connection = True
             return
         raw_body = self.rfile.read(length)
+
+        if urllib.parse.urlparse(self.path).path == "/api/diffusion/cancel":
+            self._handle_diffusion_cancel()
+            return
 
         if self.path.startswith("/api/experiments"):
             self._handle_experiment_post(raw_body)
@@ -8146,6 +8214,7 @@ class DashboardHandler(_SuppressBrokenPipe, BaseHTTPRequestHandler):
                 is_stream = body.get("stream", True)
                 deep = body.get("deep", False)
                 task_id = body.get("task_id", "").strip()
+                resume = bool(body.get("resume", False))
                 scan = body.get("scan", True)
                 try:
                     loop_retries = max(0, min(int(body.get("loop_retries", 0)), MAX_LOOP_RETRIES))
@@ -8193,16 +8262,20 @@ class DashboardHandler(_SuppressBrokenPipe, BaseHTTPRequestHandler):
                 # ── Task ID & Resume ────────────────────────────────────────────
                 ckpt_mgr = CheckpointManager()
                 goal = message[:200]
-                if not task_id:
-                    task_id = str(uuid.uuid4())
                 resume_context = None
-                if ckpt_mgr.exists(task_id):
+                if resume and task_id and ckpt_mgr.exists(task_id):
                     resume_context = ckpt_mgr.build_resume_context(task_id)
+                    print(
+                        f"[{datetime.now().strftime('%H:%M:%S')}] [Agent] ↩ Resuming task {task_id}",
+                        flush=True,
+                    )
                 else:
+                    task_id = str(uuid.uuid4())
                     ckpt_mgr.save_task_meta(
                         task_id,
                         {"goal": goal, "model_used": model_name},
                     )
+
                 _sessions[sid]["task_id"] = task_id
 
                 add_to_history(sid, "user", message)
@@ -8338,6 +8411,9 @@ class DashboardHandler(_SuppressBrokenPipe, BaseHTTPRequestHandler):
                     return
 
                 chat_history = build_messages_from_history(session["history"][:-1])
+                image_followup = session.pop("last_image_tool_content", None)
+                if image_followup:
+                    chat_history.append(AIMessage(content=image_followup))
                 agent_warning = model_tool_template_warning(
                     model_name, get_current_upstream(), _provider_name
                 )
@@ -8390,7 +8466,15 @@ class DashboardHandler(_SuppressBrokenPipe, BaseHTTPRequestHandler):
                 if resume_context:
                     input_messages.insert(0, SystemMessage(content=resume_context))
 
-                ctx, hits_meta = qdrant_context(message)
+                if is_image_request(message, chat_history):
+                    ctx, hits_meta = "", []
+                    print(
+                        f"[{datetime.now().strftime('%H:%M:%S')}] [Agent] "
+                        "⏭ Skipping KB injection for image request",
+                        flush=True,
+                    )
+                else:
+                    ctx, hits_meta = qdrant_context(message)
                 session["_kb_context"] = ctx
                 if ctx:
                     safe_ctx = wrap_untrusted(
@@ -8605,6 +8689,13 @@ class DashboardHandler(_SuppressBrokenPipe, BaseHTTPRequestHandler):
                                             )
                                             print(f"[{datetime.now().strftime('%H:%M:%S')}] [Agent] \u2705 {tool_name} -> {output_str[:80]}", flush=True)
                                             emit({'name': tool_name, 'result': output_str, 'type': 'tool_result', 'run_id': tool_run_id})
+                                            image_done_response = ""
+                                            if (
+                                                tool_name in ("generate_image", "edit_image")
+                                                and "/outputs/images/" in output_str
+                                            ):
+                                                session["last_image_tool_content"] = output_str
+                                                image_done_response = image_markdown_from_tool_output(output_str)
                                             emit_alerts()
                                             # Save streaming checkpoint
                                             try:
@@ -8622,6 +8713,15 @@ class DashboardHandler(_SuppressBrokenPipe, BaseHTTPRequestHandler):
                                                 })
                                             except Exception as cp_err:
                                                 print(f"[{datetime.now().strftime('%H:%M:%S')}] [checkpoint] save error: {cp_err}", flush=True)
+                                            if image_done_response:
+                                                full_output = image_done_response
+                                                print(
+                                                    f"[{datetime.now().strftime('%H:%M:%S')}] [Agent] "
+                                                    "🖼 Image ready; stopping after one generation",
+                                                    flush=True,
+                                                )
+                                                emit({'response': image_done_response, 'type': 'done'})
+                                                raise _AgentAbort()
                             full_output = "".join(collected)
                         except _AgentAbort:
                             raise

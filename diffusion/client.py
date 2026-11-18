@@ -29,7 +29,7 @@ def _env_bool(name: str, default: bool) -> bool:
 WORKER_URL = os.getenv("DIFFUSION_WORKER_URL", DEFAULT_WORKER_URL).rstrip("/")
 ENABLED = _env_bool("DIFFUSION_ENABLED", True)
 IMAGE_BASE_URL = os.getenv("DIFFUSION_IMAGE_BASE_URL", "").strip().rstrip("/")
-REQUEST_TIMEOUT = max(600, int(os.getenv("DIFFUSION_REQUEST_TIMEOUT", "900")))
+REQUEST_TIMEOUT = max(30, int(os.getenv("DIFFUSION_REQUEST_TIMEOUT", "300")))
 OLLAMA_EVICT_TIMEOUT = max(
     5, int(os.getenv("DIFFUSION_OLLAMA_EVICT_TIMEOUT", "20"))
 )
@@ -116,6 +116,13 @@ def model_ids() -> tuple:
     return _MODEL_IDS_FALLBACK
 
 
+def _timeout_error(exc: Exception, timeout: int) -> Exception:
+    text = str(exc).lower()
+    if isinstance(exc, TimeoutError) or "timed out" in text or "timeout" in text:
+        return TimeoutError(f"diffusion worker did not respond within {timeout}s")
+    return exc
+
+
 def _post_json(url: str, payload: dict, timeout: int) -> dict:
     data = json.dumps(payload).encode("utf-8")
     req = urllib.request.Request(
@@ -124,8 +131,11 @@ def _post_json(url: str, payload: dict, timeout: int) -> dict:
         method="POST",
         headers={"Content-Type": "application/json"},
     )
-    with urllib.request.urlopen(req, timeout=timeout) as resp:
-        return json.loads(resp.read().decode("utf-8"))
+    try:
+        with urllib.request.urlopen(req, timeout=timeout) as resp:
+            return json.loads(resp.read().decode("utf-8"))
+    except Exception as exc:
+        raise _timeout_error(exc, timeout) from exc
 
 
 def _get_json(url: str, timeout: int) -> dict:
@@ -209,7 +219,11 @@ def call_worker(path: str, payload: dict, ollama_url=None, evict=True) -> dict:
         raise RuntimeError("local image diffusion is disabled")
     if evict and ollama_url:
         evict_ollama(ollama_url)
-    result = _post_json(WORKER_URL + path, payload, REQUEST_TIMEOUT)
+    try:
+        result = _post_json(WORKER_URL + path, payload, REQUEST_TIMEOUT)
+    except Exception:
+        set_active(False)
+        raise
     if not isinstance(result, dict) or result.get("error"):
         set_active(False)
         return result

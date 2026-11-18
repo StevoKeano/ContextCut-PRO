@@ -70,6 +70,7 @@ agent generate code and new tools on the fly.
 ## Local image generation
 
 When the diffusion worker is enabled, Agent mode has `generate_image` and `edit_image`.
+Only one image tool call is allowed per message; ask for changes in a new message.
 Stage 1 uses self-contained diffusers repos only:
 
 | Model key | Best for | Notes |

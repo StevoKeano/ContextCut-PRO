@@ -39,6 +39,8 @@ MODEL_ROOT = Path(
 GPU_SAMPLE_INTERVAL = float(os.getenv("DIFFUSION_GPU_SAMPLE_INTERVAL", "5"))
 _gpu_sample_lock = threading.Lock()
 _gpu_sample = {"ts": 0.0, "data": None}
+_gpu_sampler_stop = threading.Event()
+_gpu_sampler_thread = None
 
 MODEL_ALIASES = {
     "flux.2-klein": "flux2-klein",
@@ -84,6 +86,7 @@ MODEL_REGISTRY = {
         dtype_name="bfloat16",
         steps=8,
         guidance_scale=0.0,
+        local_dir="Z-Image-Turbo",
     ),
     "flux2-klein": ModelSpec(
         model_id="black-forest-labs/FLUX.2-klein-4B",
@@ -127,11 +130,49 @@ PUBLIC_MODEL_KEYS = tuple(
 PUBLIC_MODEL_IDS = PUBLIC_MODEL_KEYS + (AUTO_MODEL_KEY,)
 
 
+class GenerationCancelled(Exception):
+    pass
+
+
+def _hf_cache_dirs() -> list[Path]:
+    roots = []
+    value = os.getenv("HF_HUB_CACHE")
+    if value:
+        roots.append(Path(value).expanduser())
+    value = os.getenv("HF_HOME")
+    if value:
+        roots.append(Path(value).expanduser() / "hub")
+    roots.append(Path.home() / ".cache" / "huggingface" / "hub")
+    result = []
+    seen = set()
+    for root in roots:
+        key = str(root)
+        if key not in seen:
+            seen.add(key)
+            result.append(root)
+    return result
+
+
+def _hf_snapshot_dir(model_id: str) -> str | None:
+    folder = "models--" + model_id.replace("/", "--")
+    for root in _hf_cache_dirs():
+        snapshots = root / folder / "snapshots"
+        try:
+            candidates = [p for p in snapshots.iterdir() if p.is_dir()]
+        except OSError:
+            continue
+        if candidates:
+            return str(max(candidates, key=lambda p: p.stat().st_mtime_ns))
+    return None
+
+
 def _model_source(spec: ModelSpec) -> str:
-    if not spec.local_dir:
-        return spec.model_id
-    candidate = MODEL_ROOT / spec.local_dir
-    return str(candidate) if candidate.is_dir() else spec.model_id
+    if spec.local_dir:
+        candidate = MODEL_ROOT / spec.local_dir
+        if candidate.is_dir():
+            return str(candidate)
+    cached = _hf_snapshot_dir(spec.model_id)
+    return cached or spec.model_id
 
 
 def _normalize_model_key(value) -> str:
@@ -270,20 +311,81 @@ def _gpu_stats() -> dict:
     return dict(data)
 
 
+def _empty_gpu_stats(error: str) -> dict:
+    return {
+        "gpu_name": None,
+        "gpu_utilization_percent": None,
+        "gpu_memory_used_bytes": None,
+        "gpu_memory_total_bytes": None,
+        "gpu_temperature_c": None,
+        "gpu_power_watts": None,
+        "gpu_error": error,
+    }
+
+
+def _cached_gpu_stats() -> dict:
+    with _gpu_sample_lock:
+        data = dict(_gpu_sample["data"]) if _gpu_sample["data"] else None
+        ts = _gpu_sample["ts"]
+    if data is None:
+        return _empty_gpu_stats("GPU sample pending")
+    if time.monotonic() - ts > GPU_SAMPLE_INTERVAL * 3:
+        data["gpu_error"] = "GPU sample is stale"
+    return data
+
+
+def _gpu_sampler_loop():
+    global _gpu_sampler_thread
+    while not _gpu_sampler_stop.wait(max(0.1, GPU_SAMPLE_INTERVAL)):
+        try:
+            _gpu_stats()
+        except Exception:
+            pass
+    _gpu_sampler_thread = None
+
+
+def start_gpu_sampler():
+    global _gpu_sampler_thread
+    if _gpu_sampler_thread and _gpu_sampler_thread.is_alive():
+        return
+    _gpu_sampler_stop.clear()
+    _gpu_sampler_thread = threading.Thread(
+        target=_gpu_sampler_loop,
+        name="diffusion-gpu-sampler",
+        daemon=True,
+    )
+    _gpu_sampler_thread.start()
+
+
+def stop_gpu_sampler():
+    _gpu_sampler_stop.set()
+    if _gpu_sampler_thread and _gpu_sampler_thread.is_alive():
+        _gpu_sampler_thread.join(timeout=2)
+
+
 class PipelineManager:
     """Owns at most one GPU pipeline and evicts it after an idle timeout."""
 
     def __init__(self, idle_timeout=None):
         raw_timeout = idle_timeout
         if raw_timeout is None:
-            raw_timeout = os.getenv("DIFFUSION_IDLE_TIMEOUT", "300")
+            raw_timeout = os.getenv("DIFFUSION_IDLE_TIMEOUT", "900")
         self.idle_timeout = float(raw_timeout)
+        self.max_generation_seconds = float(
+            os.getenv("DIFFUSION_MAX_GENERATION_SECONDS", "240")
+        )
         self.pipe = None
         self.active_model_key = None
         self.active_task = None
         self.last_used_timestamp = time.monotonic()
+        self.last_load_seconds = 0.0
+        self.last_generation_seconds = 0.0
+        self.last_pipeline_reused = False
+        self.load_count = 0
+        self.generation_count = 0
         self._state_lock = threading.RLock()
         self.generation_lock = threading.Lock()
+        self._cancel_event = threading.Event()
         self._wake = threading.Event()
         self._stop = threading.Event()
         self._watchdog_thread = None
@@ -297,22 +399,33 @@ class PipelineManager:
         import torch
         import diffusers
 
+        started = time.monotonic()
         spec = MODEL_REGISTRY[model_key]
         class_name = spec.pipelines.get(task) or spec.pipelines["text"]
         pipeline_class = getattr(diffusers, class_name)
         dtype = getattr(torch, spec.dtype_name)
         source = _model_source(spec)
+        print(f"[diffusion] loading {model_key}/{task} from {source}", flush=True)
         try:
-            pipe = pipeline_class.from_pretrained(source, dtype=dtype)
-        except TypeError:
-            pipe = pipeline_class.from_pretrained(source, torch_dtype=dtype)
-        if spec.offload_mode == "sequential":
-            pipe.enable_sequential_cpu_offload()
-            return pipe
-        if spec.offload_mode == "model":
-            pipe.enable_model_cpu_offload()
-            return pipe
-        return pipe.to("cuda")
+            try:
+                pipe = pipeline_class.from_pretrained(source, dtype=dtype)
+            except TypeError:
+                pipe = pipeline_class.from_pretrained(source, torch_dtype=dtype)
+            if spec.offload_mode == "sequential":
+                pipe.enable_sequential_cpu_offload()
+                return pipe
+            if spec.offload_mode == "model":
+                pipe.enable_model_cpu_offload()
+                return pipe
+            return pipe.to("cuda")
+        finally:
+            self.last_load_seconds = time.monotonic() - started
+            self.load_count += 1
+            print(
+                f"[diffusion] load attempt {self.load_count} for {model_key} "
+                f"took {self.last_load_seconds:.1f}s",
+                flush=True,
+            )
 
     def _unload_locked(self):
         if self.pipe is not None:
@@ -335,11 +448,13 @@ class PipelineManager:
 
     def _ensure_pipeline(self, model_key, task):
         with self._state_lock:
-            if (
+            reused = (
                 self.pipe is not None
                 and self.active_model_key == model_key
                 and self.active_task == task
-            ):
+            )
+            self.last_pipeline_reused = reused
+            if reused:
                 self.touch()
                 return self.pipe
             self._unload_locked()
@@ -348,6 +463,9 @@ class PipelineManager:
             self.active_task = task
             self.touch()
             return self.pipe
+
+    def cancel_generation(self):
+        self._cancel_event.set()
 
     def generate(
         self,
@@ -405,7 +523,83 @@ class PipelineManager:
                         "width": int(width),
                     }
                 )
-            result = pipe(**kwargs)
+            self._cancel_event.clear()
+            started = time.monotonic()
+            watchdog_state = {"fired": False}
+            watchdog_done = threading.Event()
+
+            def check_cancel(pipe, step_index, timestep, callback_kwargs):
+                if self._cancel_event.is_set():
+                    raise GenerationCancelled()
+                return callback_kwargs
+
+            kwargs["callback_on_step_end"] = check_cancel
+            if self.max_generation_seconds >= 0:
+
+                def watch_generation():
+                    while True:
+                        if (
+                            time.monotonic() - started
+                            > self.max_generation_seconds
+                        ):
+                            watchdog_state["fired"] = True
+                            self._cancel_event.set()
+                            print(
+                                "[diffusion] generation exceeded "
+                                f"{self.max_generation_seconds:.0f}s; "
+                                "cancelling and unloading pipeline",
+                                flush=True,
+                            )
+                            return
+                        if watchdog_done.wait(1.0):
+                            return
+
+                watchdog = threading.Thread(
+                    target=watch_generation,
+                    name="diffusion-generation-watchdog",
+                    daemon=True,
+                )
+                watchdog.start()
+            else:
+                watchdog = None
+            try:
+                try:
+                    result = pipe(**kwargs)
+                except TypeError as exc:
+                    if "callback_on_step_end" not in str(exc):
+                        raise
+                    kwargs.pop("callback_on_step_end", None)
+                    result = pipe(**kwargs)
+            except GenerationCancelled:
+                with self._state_lock:
+                    self._unload_locked()
+                watchdog_state["fired"] = True
+                watchdog_state["unloaded"] = True
+            finally:
+                watchdog_done.set()
+                if watchdog is not None:
+                    watchdog.join(timeout=1)
+            self.last_generation_seconds = time.monotonic() - started
+            self.generation_count += 1
+            if watchdog_state["fired"]:
+                print(
+                    f"[diffusion] generation {self.generation_count} cancelled "
+                    f"after {self.last_generation_seconds:.1f}s",
+                    flush=True,
+                )
+                if not watchdog_state.get("unloaded"):
+                    with self._state_lock:
+                        self._unload_locked()
+                raise TimeoutError(
+                    "diffusion generation cancelled or exceeded "
+                    f"{self.max_generation_seconds:.0f}s; worker pipeline unloaded"
+                )
+            print(
+                f"[diffusion] generation {self.generation_count} finished in "
+                f"{self.last_generation_seconds:.1f}s "
+                f"(pipeline_reused={self.last_pipeline_reused})",
+                flush=True,
+            )
             self.touch()
             return result.images[0]
 
@@ -453,14 +647,29 @@ class PipelineManager:
         self._watchdog_thread = None
 
     def status(self) -> dict:
-        with self._state_lock:
-            return {
-                "active_model": self.active_model_key,
-                "active_task": self.active_task,
-                "idle_timeout": self.idle_timeout,
-                "last_used_timestamp": self.last_used_timestamp,
-                "vram_allocated_bytes": _vram_allocated(),
-            }
+        acquired = self._state_lock.acquire(timeout=0.05)
+        snapshot = {
+            "active_model": self.active_model_key,
+            "active_task": self.active_task,
+            "idle_timeout": self.idle_timeout,
+            "last_used_timestamp": self.last_used_timestamp,
+            "last_load_seconds": self.last_load_seconds,
+            "last_generation_seconds": self.last_generation_seconds,
+            "last_pipeline_reused": self.last_pipeline_reused,
+            "load_count": self.load_count,
+            "generation_count": self.generation_count,
+        }
+        try:
+            if not acquired:
+                snapshot["vram_allocated_bytes"] = 0
+                snapshot["status_busy"] = True
+            else:
+                snapshot["vram_allocated_bytes"] = _vram_allocated()
+                snapshot["status_busy"] = False
+            return snapshot
+        finally:
+            if acquired:
+                self._state_lock.release()
 
 
 def _parse_multipart(content_type: str, raw_body: bytes) -> dict:
@@ -590,7 +799,7 @@ class DiffusionHandler(BaseHTTPRequestHandler):
     def _status_payload(self) -> dict:
         payload = {"status": "ok", "models": list(PUBLIC_MODEL_IDS)}
         payload.update(self.manager.status())
-        payload.update(_gpu_stats())
+        payload.update(_cached_gpu_stats())
         return payload
 
     def do_GET(self):
@@ -632,6 +841,10 @@ class DiffusionHandler(BaseHTTPRequestHandler):
 
     def do_POST(self):
         path = urlparse(self.path).path
+        if path == "/internal/cancel":
+            self.manager.cancel_generation()
+            self._send_json(200, {"cancelled": True})
+            return
         if path == "/internal/unload":
             self.manager.unload()
             self._send_json(200, {"unloaded": True, **self.manager.status()})
@@ -748,6 +961,7 @@ def main():
     )
     DiffusionHandler.bind_port = port
     _gpu_stats()
+    start_gpu_sampler()
     server = ReusableThreadingHTTPServer((host, port), DiffusionHandler)
     print(
         f"[diffusion] worker listening on {host}:{port}; outputs={output_dir}",
@@ -758,6 +972,7 @@ def main():
     except KeyboardInterrupt:
         pass
     finally:
+        stop_gpu_sampler()
         manager.stop_watchdog()
         manager.unload()
         server.server_close()

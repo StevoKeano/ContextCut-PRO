@@ -94,6 +94,7 @@ class TestLiveCheckpointIntegration:
             "session_id": None,
             "model": "qwen3:14b-q8_0",
             "stream": False,
+            "resume": bool(task_id),
             "task_id": task_id,
         }).encode()
         req = urllib.request.Request(

@@ -224,3 +224,43 @@ class TestCache:
         _response_cache[key]["ts"] = 0
         result = cache_get("stale", "gpt-4")
         assert result is None
+
+
+class TestImageRequestDetection:
+    def test_detects_image_prompts(self):
+        from qdrant_proxy_final import is_image_request
+
+        assert is_image_request("Generate an image of a red cube")
+        assert is_image_request("make the buzzard smaller in the photo")
+        assert is_image_request("Use generate_image with model z-image-turbo")
+        assert is_image_request("gen image 1024x1024 of a EuropaXS cockpit")
+        assert is_image_request("image of a deer at 100 yards")
+
+    def test_detects_image_followup_from_history(self):
+        from qdrant_proxy_final import is_image_request
+
+        history = [{"role": "assistant", "content": "See /outputs/images/a.png"}]
+        assert is_image_request("Make it smaller", history)
+
+    def test_ignores_regular_questions(self):
+        from qdrant_proxy_final import is_image_request
+
+        assert not is_image_request("What is ContextCut?")
+        assert not is_image_request("Summarize the user guide")
+
+    def test_image_markdown_from_tool_output(self):
+        from qdrant_proxy_final import image_markdown_from_tool_output
+
+        output = (
+            "content='{\"data\": [{\"url\": "
+            "\"http://192.168.137.1:8189/outputs/images/a.png\"}]}'"
+        )
+        assert (
+            image_markdown_from_tool_output(output)
+            == "![Generated image](http://192.168.137.1:8189/outputs/images/a.png)"
+        )
+        assert (
+            image_markdown_from_tool_output("content='/outputs/images/b.png'")
+            == "![Generated image](/outputs/images/b.png)"
+        )
+        assert image_markdown_from_tool_output("no image") == ""

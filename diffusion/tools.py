@@ -7,15 +7,35 @@ contain proxy-relative ``/outputs/images/<filename>`` URLs.
 from __future__ import annotations
 
 import json
+import re
 
 from langchain.tools import tool
 
 from . import client
 
 
+def _normalize_size(value=None, default="1024x1024") -> str:
+    text = str(value or "").strip().lower().replace("×", "x").replace("*", "x")
+    match = re.fullmatch(r"(\d{2,4})(?:x(\d{2,4}))?", text)
+    if not match:
+        return default
+    width = int(match.group(1))
+    height = int(match.group(2) or width)
+    if not (64 <= width <= 2048 and 64 <= height <= 2048):
+        return default
+    return f"{width}x{height}"
+
+
 def make_image_tools(ollama_url=None, provider=None) -> list:
     """Build image tools bound to the configured Ollama endpoint."""
     should_evict = bool(ollama_url) and provider in (None, "Ollama")
+    image_calls = {"count": 0}
+
+    def _image_call_allowed() -> bool:
+        if image_calls["count"]:
+            return False
+        image_calls["count"] += 1
+        return True
 
     @tool
     def generate_image(
@@ -30,10 +50,17 @@ def make_image_tools(ollama_url=None, provider=None) -> list:
         Use only these model choices: z-image-turbo (fast default) or
         flux2-klein (fast FLUX). Returns JSON with an image URL.
         """
+        if not _image_call_allowed():
+            return json.dumps(
+                {
+                    "error": "Only one image generation or edit is allowed per "
+                    "message. Ask for changes in a new message."
+                }
+            )
         payload = {
             "prompt": prompt,
             "model": model,
-            "size": size,
+            "size": _normalize_size(size),
             "n": n,
             "response_format": "url",
         }
@@ -62,12 +89,19 @@ def make_image_tools(ollama_url=None, provider=None) -> list:
         multi-reference), or flux1-kontext (character/style consistency).
         Returns JSON with an image URL.
         """
+        if not _image_call_allowed():
+            return json.dumps(
+                {
+                    "error": "Only one image generation or edit is allowed per "
+                    "message. Ask for changes in a new message."
+                }
+            )
         payload = {
             "prompt": prompt,
             "image": image,
             "model": model,
             "strength": strength,
-            "size": size,
+            "size": _normalize_size(size),
             "response_format": "url",
         }
         if mask:
