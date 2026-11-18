@@ -27,11 +27,6 @@ _ALERT_FILE = Path(
 _LOCK = threading.Lock()
 _ALERTS: deque[dict] = deque(maxlen=_MAX_ALERTS)
 _SEQ = 0
-_FENCE_RE = re.compile(r"```.*?```", re.DOTALL)
-_ALERT_DEDUPE_SECONDS = float(
-    os.environ.get("CONTEXTCUT_ALERT_DEDUPE_SECONDS", "300")
-)
-_RECENT_SIGNATURES: dict[tuple, float] = {}
 
 
 _PATTERNS: list[tuple[str, str, re.Pattern[str]]] = [
@@ -120,10 +115,8 @@ def scan_text(text: str) -> list[dict]:
         return []
     found: list[dict] = []
     seen: set[tuple[str, int]] = set()
-    shell_text = _FENCE_RE.sub(" ", text)
     for category, severity, pattern in _PATTERNS:
-        target = shell_text if category == "shell-execution" else text
-        for match in pattern.finditer(target):
+        for match in pattern.finditer(text):
             key = (category, match.start())
             if key in seen:
                 continue
@@ -132,7 +125,7 @@ def scan_text(text: str) -> list[dict]:
                 {
                     "category": category,
                     "severity": severity,
-                    "match": _excerpt(target, match),
+                    "match": _excerpt(text, match),
                 }
             )
     return found
@@ -187,25 +180,8 @@ def record_alert(
 def observe_untrusted(text: str, source: str, kind: str) -> list[dict]:
     """Scan and record an alert for untrusted content entering the model."""
     matches = scan_text(text)
-    if not matches:
-        return []
-    signature = (
-        (source or "unknown")[:160],
-        (kind or "data")[:40],
-        tuple((m.get("category", ""), m.get("match", "")) for m in matches),
-    )
-    now = time.monotonic()
-    with _LOCK:
-        if len(_RECENT_SIGNATURES) > 500:
-            cutoff = now - _ALERT_DEDUPE_SECONDS
-            stale = [key for key, ts in _RECENT_SIGNATURES.items() if ts < cutoff]
-            for key in stale:
-                _RECENT_SIGNATURES.pop(key, None)
-        last = _RECENT_SIGNATURES.get(signature)
-        if last is not None and now - last < _ALERT_DEDUPE_SECONDS:
-            return matches
-        _RECENT_SIGNATURES[signature] = now
-    record_alert(source, kind, matches, excerpt=text)
+    if matches:
+        record_alert(source, kind, matches, excerpt=text)
     return matches
 
 
@@ -229,7 +205,6 @@ def reset_alerts() -> None:
     global _SEQ
     with _LOCK:
         _ALERTS.clear()
-        _RECENT_SIGNATURES.clear()
         _SEQ = 0
 
 

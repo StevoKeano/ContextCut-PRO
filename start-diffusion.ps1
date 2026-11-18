@@ -61,16 +61,6 @@ $ModelRoot = if ($env:DIFFUSION_MODEL_ROOT) {
 } else {
     Join-Path $INST "models\official"
 }
-$HFHome = if ($env:HF_HOME) {
-    $env:HF_HOME
-} else {
-    Join-Path $INST "hf-cache"
-}
-$IdleTimeout = if ($env:DIFFUSION_IDLE_TIMEOUT) {
-    $env:DIFFUSION_IDLE_TIMEOUT
-} else {
-    "900"
-}
 
 New-Item -ItemType Directory -Force -Path $OutputDir | Out-Null
 
@@ -79,10 +69,6 @@ $env:DIFFUSION_PORT = $Port
 $env:DIFFUSION_PUBLIC_HOST = $PublicHost
 $env:DIFFUSION_OUTPUT_DIR = $OutputDir
 $env:DIFFUSION_MODEL_ROOT = $ModelRoot
-$env:DIFFUSION_IDLE_TIMEOUT = $IdleTimeout
-$env:HF_HOME = $HFHome
-$env:HF_HUB_CACHE = Join-Path $HFHome "hub"
-$env:HF_HUB_DISABLE_SYMLINKS_WARNING = "1"
 
 $proc = Start-Process `
     -FilePath $PY `

@@ -29,7 +29,7 @@ def _env_bool(name: str, default: bool) -> bool:
 WORKER_URL = os.getenv("DIFFUSION_WORKER_URL", DEFAULT_WORKER_URL).rstrip("/")
 ENABLED = _env_bool("DIFFUSION_ENABLED", True)
 IMAGE_BASE_URL = os.getenv("DIFFUSION_IMAGE_BASE_URL", "").strip().rstrip("/")
-REQUEST_TIMEOUT = max(30, int(os.getenv("DIFFUSION_REQUEST_TIMEOUT", "300")))
+REQUEST_TIMEOUT = max(600, int(os.getenv("DIFFUSION_REQUEST_TIMEOUT", "900")))
 OLLAMA_EVICT_TIMEOUT = max(
     5, int(os.getenv("DIFFUSION_OLLAMA_EVICT_TIMEOUT", "20"))
 )
@@ -116,13 +116,6 @@ def model_ids() -> tuple:
     return _MODEL_IDS_FALLBACK
 
 
-def _timeout_error(exc: Exception, timeout: int) -> Exception:
-    text = str(exc).lower()
-    if isinstance(exc, TimeoutError) or "timed out" in text or "timeout" in text:
-        return TimeoutError(f"diffusion worker did not respond within {timeout}s")
-    return exc
-
-
 def _post_json(url: str, payload: dict, timeout: int) -> dict:
     data = json.dumps(payload).encode("utf-8")
     req = urllib.request.Request(
@@ -131,11 +124,8 @@ def _post_json(url: str, payload: dict, timeout: int) -> dict:
         method="POST",
         headers={"Content-Type": "application/json"},
     )
-    try:
-        with urllib.request.urlopen(req, timeout=timeout) as resp:
-            return json.loads(resp.read().decode("utf-8"))
-    except Exception as exc:
-        raise _timeout_error(exc, timeout) from exc
+    with urllib.request.urlopen(req, timeout=timeout) as resp:
+        return json.loads(resp.read().decode("utf-8"))
 
 
 def _get_json(url: str, timeout: int) -> dict:
@@ -145,6 +135,7 @@ def _get_json(url: str, timeout: int) -> dict:
 
 def evict_ollama(ollama_url=None) -> list:
     """Unload every model currently resident in Ollama's VRAM."""
+    started = time.monotonic()
     base = (ollama_url or os.getenv("CONTEXTCUT_UPSTREAM") or "http://localhost:11434").rstrip("/")
     try:
         status = _get_json(base + "/api/ps", OLLAMA_EVICT_TIMEOUT)
@@ -175,6 +166,8 @@ def evict_ollama(ollama_url=None) -> list:
             evicted.append(name)
         except Exception as exc:
             print(f"[diffusion] failed to evict Ollama model {name}: {exc}", flush=True)
+    elapsed = time.monotonic() - started
+    print(f"[timing] Ollama eviction {elapsed:.2f}s evicted={len(evicted)}", flush=True)
     if evicted:
         print(f"[diffusion] evicted Ollama models: {', '.join(evicted)}", flush=True)
     return evicted
@@ -219,11 +212,14 @@ def call_worker(path: str, payload: dict, ollama_url=None, evict=True) -> dict:
         raise RuntimeError("local image diffusion is disabled")
     if evict and ollama_url:
         evict_ollama(ollama_url)
+    started = time.monotonic()
     try:
         result = _post_json(WORKER_URL + path, payload, REQUEST_TIMEOUT)
-    except Exception:
-        set_active(False)
-        raise
+    finally:
+        print(
+            f"[timing] worker generation {path} {time.monotonic() - started:.2f}s",
+            flush=True,
+        )
     if not isinstance(result, dict) or result.get("error"):
         set_active(False)
         return result
@@ -245,12 +241,19 @@ def forward_raw(path: str, raw_body: bytes, content_type="application/json",
         method="POST",
         headers={"Content-Type": content_type or "application/json"},
     )
-    with urllib.request.urlopen(req, timeout=REQUEST_TIMEOUT) as resp:
-        status = int(resp.status)
-        try:
-            payload = json.loads(resp.read().decode("utf-8"))
-        except (ValueError, UnicodeDecodeError):
-            payload = {"error": "worker returned a non-JSON response"}
+    started = time.monotonic()
+    try:
+        with urllib.request.urlopen(req, timeout=REQUEST_TIMEOUT) as resp:
+            status = int(resp.status)
+            try:
+                payload = json.loads(resp.read().decode("utf-8"))
+            except (ValueError, UnicodeDecodeError):
+                payload = {"error": "worker returned a non-JSON response"}
+    finally:
+        print(
+            f"[timing] worker generation {path} {time.monotonic() - started:.2f}s",
+            flush=True,
+        )
     if status < 400 and isinstance(payload, dict) and not payload.get("error"):
         rewrite_image_urls(payload)
         set_active(True)

@@ -37,6 +37,7 @@ def make_image_tools(ollama_url=None, provider=None) -> list:
         image_calls["count"] += 1
         return True
 
+
     @tool
     def generate_image(
         prompt: str,

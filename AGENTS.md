@@ -31,16 +31,14 @@
 - Ubuntu proxy setting `DIFFUSION_WORKER_URL` must be `http://192.168.137.1:8189`; `DIFFUSION_ENABLED` (default true) is editable under Settings → LLM Provider.
 - Remote workers return absolute image URLs (`http://192.168.137.1:8189/outputs/images/<name>`); override with `DIFFUSION_IMAGE_BASE_URL`. The worker serves those files from its own `DIFFUSION_OUTPUT_DIR` (default `.\outputs\images`).
 - Worker-side `DIFFUSION_PUBLIC_HOST` controls the host in generated URLs (default `127.0.0.1`; Windows start script sets `192.168.137.1`).
-- `DIFFUSION_IDLE_TIMEOUT` (default 900s) unloads the single active pipeline when idle and no generation lock is held. `DIFFUSION_MAX_GENERATION_SECONDS` (default 240s) watchdog-cancels and unloads a generation that runs too long; worker `/internal/cancel` (proxy `/api/diffusion/cancel`) cancels cooperatively between diffusion steps.
+- `DIFFUSION_IDLE_TIMEOUT` (default 300s) unloads the single active pipeline when idle and no generation lock is held.
 - Before image requests the proxy evicts all loaded Ollama models; before any LLM chat/completion request (including agent turns) it calls `POST /internal/unload`. Both now act on the same Windows 4090.
 - Settings → LLM Provider has a Test Worker button (`GET /api/diffusion/test?url=...`) that probes `/health` from the proxy host; dashboard chat renders `/outputs/images/*.png` inline when the URL origin is the proxy or configured image base.
-- Image tool calls show an indeterminate progress card in dashboard chat (model, prompt, elapsed timer); worker-driven real step progress is deferred. `make_image_tools()` allows only one image tool call per message, and the streaming agent emits the generated image as its final response and immediately stops after the first successful image tool result, so later tool calls cannot replace or delete the image.
-- Worker `/health` is liveness-only: `manager.status()` uses a short non-blocking lock and GPU util/memory/temp/power come from a cached background `nvidia-smi` sample (`DIFFUSION_GPU_SAMPLE_INTERVAL`, default 5s); dashboard polls `/api/diffusion/status` every 5s during image generation.
-- Proxy `DIFFUSION_REQUEST_TIMEOUT` (default 300s, minimum 30s) bounds each image tool call; timeouts raise a clear error instead of hanging until the global agent timeout.
+- Image tool calls show an indeterminate progress card in dashboard chat (model, prompt, elapsed timer); worker-driven real step progress is deferred.
+- Worker `/health` samples `nvidia-smi` every 5s (`DIFFUSION_GPU_SAMPLE_INTERVAL`) for GPU util/memory/temp/power; dashboard polls `/api/diffusion/status` every 5s during image generation.
 - Scripts: PowerShell `install-diffusion.ps1` (admin; one combined `pip install` with matched `torch`/`torchvision` cu126 pair plus unpinned diffusers stack, CUDA assert + import smoke test, `pip freeze > requirements-diffusion.lock.txt`, inbound firewall rule for TCP 8189 from `192.168.137.0/24`), `start-diffusion.ps1`, `stop-diffusion.ps1`. Stop falls back to a command-line/port scan when the PID file is stale; start checks port 8189 before launching, waits for a Python worker process to own that port instead of probing HTTP (the first `nvidia-smi` sample can be slow), and rewrites the PID file to the actual owner. Python 3.13.5 is supported. Linux bash scripts remain for local/WSL use.
 - Stage 1 model keys: `z-image-turbo`, `flux2-klein`, `flux1-dev`, `flux1-kontext`, `auto`; FP8 single-file, GGUF, and other quantized variants are intentionally out of scope.
-- `flux1-dev` is a hidden manual override: excluded from worker `/health` and `/v1/models` lists and from agent tool guidance, but still accepted when explicitly passed as `model="flux1-dev"`. It loads with `enable_sequential_cpu_offload()` because full bfloat16 weights do not fit in 24GB VRAM.
-- Worker `DIFFUSION_MODEL_ROOT` (default `Z:\contextcut\models\official`, set by `start-diffusion.ps1`) points to self-contained diffusers directories; a missing directory falls back to an existing HF cache snapshot (`HF_HOME`/`HF_HUB_CACHE`, default `Z:\contextcut\hf-cache`) before falling back to the HF repo ID. `start-diffusion.ps1` sets `HF_HOME`/`HF_HUB_CACHE` and suppresses symlink warnings.
+- Worker `DIFFUSION_MODEL_ROOT` (default `Z:\contextcut\models\official`, set by `start-diffusion.ps1`) points to self-contained diffusers directories; a missing directory falls back to the HF repo ID.
 - Worker `DIFFUSION_AUTO_TEXT_MODEL`, `DIFFUSION_AUTO_EDIT_MODEL`, `DIFFUSION_AUTO_INPAINT_MODEL`, and `DIFFUSION_AUTO_MULTIREF_MODEL` override `auto`; defaults are text/inpaint `z-image-turbo`, edits/multi-reference `flux2-klein`.
 - Proxy `diffusion_client.model_ids()` caches worker `/v1/models` for 30s so dashboard and `/v1/models` lists follow the worker without code edits; fallback list is used if the worker is offline.
 
@@ -62,9 +60,6 @@
   (normal chat) and in the `/api/agent` path.
 - Deep-dive RAG: `ContextCut_README.md`, `ContextCut_USER_GUIDE.md`, `ContextCut_CUSTOMER_SETUP.md`
   are ingested into the KB under distinct filenames (the KB's own `README.md` is unrelated).
-- Image prompts skip KB injection entirely: `is_image_request()` in `qdrant_proxy_final.py`
-  suppresses `qdrant_context()` in both normal chat and `/api/agent`, including follow-ups
-  whose history contains an image tool result. Normal chat questions are unchanged.
 
 ## Approval (HITL)
 - The approval list is defined in exactly one place: `HumanInTheLoopMiddleware(interrupt_on=...)`
@@ -94,7 +89,6 @@ Every agent tool invocation is checkpointed to disk at `~/.contextcut/checkpoint
 1. The dashboard shows a **Task:** badge with the current task_id after each agent run.
 2. Click **↩ Resume** to auto-fill `/resume <task_id>` or type it manually.
 3. On resume, the server injects prior step results as a system message so the agent continues where it left off without re-doing work.
-4. Normal dashboard messages must **not** send `task_id`; the badge id is display-only. `/api/agent` requires `resume: true` plus an existing `task_id` before injecting checkpoint context, otherwise every new prompt would replay old tool results.
 
 ### Dashboard Routes
 - `GET /api/checkpoints` — list all task_ids with checkpoint data

@@ -5,7 +5,6 @@ from __future__ import annotations
 import email.message
 import io
 import json
-import threading
 import time
 import urllib.parse
 from types import SimpleNamespace
@@ -72,44 +71,6 @@ class TestModelRegistry:
         assert resolve_model("FLUX.1-dev") == "flux1-dev"
         assert resolve_model("FLUX.1-Kontext-dev") == "flux1-kontext"
 
-    def test_flux1_dev_is_hidden_but_explicitly_resolvable(self):
-        from diffusion.worker import MODEL_REGISTRY, PUBLIC_MODEL_IDS, resolve_model
-
-        assert "flux1-dev" not in PUBLIC_MODEL_IDS
-        assert set(PUBLIC_MODEL_IDS) == {
-            "z-image-turbo",
-            "flux2-klein",
-            "flux1-kontext",
-            "auto",
-        }
-        assert MODEL_REGISTRY["flux1-dev"].offload_mode == "sequential"
-        assert resolve_model("flux1-dev") == "flux1-dev"
-
-    def test_flux1_dev_uses_sequential_cpu_offload(self, monkeypatch):
-        import sys
-
-        from diffusion.worker import PipelineManager
-
-        calls = []
-        pipe = SimpleNamespace(
-            enable_sequential_cpu_offload=lambda: calls.append("sequential"),
-            enable_model_cpu_offload=lambda: calls.append("model"),
-            to=lambda device: calls.append(device),
-        )
-        pipeline_class = SimpleNamespace(
-            from_pretrained=lambda source, **kwargs: pipe
-        )
-        monkeypatch.setitem(
-            sys.modules, "torch", SimpleNamespace(bfloat16="bfloat16")
-        )
-        monkeypatch.setitem(
-            sys.modules, "diffusers", SimpleNamespace(FluxPipeline=pipeline_class)
-        )
-
-        manager = PipelineManager(idle_timeout=1)
-        assert manager._load_pipeline("flux1-dev", "text") is pipe
-        assert calls == ["sequential"]
-
     def test_auto_policy_env(self, monkeypatch):
         from diffusion.worker import resolve_model
 
@@ -149,25 +110,6 @@ class TestModelRegistry:
 
         klein = worker.MODEL_REGISTRY["flux2-klein"]
         assert worker._model_source(klein) == klein.model_id
-
-    def test_z_image_uses_hf_cache_snapshot_without_local_dir(self, monkeypatch, tmp_path):
-        import diffusion.worker as worker
-
-        cache_root = tmp_path / "hf-cache"
-        snapshot = (
-            cache_root
-            / "hub"
-            / "models--Tongyi-MAI--Z-Image-Turbo"
-            / "snapshots"
-            / "abc123"
-        )
-        snapshot.mkdir(parents=True)
-        monkeypatch.delenv("HF_HUB_CACHE", raising=False)
-        monkeypatch.setenv("HF_HOME", str(cache_root))
-        monkeypatch.setattr(worker, "MODEL_ROOT", tmp_path / "empty-models")
-
-        source = worker._model_source(worker.MODEL_REGISTRY["z-image-turbo"])
-        assert source == str(snapshot)
 
     def test_auto_switches_to_flux_with_reference_images(self):
         from diffusion.worker import resolve_model, resolve_task
@@ -231,7 +173,7 @@ class TestVramEviction:
             assert post.call_count == 1
         client.set_active(False)
 
-    def test_worker_call_evicts_then_uses_bounded_read_timeout(self):
+    def test_worker_call_evicts_then_uses_long_read_timeout(self):
         from diffusion import client
 
         def fake_urlopen(request, timeout=None):
@@ -239,8 +181,7 @@ class TestVramEviction:
             if url.endswith("/api/ps"):
                 return _FakeResponse({"models": []})
             if url.endswith("/v1/images/generations"):
-                assert timeout == client.REQUEST_TIMEOUT
-                assert timeout >= 30
+                assert timeout >= 600
                 return _FakeResponse(
                     {"data": [{"url": "http://127.0.0.1:8189/outputs/images/a.png"}]}
                 )
@@ -256,19 +197,6 @@ class TestVramEviction:
         assert result["data"][0]["url"] == "/outputs/images/a.png"
         assert client.is_active() is True
         client.set_active(False)
-
-    def test_worker_timeout_is_clear_and_clears_active(self):
-        from diffusion import client
-
-        client.set_active(True)
-        with patch(
-            "diffusion.client.urllib.request.urlopen", side_effect=TimeoutError()
-        ):
-            with pytest.raises(TimeoutError, match="did not respond within"):
-                client.call_worker(
-                    "/v1/images/generations", {"prompt": "a cat"}, ollama_url=None
-                )
-        assert client.is_active() is False
 
     def test_remote_worker_uses_absolute_image_urls(self, monkeypatch):
         from diffusion import client
@@ -487,7 +415,7 @@ class TestProxyRoutes:
             assert _request_url(request).endswith("/v1/models")
             return _FakeResponse({"object": "list", "data": [{"id": "llama"}]})
 
-        models = ["z-image-turbo", "flux2-klein", "flux1-kontext", "auto"]
+        models = ["z-image-turbo", "flux2-klein", "flux1-dev", "flux1-kontext", "auto"]
         with patch("qdrant_proxy_final.urllib.request.urlopen", side_effect=fake_urlopen):
             with patch("qdrant_proxy_final.diffusion_model_names", return_value=models):
                 status, raw = make_handler("/v1/models", "GET", handler_cls=ProxyHandler)
@@ -733,82 +661,6 @@ class TestIdleWatchdog:
                 manager.stop_watchdog()
 
 
-class TestHealthResponsiveness:
-    def test_cached_gpu_stats_returns_snapshot_without_sampling(self, monkeypatch):
-        import diffusion.worker as worker
-
-        snapshot = {
-            "gpu_name": "RTX 4090",
-            "gpu_utilization_percent": 42,
-            "gpu_error": None,
-        }
-        monkeypatch.setattr(
-            worker,
-            "_gpu_sample",
-            {"ts": time.monotonic(), "data": dict(snapshot)},
-        )
-
-        def fail(*args, **kwargs):
-            raise AssertionError("health must not run nvidia-smi")
-
-        monkeypatch.setattr(worker.subprocess, "run", fail)
-        assert worker._cached_gpu_stats() == snapshot
-
-    def test_status_does_not_wait_for_busy_lock(self):
-        from diffusion.worker import PipelineManager
-
-        manager = PipelineManager(idle_timeout=1)
-        acquired = threading.Event()
-        release = threading.Event()
-
-        def hold_lock():
-            manager._state_lock.acquire()
-            acquired.set()
-            release.wait(2)
-            manager._state_lock.release()
-
-        holder = threading.Thread(target=hold_lock, daemon=True)
-        holder.start()
-        assert acquired.wait(1)
-        try:
-            status = manager.status()
-        finally:
-            release.set()
-            holder.join(timeout=1)
-
-        assert status["status_busy"] is True
-        assert status["active_model"] is None
-
-    def test_generation_watchdog_discards_slow_result(self):
-        from diffusion.worker import PipelineManager
-
-        manager = PipelineManager()
-        manager.max_generation_seconds = 0
-        pipe = lambda **kwargs: SimpleNamespace(images=[object()])
-        manager._ensure_pipeline = lambda model_key, task: pipe
-        with patch.object(manager, "_unload_locked") as unload:
-            with pytest.raises(TimeoutError, match="exceeded"):
-                manager.generate("z-image-turbo", "text", prompt="a cat")
-        assert unload.call_count == 1
-
-    def test_manual_cancel_aborts_between_steps(self):
-        from diffusion.worker import PipelineManager
-
-        manager = PipelineManager()
-        manager.max_generation_seconds = 60
-
-        def pipe(**kwargs):
-            manager.cancel_generation()
-            kwargs["callback_on_step_end"](None, 0, None, {})
-            return SimpleNamespace(images=[object()])
-
-        manager._ensure_pipeline = lambda model_key, task: pipe
-        with patch.object(manager, "_unload_locked") as unload:
-            with pytest.raises(TimeoutError, match="cancelled"):
-                manager.generate("z-image-turbo", "text", prompt="a cat")
-        assert unload.call_count == 1
-
-
 class TestAgentTools:
     def test_tools_expose_generate_and_edit(self):
         from diffusion.tools import make_image_tools
@@ -859,3 +711,15 @@ class TestAgentTools:
         assert "Only one image" in json.loads(second)["error"]
         assert "Only one image" in json.loads(third)["error"]
         assert call.call_count == 1
+
+    def test_image_tool_limit_resets_for_next_message(self):
+        from diffusion.tools import make_image_tools
+
+        with patch("diffusion.tools.client.call_worker") as call:
+            call.return_value = {"data": [{"url": "/outputs/images/a.png"}]}
+            first_message = make_image_tools(ollama_url=None, provider=None)
+            first_message[0].invoke({"prompt": "a cat"})
+            second_message = make_image_tools(ollama_url=None, provider=None)
+            second_message[0].invoke({"prompt": "a tree"})
+
+        assert call.call_count == 2

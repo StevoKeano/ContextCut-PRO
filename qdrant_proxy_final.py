@@ -1626,6 +1626,17 @@ def is_image_request(text: str, history=None) -> bool:
     return False
 
 
+def _timed_qdrant_context(query: str, source: str) -> tuple[str, list[dict]]:
+    started = time.monotonic()
+    ctx, hits = qdrant_context(query)
+    print(
+        f"[{datetime.now().strftime('%H:%M:%S')}] [timing] KB lookup ({source}) "
+        f"{time.monotonic() - started:.2f}s hits={len(hits)}",
+        flush=True,
+    )
+    return ctx, hits
+
+
 # ── Context injection ─────────────────────────────────────────────────────────
 SYSTEM_BASE = (
     "You are a helpful AI assistant. "
@@ -2121,7 +2132,7 @@ class ProxyHandler(_SuppressBrokenPipe, BaseHTTPRequestHandler):
                     if is_image_request(query, body.get("messages")):
                         ctx, hits_meta = "", []
                     else:
-                        ctx, hits_meta = qdrant_context(query)
+                        ctx, hits_meta = _timed_qdrant_context(query, "chat")
                     session = _sessions.get(session_id)
                     if session:
                         session["_kb_context"] = ctx
@@ -4606,7 +4617,6 @@ function abortGeneration() {{
     abortController.abort();
     abortController = null;
   }}
-  fetch('/api/diffusion/cancel', {{method:'POST'}}).catch(() => {{}});
   const sendBtn = document.getElementById('sendBtn');
   if (sendBtn) {{
     sendBtn.textContent = 'Send \\u2191';
@@ -4773,7 +4783,7 @@ function startGenerationProgress(name, input) {{
     el.textContent = s < 60 ? s + 's' : Math.floor(s / 60) + 'm ' + (s % 60) + 's';
     if (!slowNoted && s > 45) {{
       const note = card.querySelector('.gen-note');
-      if (note) note.textContent = 'Still generating; long runs are cancelled automatically after about 4 minutes.';
+      if (note) note.textContent = 'First run loads ~20 GB of weights; longer waits are normal.';
       slowNoted = true;
     }}
   }}, 1000);
@@ -5042,7 +5052,6 @@ async function sendMessage(taskIdOverride) {{
   const text    = input.value.trim();
   if (!text) return;
   if (!model) {{ alert('Enter a model name first.'); return; }}
-  finishGenerationProgress();
   if (!taskIdOverride && handleCommand(text)) {{ input.value = ''; return; }}
   if (_prevModel === null) {{
     _prevModel = model;
@@ -5116,7 +5125,7 @@ async function sendMessage(taskIdOverride) {{
         method: 'POST',
         headers: {{'Content-Type':'application/json'}},
         signal: abortController.signal,
-        body: JSON.stringify({{message: text, session_id: sessionId, model, stream: true, deep: deepMode, scan: scanMode, loop_retries: loopMode ? maxRetries : 0, resume: !!taskIdOverride, task_id: taskIdOverride || '', reasoning_effort: genParams.reasoning_effort || 'low', max_tokens: genParams.max_tokens || 0}})
+        body: JSON.stringify({{message: text, session_id: sessionId, model, stream: true, deep: deepMode, scan: scanMode, loop_retries: loopMode ? maxRetries : 0, task_id: taskIdOverride || lastTaskId || '', reasoning_effort: genParams.reasoning_effort || 'low', max_tokens: genParams.max_tokens || 0}})
       }});
       if (!resp.ok) {{
         removeTyping();
@@ -6173,21 +6182,10 @@ class DashboardHandler(_SuppressBrokenPipe, BaseHTTPRequestHandler):
         result["latency_ms"] = int((time.monotonic() - started) * 1000)
         self._send_json(result)
 
-    def _handle_diffusion_cancel(self):
-        try:
-            diffusion_client._post_json(
-                DIFFUSION_WORKER_URL + "/internal/cancel", {}, 5
-            )
-        except Exception as exc:
-            print(f"[diffusion] cancel error: {exc}", flush=True)
-        self._send_json({"ok": True})
-
     def _handle_diffusion_status(self):
         if not DIFFUSION_ENABLED:
-            self._send_json(
-                {"ok": False, "enabled": False,
-                 "error": "local image diffusion is disabled"}
-            )
+            self._send_json({"ok": False, "enabled": False,
+                             "error": "local image diffusion is disabled"}, 200)
             return
         try:
             payload = diffusion_client._get_json(
@@ -6195,9 +6193,8 @@ class DashboardHandler(_SuppressBrokenPipe, BaseHTTPRequestHandler):
             )
         except Exception as exc:
             print(f"[diffusion] status error: {exc}", flush=True)
-            self._send_json(
-                {"ok": False, "enabled": True, "error": str(exc)[:300]}
-            )
+            self._send_json({"ok": False, "enabled": True,
+                             "error": str(exc)[:300]}, 200)
             return
         result = {"ok": payload.get("status") == "ok", "enabled": True}
         result.update(payload)
@@ -7162,10 +7159,6 @@ class DashboardHandler(_SuppressBrokenPipe, BaseHTTPRequestHandler):
             return
         raw_body = self.rfile.read(length)
 
-        if urllib.parse.urlparse(self.path).path == "/api/diffusion/cancel":
-            self._handle_diffusion_cancel()
-            return
-
         if self.path.startswith("/api/experiments"):
             self._handle_experiment_post(raw_body)
             return
@@ -7664,8 +7657,6 @@ class DashboardHandler(_SuppressBrokenPipe, BaseHTTPRequestHandler):
                         expected_dim = _get_embed_dim(_LOCAL_EMBED)
                         qclient = QdrantClient(host=QDRANT_HOST, port=QDRANT_PORT)
                         qclient.delete_collection(COLLECTION)
-                        import time
-
                         time.sleep(2)
                         qclient.create_collection(
                             collection_name=COLLECTION,
@@ -8214,7 +8205,6 @@ class DashboardHandler(_SuppressBrokenPipe, BaseHTTPRequestHandler):
                 is_stream = body.get("stream", True)
                 deep = body.get("deep", False)
                 task_id = body.get("task_id", "").strip()
-                resume = bool(body.get("resume", False))
                 scan = body.get("scan", True)
                 try:
                     loop_retries = max(0, min(int(body.get("loop_retries", 0)), MAX_LOOP_RETRIES))
@@ -8262,20 +8252,16 @@ class DashboardHandler(_SuppressBrokenPipe, BaseHTTPRequestHandler):
                 # ── Task ID & Resume ────────────────────────────────────────────
                 ckpt_mgr = CheckpointManager()
                 goal = message[:200]
-                resume_context = None
-                if resume and task_id and ckpt_mgr.exists(task_id):
-                    resume_context = ckpt_mgr.build_resume_context(task_id)
-                    print(
-                        f"[{datetime.now().strftime('%H:%M:%S')}] [Agent] ↩ Resuming task {task_id}",
-                        flush=True,
-                    )
-                else:
+                if not task_id:
                     task_id = str(uuid.uuid4())
+                resume_context = None
+                if ckpt_mgr.exists(task_id):
+                    resume_context = ckpt_mgr.build_resume_context(task_id)
+                else:
                     ckpt_mgr.save_task_meta(
                         task_id,
                         {"goal": goal, "model_used": model_name},
                     )
-
                 _sessions[sid]["task_id"] = task_id
 
                 add_to_history(sid, "user", message)
@@ -8468,13 +8454,8 @@ class DashboardHandler(_SuppressBrokenPipe, BaseHTTPRequestHandler):
 
                 if is_image_request(message, chat_history):
                     ctx, hits_meta = "", []
-                    print(
-                        f"[{datetime.now().strftime('%H:%M:%S')}] [Agent] "
-                        "⏭ Skipping KB injection for image request",
-                        flush=True,
-                    )
                 else:
-                    ctx, hits_meta = qdrant_context(message)
+                    ctx, hits_meta = _timed_qdrant_context(message, "agent")
                 session["_kb_context"] = ctx
                 if ctx:
                     safe_ctx = wrap_untrusted(
@@ -8513,11 +8494,17 @@ class DashboardHandler(_SuppressBrokenPipe, BaseHTTPRequestHandler):
                 async def _invoke_agent_once(msgs, config) -> str:
                     from langgraph.types import Command
 
+                    llm_started = time.monotonic()
                     result = await asyncio.wait_for(
                         agent.with_config({"recursion_limit": 50}).ainvoke(
                             msgs, config=config
                         ),
                         timeout=AGENT_TIMEOUT,
+                    )
+                    print(
+                        f"[{datetime.now().strftime('%H:%M:%S')}] [timing] agent LLM call "
+                        f"{time.monotonic() - llm_started:.2f}s",
+                        flush=True,
                     )
                     for _ in range(10):
                         try:
@@ -8604,6 +8591,7 @@ class DashboardHandler(_SuppressBrokenPipe, BaseHTTPRequestHandler):
                         nonlocal full_output, step_counter
                         local_tools = set()
                         collected = []
+                        llm_started = time.monotonic()
                         try:
                             async with asyncio.timeout(AGENT_TIMEOUT):
                                     stream_input = (
@@ -8716,13 +8704,17 @@ class DashboardHandler(_SuppressBrokenPipe, BaseHTTPRequestHandler):
                                             if image_done_response:
                                                 full_output = image_done_response
                                                 print(
-                                                    f"[{datetime.now().strftime('%H:%M:%S')}] [Agent] "
-                                                    "🖼 Image ready; stopping after one generation",
+                                                    f"[{datetime.now().strftime('%H:%M:%S')}] [Agent] 🖼 Image ready; stopping after one generation",
                                                     flush=True,
                                                 )
                                                 emit({'response': image_done_response, 'type': 'done'})
                                                 raise _AgentAbort()
                             full_output = "".join(collected)
+                            print(
+                                f"[{datetime.now().strftime('%H:%M:%S')}] [timing] agent LLM stream "
+                                f"{time.monotonic() - llm_started:.2f}s tools={len(local_tools)}",
+                                flush=True,
+                            )
                         except _AgentAbort:
                             raise
                         except StreamChunkTimeoutError as e:
