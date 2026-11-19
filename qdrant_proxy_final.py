@@ -3422,7 +3422,7 @@ tr.cloud-off td{{background:#0a1a2e!important;color:#22c55e!important;border-top
       <div class="input-row">
         <button class="att-btn" id="attachBtn" onclick="document.getElementById('fileInput').click()" title="Attach file to knowledge base">📎</button>
         <input type="file" id="fileInput" accept=".md,.txt,.py,.js,.ts,.html,.css,.csv,.json,.xml,.yaml,.yml,.go,.rs,.rb,.java,.c,.cpp,.h,.sh,.sql,.log,.pdf,.docx,.xlsx" style="display:none" onchange="attachFile(this)" />
-        <label class="direct-image-lbl" id="directImageLbl" title="Send prompt directly to the diffusion model without the chat LLM"><input type="checkbox" id="directImageChk" onchange="saveState()"> Direct image</label>
+        <label class="direct-image-lbl" id="directImageLbl" title="Send prompt directly to the diffusion model without the chat LLM"><input type="checkbox" id="directImageChk" onchange="toggleDirectImage(this)"> Direct image</label>
         <textarea class="chat-input" id="chatInput" rows="2" role="textbox" aria-label="Message input"
           placeholder="Type a message… (Enter to send, Shift+Enter for newline). Try: /clear, /help"
           onkeydown="handleKey(event)"></textarea>
@@ -3467,8 +3467,6 @@ function saveState() {{
   }} catch(e){{}}
   const uc = document.getElementById('unattendedChk');
   if (uc) localStorage.setItem('cc_unattended', uc.checked ? '1' : '0');
-  const di = document.getElementById('directImageChk');
-  if (di) localStorage.setItem('cc_directImage', di.checked ? '1' : '0');
   const mi = document.getElementById('modelInput');
   if (mi) localStorage.setItem('cc_model', mi.value);
   const ts = document.getElementById('tempSlider');
@@ -3514,7 +3512,8 @@ function loadState() {{
   const mr = ls.getItem('cc_maxRetries');
   if (mr !== null) maxRetries = parseInt(mr, 10) || 3;
   setChk('unattendedChk', 'cc_unattended');
-  setChk('directImageChk', 'cc_directImage');
+  const di = document.getElementById('directImageChk');
+  if (di) di.checked = sessionStorage.getItem('cc_directImageUnlocked') === '1';
   setVal('modelInput', 'cc_model');
   setVal('tempSlider', 'cc_temp');
   updateParamVal('tempSlider', 'tempVal');
@@ -3585,8 +3584,9 @@ function loadState() {{
 
 function resetDefaults() {{
   if (!confirm('Reset all settings to defaults?')) return;
-  const keys = ['cc_agentMode','cc_scanMode','cc_deepMode','cc_unattended','cc_directImage','cc_model','cc_temp','cc_topp','cc_maxTok','cc_maxTokMigrated','cc_reasoning','cc_minscore','cc_topk','cc_loopMode','cc_maxRetries'];
+  const keys = ['cc_agentMode','cc_scanMode','cc_deepMode','cc_unattended','cc_model','cc_temp','cc_topp','cc_maxTok','cc_maxTokMigrated','cc_reasoning','cc_minscore','cc_topk','cc_loopMode','cc_maxRetries'];
   keys.forEach(k => localStorage.removeItem(k));
+  sessionStorage.removeItem('cc_directImageUnlocked');
   location.reload();
 }}
 
@@ -5069,7 +5069,40 @@ async function doScan(text, assistantDiv, bubble) {{
   }}
 }}
 
+const DIRECT_IMAGE_PASSWORD_HASH64 = '9fbbbb1c8701705b';
+function directImageHash64(value) {{
+  let h = 0xcbf29ce484222325n;
+  const prime = 0x100000001b3n;
+  const mask = 0xffffffffffffffffn;
+  const bytes = new TextEncoder().encode(String(value || ''));
+  for (const b of bytes) {{
+    h ^= BigInt(b);
+    h = (h * prime) & mask;
+  }}
+  return h.toString(16).padStart(16, '0');
+}}
+function directImageUnlocked() {{
+  return sessionStorage.getItem('cc_directImageUnlocked') === '1';
+}}
+function toggleDirectImage(chk) {{
+  if (!chk.checked) return;
+  if (directImageUnlocked()) return;
+  const password = prompt('Password to enable Direct image:');
+  if (password === null || directImageHash64(password) !== DIRECT_IMAGE_PASSWORD_HASH64) {{
+    chk.checked = false;
+    alert('Incorrect password.');
+    return;
+  }}
+  sessionStorage.setItem('cc_directImageUnlocked', '1');
+}}
+
 async function sendDirectImage(text) {{
+  if (!directImageUnlocked()) {{
+    const chk = document.getElementById('directImageChk');
+    if (chk) chk.checked = false;
+    alert('Direct image is locked. Enable it with the password first.');
+    return;
+  }}
   const input = document.getElementById('chatInput');
   const sendBtn = document.getElementById('sendBtn');
   inputHistory.unshift(text);

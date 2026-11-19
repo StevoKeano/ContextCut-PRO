@@ -3,6 +3,7 @@ Tests for proxy core functions: ``qdrant_context``, ``inject_context``, ``cache_
 """
 
 import json
+import re
 import time
 from pathlib import Path
 from unittest.mock import patch, MagicMock
@@ -315,3 +316,40 @@ class TestDirectImageDashboard:
         dispatch = body.index("await sendDirectImage(text)")
         validation = body.index("alert('Enter a model name first.')")
         assert dispatch < validation
+
+    def test_direct_image_password_is_stored_as_64_bit_hash(self):
+        source = Path(__file__).resolve().parents[1] / "qdrant_proxy_final.py"
+        text = source.read_text(encoding="utf-8")
+
+        match = re.search(
+            r"const DIRECT_IMAGE_PASSWORD_HASH64 = '([0-9a-f]{16})';", text
+        )
+        assert match
+
+        mask = (1 << 64) - 1
+        value = 0xCBF29CE484222325
+        for byte in b"pickle":
+            value ^= byte
+            value = (value * 0x100000001B3) & mask
+        assert match.group(1) == f"{value:016x}"
+        assert "pickle" not in text
+
+    def test_direct_image_unlock_is_session_only(self):
+        source = Path(__file__).resolve().parents[1] / "qdrant_proxy_final.py"
+        text = source.read_text(encoding="utf-8")
+
+        assert "sessionStorage.getItem('cc_directImageUnlocked')" in text
+        assert "sessionStorage.setItem('cc_directImageUnlocked', '1')" in text
+        assert "sessionStorage.removeItem('cc_directImageUnlocked')" in text
+        assert "localStorage.setItem('cc_directImage'" not in text
+        assert "setChk('directImageChk', 'cc_directImage')" not in text
+
+    def test_direct_send_checks_unlock_state(self):
+        source = Path(__file__).resolve().parents[1] / "qdrant_proxy_final.py"
+        text = source.read_text(encoding="utf-8")
+        start = text.index("async function sendDirectImage(text)")
+        end = text.index("async function sendMessage(taskIdOverride)", start)
+        body = text[start:end]
+
+        assert "if (!directImageUnlocked())" in body
+        assert "Direct image is locked" in body
