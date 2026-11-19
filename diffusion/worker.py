@@ -36,6 +36,14 @@ MODEL_IDS = STAGE1_MODEL_KEYS + (AUTO_MODEL_KEY,)
 MODEL_ROOT = Path(
     os.getenv("DIFFUSION_MODEL_ROOT", "Z:/contextcut/models/official")
 ).expanduser()
+Z_IMAGE_LOCAL_DIR = Path(
+    os.getenv("DIFFUSION_Z_IMAGE_MODEL", r"Z:\models\Z-Image-Turbo-Heretic")
+).expanduser()
+Z_IMAGE_SOURCE = (
+    str(Z_IMAGE_LOCAL_DIR)
+    if Z_IMAGE_LOCAL_DIR.is_dir()
+    else "Tongyi-MAI/Z-Image-Turbo"
+)
 GPU_SAMPLE_INTERVAL = float(os.getenv("DIFFUSION_GPU_SAMPLE_INTERVAL", "5"))
 _gpu_sample_lock = threading.Lock()
 _gpu_sample = {"ts": 0.0, "data": None}
@@ -73,7 +81,7 @@ class ModelSpec:
 
 MODEL_REGISTRY = {
     DEFAULT_MODEL_KEY: ModelSpec(
-        model_id="Tongyi-MAI/Z-Image-Turbo",
+        model_id=Z_IMAGE_SOURCE,
         pipelines={
             "text": "ZImagePipeline",
             "img2img": "ZImageImg2ImgPipeline",
