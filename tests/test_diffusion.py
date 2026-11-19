@@ -195,6 +195,7 @@ class TestVramEviction:
             )
 
         assert result["data"][0]["url"] == "/outputs/images/a.png"
+        assert result["elapsed_seconds"] >= 0
         assert client.is_active() is True
         client.set_active(False)
 
@@ -314,7 +315,9 @@ class TestProxyRoutes:
             )
 
         assert status == 200
-        assert self._parsed(raw)["data"][0]["url"] == "/outputs/images/gen.png"
+        parsed = self._parsed(raw)
+        assert parsed["data"][0]["url"] == "/outputs/images/gen.png"
+        assert parsed["elapsed_seconds"] >= 0
 
     def test_generation_route_with_remote_worker_uses_absolute_urls(
         self, make_handler, monkeypatch
@@ -442,6 +445,41 @@ class TestProxyRoutes:
                 handler._forward("POST", b"{}")
 
         unload.assert_called_once_with()
+
+    @pytest.mark.parametrize(
+        "path", ["/v1/images/generations", "/v1/images/edits"]
+    )
+    def test_dashboard_forwards_image_routes_to_proxy(self, make_handler, path):
+        seen = {}
+
+        class _ProxyResponse:
+            status = 200
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *args):
+                return False
+
+            def getheaders(self):
+                return []
+
+            def read(self):
+                return json.dumps({"ok": True}).encode()
+
+        def fake_urlopen(request, timeout=None):
+            seen["url"] = _request_url(request)
+            seen["body"] = request.data
+            return _ProxyResponse()
+
+        body = b'{"prompt":"x"}'
+        with patch("qdrant_proxy_final.urllib.request.urlopen", side_effect=fake_urlopen):
+            status, raw = make_handler(path, "POST", body=body)
+
+        assert status == 200
+        assert seen["url"].endswith(path)
+        assert seen["body"] == body
+        assert json.loads(raw.split(b"\r\n\r\n", 1)[1]) == {"ok": True}
 
     def test_disabled_diffusion_returns_503(self, make_handler, monkeypatch):
         import qdrant_proxy_final as proxy

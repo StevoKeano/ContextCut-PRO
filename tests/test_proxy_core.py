@@ -4,6 +4,7 @@ Tests for proxy core functions: ``qdrant_context``, ``inject_context``, ``cache_
 
 import json
 import time
+from pathlib import Path
 from unittest.mock import patch, MagicMock
 
 import pytest
@@ -264,3 +265,53 @@ class TestImageRequestDetection:
             == "![Generated image](/outputs/images/b.png)"
         )
         assert image_markdown_from_tool_output("no image") == ""
+
+    def test_image_reply_includes_elapsed_seconds(self):
+        from qdrant_proxy_final import image_reply_from_tool_output
+
+        output = json.dumps(
+            {
+                "data": [{"url": "/outputs/images/a.png"}],
+                "elapsed_seconds": 12.345,
+            }
+        )
+        assert image_reply_from_tool_output(output) == (
+            "![Generated image](/outputs/images/a.png)\n\nGenerated in 12.3s."
+        )
+        assert image_reply_from_tool_output("no image") == ""
+
+
+class TestDirectImageDashboard:
+    def test_dashboard_has_direct_image_checkbox(self):
+        from qdrant_proxy_final import make_dashboard
+
+        html = make_dashboard()
+        assert 'id="directImageChk"' in html
+        assert "Direct image" in html
+        assert "without the chat LLM" in html
+
+    def test_direct_image_uses_generations_endpoint_without_chat_routes(self):
+        source = Path(__file__).resolve().parents[1] / "qdrant_proxy_final.py"
+        text = source.read_text(encoding="utf-8")
+        start = text.index("async function sendDirectImage(text)")
+        end = text.index("async function sendMessage(taskIdOverride)", start)
+        body = text[start:end]
+
+        assert "fetch('/v1/images/generations'" in body
+        assert "model: 'z-image-turbo'" in body
+        assert "response_format: 'url'" in body
+        assert "startGenerationProgress('generate_image'" in body
+        assert "conversationHistory.push" not in body
+        assert "/v1/chat/completions" not in body
+        assert "/api/agent" not in body
+
+    def test_send_message_dispatches_direct_image_before_model_validation(self):
+        source = Path(__file__).resolve().parents[1] / "qdrant_proxy_final.py"
+        text = source.read_text(encoding="utf-8")
+        start = text.index("async function sendMessage(taskIdOverride)")
+        end = text.index("// ── Embed Settings Modal", start)
+        body = text[start:end]
+
+        dispatch = body.index("await sendDirectImage(text)")
+        validation = body.index("alert('Enter a model name first.')")
+        assert dispatch < validation

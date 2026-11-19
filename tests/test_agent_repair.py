@@ -30,6 +30,34 @@ class _FakeAgent:
         return {}
 
 
+class _FakeImageAgent:
+    def with_config(self, *_args, **_kwargs):
+        return self
+
+    async def astream_events(self, _stream_input, config=None, version="v2"):
+        output = json.dumps(
+            {
+                "data": [{"url": "/outputs/images/a.png"}],
+                "elapsed_seconds": 8.26,
+            }
+        )
+        yield {
+            "event": "on_tool_start",
+            "name": "generate_image",
+            "run_id": "image-run",
+            "data": {"input": {"prompt": "a red cube"}},
+        }
+        yield {
+            "event": "on_tool_end",
+            "name": "generate_image",
+            "run_id": "image-run",
+            "data": {"output": output},
+        }
+
+    async def aget_state(self, _config):
+        return {}
+
+
 class _FakeNonStreamAgent:
     def __init__(self, outputs):
         self.outputs = list(outputs)
@@ -106,6 +134,16 @@ def _run_agent(make_handler, agent, warning=None, stream=True):
             }
         ).encode()
         return make_handler("/api/agent", "POST", body)
+
+
+def test_image_reply_includes_elapsed_time_in_stream(make_handler):
+    status, raw = _run_agent(make_handler, _FakeImageAgent())
+
+    assert status == 200
+    final = [data for name, data in _parse_sse(raw) if name == "done"][-1]
+    assert final["response"] == (
+        "![Generated image](/outputs/images/a.png)\n\nGenerated in 8.3s."
+    )
 
 
 def test_raw_tool_call_is_retried_and_hidden(make_handler):

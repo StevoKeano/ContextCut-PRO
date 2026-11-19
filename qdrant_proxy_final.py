@@ -1611,6 +1611,23 @@ def image_markdown_from_tool_output(output: str) -> str:
     return f"![Generated image]({match.group(1)})"
 
 
+def image_reply_from_tool_output(output: str) -> str:
+    text = str(output or "")
+    markdown = image_markdown_from_tool_output(text)
+    if not markdown:
+        return ""
+    elapsed_match = re.search(r'"?elapsed_seconds"?\s*:\s*([0-9.]+)', text)
+    if not elapsed_match:
+        return markdown
+    try:
+        elapsed = float(elapsed_match.group(1))
+    except ValueError:
+        return markdown
+    if elapsed <= 0:
+        return markdown
+    return f"{markdown}\n\nGenerated in {elapsed:.1f}s."
+
+
 def is_image_request(text: str, history=None) -> bool:
     query = str(text or "")
     if _IMAGE_REQUEST_RE.search(query):
@@ -3179,6 +3196,9 @@ tr:hover td{{background:var(--surf2)}}
 .send-btn{{background:var(--accent);color:#000;border:none;border-radius:var(--r);padding:8px 16px;font-family:'Syne',sans-serif;font-weight:700;font-size:13px;cursor:pointer;white-space:nowrap;height:38px}}
 .send-btn:hover{{opacity:.85}}.send-btn:disabled{{opacity:.4;cursor:not-allowed}}
 .att-btn{{background:transparent;border:1px solid var(--border);color:var(--muted);border-radius:var(--r);padding:8px 10px;font-size:14px;cursor:pointer;line-height:1;flex-shrink:0}}
+.direct-image-lbl{{display:inline-flex;align-items:center;gap:4px;font-size:10px;color:var(--muted);cursor:pointer;padding:5px 7px;border:1px solid var(--border);border-radius:var(--r);white-space:nowrap;font-family:'JetBrains Mono',monospace}}
+.direct-image-lbl:hover{{border-color:var(--accent);color:var(--accent)}}
+.direct-image-lbl input{{accent-color:var(--green);cursor:pointer}}
 .agent-toggle.agent-on{{background:var(--accent);color:#000;border-color:var(--accent);font-weight:600}}
 .unattended-lbl{{display:none;margin-left:8px;font-size:11px;color:var(--muted);cursor:pointer;font-family:'JetBrains Mono',monospace;white-space:nowrap;align-items:center;gap:4px}}
 .unattended-lbl.show{{display:inline-flex}}
@@ -3402,6 +3422,7 @@ tr.cloud-off td{{background:#0a1a2e!important;color:#22c55e!important;border-top
       <div class="input-row">
         <button class="att-btn" id="attachBtn" onclick="document.getElementById('fileInput').click()" title="Attach file to knowledge base">📎</button>
         <input type="file" id="fileInput" accept=".md,.txt,.py,.js,.ts,.html,.css,.csv,.json,.xml,.yaml,.yml,.go,.rs,.rb,.java,.c,.cpp,.h,.sh,.sql,.log,.pdf,.docx,.xlsx" style="display:none" onchange="attachFile(this)" />
+        <label class="direct-image-lbl" id="directImageLbl" title="Send prompt directly to the diffusion model without the chat LLM"><input type="checkbox" id="directImageChk" onchange="saveState()"> Direct image</label>
         <textarea class="chat-input" id="chatInput" rows="2" role="textbox" aria-label="Message input"
           placeholder="Type a message… (Enter to send, Shift+Enter for newline). Try: /clear, /help"
           onkeydown="handleKey(event)"></textarea>
@@ -3446,6 +3467,8 @@ function saveState() {{
   }} catch(e){{}}
   const uc = document.getElementById('unattendedChk');
   if (uc) localStorage.setItem('cc_unattended', uc.checked ? '1' : '0');
+  const di = document.getElementById('directImageChk');
+  if (di) localStorage.setItem('cc_directImage', di.checked ? '1' : '0');
   const mi = document.getElementById('modelInput');
   if (mi) localStorage.setItem('cc_model', mi.value);
   const ts = document.getElementById('tempSlider');
@@ -3491,6 +3514,7 @@ function loadState() {{
   const mr = ls.getItem('cc_maxRetries');
   if (mr !== null) maxRetries = parseInt(mr, 10) || 3;
   setChk('unattendedChk', 'cc_unattended');
+  setChk('directImageChk', 'cc_directImage');
   setVal('modelInput', 'cc_model');
   setVal('tempSlider', 'cc_temp');
   updateParamVal('tempSlider', 'tempVal');
@@ -3561,7 +3585,7 @@ function loadState() {{
 
 function resetDefaults() {{
   if (!confirm('Reset all settings to defaults?')) return;
-  const keys = ['cc_agentMode','cc_scanMode','cc_deepMode','cc_unattended','cc_model','cc_temp','cc_topp','cc_maxTok','cc_maxTokMigrated','cc_reasoning','cc_minscore','cc_topk','cc_loopMode','cc_maxRetries'];
+  const keys = ['cc_agentMode','cc_scanMode','cc_deepMode','cc_unattended','cc_directImage','cc_model','cc_temp','cc_topp','cc_maxTok','cc_maxTokMigrated','cc_reasoning','cc_minscore','cc_topk','cc_loopMode','cc_maxRetries'];
   keys.forEach(k => localStorage.removeItem(k));
   location.reload();
 }}
@@ -5045,14 +5069,77 @@ async function doScan(text, assistantDiv, bubble) {{
   }}
 }}
 
+async function sendDirectImage(text) {{
+  const input = document.getElementById('chatInput');
+  const sendBtn = document.getElementById('sendBtn');
+  inputHistory.unshift(text);
+  if (inputHistory.length > 50) inputHistory.pop();
+  inputHistoryIdx = -1;
+  input.value = '';
+  sendBtn.disabled = true;
+  abortController = new AbortController();
+  let directTimeout = null;
+  function armDirectTimeout() {{
+    if (directTimeout) clearTimeout(directTimeout);
+    directTimeout = setTimeout(() => {{
+      if (abortController) abortController.abort();
+    }}, clientTimeoutMs);
+  }}
+  armDirectTimeout();
+  setSendStop();
+  appendMsg('user', text, '');
+  const body = {{prompt: text, model: 'z-image-turbo', size: '1024x1024', n: 1, response_format: 'url'}};
+  startGenerationProgress('generate_image', JSON.stringify(body));
+  try {{
+    const resp = await fetch('/v1/images/generations', {{
+      method: 'POST',
+      headers: {{'Content-Type':'application/json'}},
+      signal: abortController.signal,
+      body: JSON.stringify(body)
+    }});
+    if (!resp.ok) {{
+      let errText = await resp.text();
+      try {{
+        const errJson = JSON.parse(errText);
+        if (errJson.error && typeof errJson.error === 'object' && errJson.error.message) errText = errJson.error.message;
+        else if (typeof errJson.error === 'string') errText = errJson.error;
+      }} catch(e) {{}}
+      finishGenerationProgress();
+      appendMsg('assistant', '\u274c Direct image error ' + resp.status + ': ' + errText, '');
+      return;
+    }}
+    const data = await resp.json();
+    const urls = Array.isArray(data.data) ? data.data.map(x => x && x.url).filter(Boolean) : [];
+    if (!urls.length) throw new Error(data.error || 'No image URL returned');
+    markGenerationProgressDone();
+    let reply = urls.map(u => '![Generated image](' + u + ')').join('\\n\\n');
+    const elapsed = Number(data.elapsed_seconds);
+    if (Number.isFinite(elapsed) && elapsed >= 0) reply += '\\n\\nGenerated in ' + elapsed.toFixed(1) + 's.';
+    appendMsg('assistant', reply, '');
+  }} catch(e) {{
+    finishGenerationProgress();
+    if (e.name === 'AbortError') appendMsg('assistant', '\u23f9 Stopped while generating image.', '');
+    else appendMsg('assistant', '\u274c Direct image error: ' + e.message, '');
+  }} finally {{
+    if (directTimeout) clearTimeout(directTimeout);
+    finishGenerationProgress();
+    resetSendButton();
+  }}
+}}
+
 async function sendMessage(taskIdOverride) {{
   const input   = document.getElementById('chatInput');
   const sendBtn = document.getElementById('sendBtn');
   const model   = document.getElementById('modelInput').value.trim();
   const text    = input.value.trim();
   if (!text) return;
-  if (!model) {{ alert('Enter a model name first.'); return; }}
   if (!taskIdOverride && handleCommand(text)) {{ input.value = ''; return; }}
+  const directImageChk = document.getElementById('directImageChk');
+  if (!taskIdOverride && directImageChk && directImageChk.checked) {{
+    await sendDirectImage(text);
+    return;
+  }}
+  if (!model) {{ alert('Enter a model name first.'); return; }}
   if (_prevModel === null) {{
     _prevModel = model;
   }} else if (_prevModel !== model) {{
@@ -8683,7 +8770,7 @@ class DashboardHandler(_SuppressBrokenPipe, BaseHTTPRequestHandler):
                                                 and "/outputs/images/" in output_str
                                             ):
                                                 session["last_image_tool_content"] = output_str
-                                                image_done_response = image_markdown_from_tool_output(output_str)
+                                                image_done_response = image_reply_from_tool_output(output_str)
                                             emit_alerts()
                                             # Save streaming checkpoint
                                             try:
@@ -9050,6 +9137,8 @@ class DashboardHandler(_SuppressBrokenPipe, BaseHTTPRequestHandler):
             "/api/chat",
             "/api/generate",
             "/v1/completions",
+            "/v1/images/generations",
+            "/v1/images/edits",
         )
         if not self.path.startswith(safe_prefixes):
             self.send_response(404)

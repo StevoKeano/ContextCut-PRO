@@ -210,19 +210,22 @@ def call_worker(path: str, payload: dict, ollama_url=None, evict=True) -> dict:
     """Evict Ollama, run a diffusion request, and rewrite returned URLs."""
     if not is_enabled():
         raise RuntimeError("local image diffusion is disabled")
+    call_started = time.monotonic()
     if evict and ollama_url:
         evict_ollama(ollama_url)
     started = time.monotonic()
     try:
         result = _post_json(WORKER_URL + path, payload, REQUEST_TIMEOUT)
     finally:
+        generation_elapsed = time.monotonic() - started
         print(
-            f"[timing] worker generation {path} {time.monotonic() - started:.2f}s",
+            f"[timing] worker generation {path} {generation_elapsed:.2f}s",
             flush=True,
         )
     if not isinstance(result, dict) or result.get("error"):
         set_active(False)
         return result
+    result["elapsed_seconds"] = round(time.monotonic() - call_started, 2)
     rewrite_image_urls(result)
     set_active(True)
     return result
@@ -233,6 +236,7 @@ def forward_raw(path: str, raw_body: bytes, content_type="application/json",
     """Forward an already-encoded image request (JSON or multipart)."""
     if not is_enabled():
         raise RuntimeError("local image diffusion is disabled")
+    call_started = time.monotonic()
     if ollama_url:
         evict_ollama(ollama_url)
     req = urllib.request.Request(
@@ -250,11 +254,13 @@ def forward_raw(path: str, raw_body: bytes, content_type="application/json",
             except (ValueError, UnicodeDecodeError):
                 payload = {"error": "worker returned a non-JSON response"}
     finally:
+        elapsed = time.monotonic() - started
         print(
-            f"[timing] worker generation {path} {time.monotonic() - started:.2f}s",
+            f"[timing] worker generation {path} {elapsed:.2f}s",
             flush=True,
         )
     if status < 400 and isinstance(payload, dict) and not payload.get("error"):
+        payload["elapsed_seconds"] = round(time.monotonic() - call_started, 2)
         rewrite_image_urls(payload)
         set_active(True)
     return status, payload
