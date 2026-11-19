@@ -44,6 +44,10 @@ CAPABILITIES_BLURB = (
     "Resume button.\n"
     "- Add knowledge by dropping files into ~/contextcut/knowledge, uploading via the "
     "File Browser, or calling ingest_file in Agent mode.\n"
+    "- Local speech (when enabled): the speak and audio_briefing tools use BlueTTS "
+    "(BlueV3 ONNX) voices; [voice] markers switch speakers and role-based briefings "
+    "map orchestrator=david, researcher/noa, coder/reviewer=adam. The dashboard 🔊 "
+    "button reads the last reply aloud. Requires the always-on BlueTTS HTTP service.\n"
     "For questions about your own capabilities or how to use ContextCut PRO, call "
     "contextcut_help() in Agent mode, or answer from this summary. Do not invent features."
 )

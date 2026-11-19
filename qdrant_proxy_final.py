@@ -21,6 +21,12 @@ Configuration via environment variables (all optional — defaults shown):
   DIFFUSION_IMAGE_BASE_URL   (auto)                   Override returned image link base URL
   DIFFUSION_ENABLED          true                     Expose local image generation/edits
   DIFFUSION_OUTPUT_DIR       ./outputs/images         Shared generated-image directory
+  TTS_BASE_URL               http://localhost:8000/v1 BlueTTS OpenAI-compatible endpoint
+  TTS_API_KEY                local                    Bearer key sent to BlueTTS
+  TTS_DEFAULT_VOICE          noa                      Default voice for speech requests
+  TTS_FORMAT                 wav                      Output format (wav/pcm/mp3/flac/opus/aac)
+  TTS_ENABLED                true                     Expose local text-to-speech tools/routes
+  TTS_OUTPUT_DIR             ./outputs/audio          Shared generated-audio directory
   VOYAGE_API_KEY             (required)               Voyage AI API key
 """
 
@@ -51,6 +57,8 @@ from socketserver import ThreadingMixIn
 
 from diffusion import client as diffusion_client
 from diffusion.tools import make_image_tools
+from tts import client as tts_client
+from tts.tools import make_tts_tools
 from untrusted_content import UNTRUSTED_GUIDANCE, wrap_untrusted
 from capabilities import CAPABILITIES_BLURB, capabilities_block, is_meta_question
 from scan_sanitize import sanitize_scan_html
@@ -264,6 +272,24 @@ OUTPUTS_DIR = Path(
 ).expanduser().resolve()
 diffusion_client.configure(DIFFUSION_WORKER_URL, DIFFUSION_ENABLED)
 
+TTS_BASE_URL = os.getenv("TTS_BASE_URL", "http://localhost:8000/v1")
+TTS_API_KEY = os.getenv("TTS_API_KEY", "local")
+TTS_DEFAULT_VOICE = os.getenv("TTS_DEFAULT_VOICE", "noa")
+TTS_FORMAT = os.getenv("TTS_FORMAT", "wav")
+TTS_ENABLED = os.getenv("TTS_ENABLED", "true").strip().lower() in (
+    "1",
+    "true",
+    "yes",
+    "on",
+)
+tts_client.configure(
+    base_url=TTS_BASE_URL,
+    api_key=TTS_API_KEY,
+    voice=TTS_DEFAULT_VOICE,
+    response_format=TTS_FORMAT,
+    enabled=TTS_ENABLED,
+)
+
 
 def diffusion_model_names() -> list:
     return list(diffusion_client.model_ids()) if DIFFUSION_ENABLED else []
@@ -295,7 +321,12 @@ def load_saved_credentials():
         _free_only, \
         _local_only, \
         DIFFUSION_WORKER_URL, \
-        DIFFUSION_ENABLED
+        DIFFUSION_ENABLED, \
+        TTS_BASE_URL, \
+        TTS_API_KEY, \
+        TTS_DEFAULT_VOICE, \
+        TTS_FORMAT, \
+        TTS_ENABLED
     global _EMBED_MODE, _VK, _LOCAL_EMBED
     creds = CredentialManager.load_all()
     if creds.get("diffusion_worker_url"):
@@ -303,6 +334,23 @@ def load_saved_credentials():
     if creds.get("diffusion_enabled") is not None:
         DIFFUSION_ENABLED = bool(creds["diffusion_enabled"])
     diffusion_client.configure(DIFFUSION_WORKER_URL, DIFFUSION_ENABLED)
+    if creds.get("tts_base_url"):
+        TTS_BASE_URL = creds["tts_base_url"]
+    if creds.get("tts_api_key"):
+        TTS_API_KEY = creds["tts_api_key"]
+    if creds.get("tts_default_voice"):
+        TTS_DEFAULT_VOICE = creds["tts_default_voice"]
+    if creds.get("tts_format"):
+        TTS_FORMAT = creds["tts_format"]
+    if creds.get("tts_enabled") is not None:
+        TTS_ENABLED = bool(creds["tts_enabled"])
+    tts_client.configure(
+        base_url=TTS_BASE_URL,
+        api_key=TTS_API_KEY,
+        voice=TTS_DEFAULT_VOICE,
+        response_format=TTS_FORMAT,
+        enabled=TTS_ENABLED,
+    )
     _provider_name = creds.get("provider", "Ollama")
     _custom_base_url = creds.get("custom_url", "")
     _ollama_url = creds.get("ollama_url", "")
@@ -1822,8 +1870,111 @@ class ProxyHandler(_SuppressBrokenPipe, BaseHTTPRequestHandler):
                     items.append(
                         {"id": name, "object": "model", "owned_by": "local"}
                     )
+        if TTS_ENABLED and "bluev3" not in known:
+            items.append({"id": "bluev3", "object": "model", "owned_by": "local"})
         self._send_json(200, data)
         return True
+
+    def _serve_output_audio(self):
+        name = urllib.parse.unquote(self.path.split("?", 1)[0].rsplit("/", 1)[-1])
+        target = (
+            tts_client.OUTPUT_DIR / name if name else tts_client.OUTPUT_DIR
+        ).resolve()
+        if (
+            not name
+            or name != os.path.basename(name)
+            or not target.is_relative_to(tts_client.OUTPUT_DIR)
+            or target.suffix.lower() not in (
+                ".wav",
+                ".pcm",
+                ".mp3",
+                ".flac",
+                ".opus",
+                ".aac",
+            )
+            or not target.is_file()
+        ):
+            self._send_json(404, {"error": "not found"})
+            return
+        body = target.read_bytes()
+        self.send_response(200)
+        self.send_header(
+            "Content-Type", tts_client.content_type(target.suffix.lstrip("."))
+        )
+        self.send_header("Content-Length", str(len(body)))
+        self.end_headers()
+        self.wfile.write(body)
+
+    def _handle_tts_voices(self):
+        if not TTS_ENABLED:
+            self._send_json(503, {"error": "local text-to-speech is disabled"})
+            return
+        self._send_json(
+            200,
+            {
+                "voices": list(tts_client.voices()),
+                "models": list(tts_client.models()),
+                "default_voice": tts_client.normalize_voice(),
+                "format": tts_client.normalize_format(),
+                "aliases": tts_client.VOICE_ALIASES,
+                "role_voices": tts_client.ROLE_VOICES,
+            },
+        )
+
+    def _handle_tts_speech(self, raw_body: bytes):
+        if not TTS_ENABLED:
+            self._send_json(503, {"error": "local text-to-speech is disabled"})
+            return
+        try:
+            body = json.loads(raw_body or b"{}")
+        except Exception:
+            self._send_json(400, {"error": "invalid JSON body"})
+            return
+        if not isinstance(body, dict) or not str(body.get("input") or "").strip():
+            self._send_json(400, {"error": "input is required"})
+            return
+        kwargs = {
+            "text": str(body["input"]),
+            "voice": str(body.get("voice") or TTS_DEFAULT_VOICE),
+            "response_format": str(body.get("response_format") or TTS_FORMAT),
+            "speed": body.get("speed", 1.0),
+            "language": body.get("language") or None,
+            "model": str(body.get("model") or "bluev3"),
+        }
+        streaming = body.get("stream") is True or str(
+            body.get("stream_format") or ""
+        ) == "audio"
+        started = False
+        try:
+            if streaming:
+                started = True
+                self.send_response(200)
+                self.send_header("Content-Type", tts_client.content_type(kwargs["response_format"]))
+                self.send_header("Transfer-Encoding", "chunked")
+                self.send_header("Cache-Control", "no-cache")
+                self.end_headers()
+                for piece in tts_client.iter_speech(**kwargs):
+                    self.wfile.write(
+                        f"{len(piece):X}\r\n".encode() + piece + b"\r\n"
+                    )
+                    self.wfile.flush()
+                self.wfile.write(b"0\r\n\r\n")
+                return
+            audio = tts_client.synthesize(**kwargs)
+            self.send_response(200)
+            self.send_header("Content-Type", tts_client.content_type(kwargs["response_format"]))
+            self.send_header("Content-Length", str(len(audio)))
+            self.end_headers()
+            self.wfile.write(audio)
+        except Exception as exc:
+            print(f"[tts] speech request failed: {exc}", flush=True)
+            if not started:
+                self._send_json(502, {"error": str(exc)[:300]})
+            else:
+                try:
+                    self.wfile.write(b"0\r\n\r\n")
+                except Exception:
+                    pass
 
     def _handle_image_request(self, raw_body: bytes, content_type: str):
         if not DIFFUSION_ENABLED:
@@ -2024,7 +2175,13 @@ class ProxyHandler(_SuppressBrokenPipe, BaseHTTPRequestHandler):
             if route.startswith("/outputs/images/"):
                 self._serve_output_image()
                 return
-            if route.rstrip("/") == "/v1/models" and DIFFUSION_ENABLED:
+            if route.startswith("/outputs/audio/"):
+                self._serve_output_audio()
+                return
+            if route.rstrip("/") == "/v1/audio/voices" and TTS_ENABLED:
+                self._handle_tts_voices()
+                return
+            if route.rstrip("/") == "/v1/models" and (DIFFUSION_ENABLED or TTS_ENABLED):
                 self._models_with_diffusion()
                 return
             self._forward("GET", b"")
@@ -2065,6 +2222,9 @@ class ProxyHandler(_SuppressBrokenPipe, BaseHTTPRequestHandler):
                 self._handle_image_request(
                     raw_body, self.headers.get("Content-Type", "")
                 )
+                return
+            if urllib.parse.urlparse(self.path).path == "/v1/audio/speech":
+                self._handle_tts_speech(raw_body)
                 return
             try:
                 body = json.loads(raw_body)
@@ -2315,6 +2475,18 @@ def make_settings_page():
     ollama_input_url = _ollama_url if _ollama_url else UPSTREAM
     diffusion_input_url = DIFFUSION_WORKER_URL
     diffusion_checked = " checked" if DIFFUSION_ENABLED else ""
+    tts_input_url = TTS_BASE_URL
+    tts_voice = tts_client.normalize_voice(TTS_DEFAULT_VOICE)
+    tts_format = tts_client.normalize_format(TTS_FORMAT)
+    tts_checked = " checked" if TTS_ENABLED else ""
+    tts_voice_options = "".join(
+        f'<option value="{v}" {"selected" if v == tts_voice else ""}>{v}</option>'
+        for v in tts_client.NATIVE_VOICES
+    )
+    tts_format_options = "".join(
+        f'<option value="{f}" {"selected" if f == tts_format else ""}>{f}</option>'
+        for f in ("wav", "pcm", "mp3", "flac", "opus", "aac")
+    )
     has_key = bool(_api_key)
     masked_key = "••••••••••••••••" if has_key else ""
     provider_opts = "".join(
@@ -2343,7 +2515,7 @@ body{{background:var(--bg);color:var(--text);font-family:'JetBrains Mono',monosp
 .back-btn:hover{{color:var(--text);border-color:var(--accent)}}
 .tog{{background:transparent;border:1px solid var(--border);color:var(--muted);border-radius:3px;padding:3px 8px;font-size:13px;cursor:pointer;line-height:1;flex-shrink:0}}
 .tog:hover{{color:var(--text);border-color:var(--accent)}}
-.container{{flex:1;overflow-y:auto;padding:20px;display:flex;justify-content:center}}
+.container{{flex:1;overflow-y:auto;padding:20px;display:flex;justify-content:center;align-items:flex-start}}
 .card{{background:var(--surf);border:1px solid var(--border);border-radius:var(--r);padding:20px;width:100%;max-width:500px}}
 .card h2{{font-family:'Syne',sans-serif;font-size:18px;margin-bottom:16px;color:var(--accent)}}
 .form-group{{margin-bottom:16px}}
@@ -2401,36 +2573,22 @@ body{{background:var(--bg);color:var(--text);font-family:'JetBrains Mono',monosp
     </div>
 
     <div class="form-group">
-      <label>Diffusion Worker URL</label>
-      <input type="text" id="diffusionWorkerUrl" value="{diffusion_input_url}" placeholder="http://127.0.0.1:8189">
-      <label style="cursor:pointer;display:flex;align-items:center;gap:8px;margin-top:8px">
-        <input type="checkbox" id="diffusionEnabled" style="width:auto;accent-color:var(--accent)"{diffusion_checked}>
-        Enable local image generation / editing
-      </label>
-      <div style="font-size:10px;color:var(--muted);margin-top:4px">Requires a separate diffusion worker and venv. Ollama weights are unloaded before generation.</div>
-      <div class="btn-row">
-        <button type="button" class="btn btn-secondary" id="testDiffusionBtn" onclick="testDiffusionWorker()">🔌 Test Worker</button>
-        <span class="status" id="diffusionTestStatus"></span>
-      </div>
-    </div>
-
-    <div class="form-group">
       <label>API Key</label>
       <input type="password" id="apiKey" value="{masked_key}" placeholder="Enter your API key">
       <div style="font-size:10px;color:var(--muted);margin-top:4px">Stored encrypted on disk. Only your machine can decrypt it.</div>
-    </div>
-
-    <div class="form-group hidden" id="ollamaLocalGroup">
-      <label style="cursor:pointer;display:flex;align-items:center;gap:8px">
-        <input type="checkbox" id="ollamaLocalOnly" style="width:auto;accent-color:var(--accent)"{" checked" if _local_only else ""}>
-        Local models only (exclude cloud)
-      </label>
     </div>
 
     <div class="form-group hidden" id="freeOnlyGroup">
       <label style="cursor:pointer;display:flex;align-items:center;gap:8px">
         <input type="checkbox" id="freeOnly" style="width:auto;accent-color:var(--accent)"{" checked" if _free_only else ""}>
         Only free models (OpenRouter)
+      </label>
+    </div>
+
+    <div class="form-group hidden" id="ollamaLocalGroup">
+      <label style="cursor:pointer;display:flex;align-items:center;gap:8px">
+        <input type="checkbox" id="ollamaLocalOnly" style="width:auto;accent-color:var(--accent)"{" checked" if _local_only else ""}>
+        Local models only (exclude cloud)
       </label>
     </div>
 
@@ -2448,6 +2606,39 @@ body{{background:var(--bg);color:var(--text);font-family:'JetBrains Mono',monosp
       <button class="btn" id="saveBtn" onclick="saveSettings()">Save & Switch</button>
       <span class="status" id="saveStatus"></span>
     </div>
+
+    <div class="form-group">
+      <label>Diffusion Worker URL</label>
+      <input type="text" id="diffusionWorkerUrl" value="{diffusion_input_url}" placeholder="http://127.0.0.1:8189">
+      <label style="cursor:pointer;display:flex;align-items:center;gap:8px;margin-top:8px">
+        <input type="checkbox" id="diffusionEnabled" style="width:auto;accent-color:var(--accent)"{diffusion_checked}>
+        Enable local image generation / editing
+      </label>
+      <div style="font-size:10px;color:var(--muted);margin-top:4px">Requires a separate diffusion worker and venv. Ollama weights are unloaded before generation.</div>
+      <div class="btn-row">
+        <button type="button" class="btn btn-secondary" id="testDiffusionBtn" onclick="testDiffusionWorker()">🔌 Test Worker</button>
+        <span class="status" id="diffusionTestStatus"></span>
+      </div>
+    </div>
+
+    <div class="form-group">
+      <label>Text-to-Speech (BlueTTS)</label>
+      <input type="text" id="ttsBaseUrl" value="{tts_input_url}" placeholder="http://localhost:8000/v1">
+      <div class="btn-row" style="margin-top:6px">
+        <select id="ttsVoice" style="width:48%" title="Default voice">{tts_voice_options}</select>
+        <select id="ttsFormat" style="width:48%" title="Audio format">{tts_format_options}</select>
+      </div>
+      <label style="cursor:pointer;display:flex;align-items:center;gap:8px;margin-top:8px">
+        <input type="checkbox" id="ttsEnabled" style="width:auto;accent-color:var(--accent)"{tts_checked}>
+        Enable local speech (speak / audio_briefing tools)
+      </label>
+      <div style="font-size:10px;color:var(--muted);margin-top:4px">Always-on BlueV3 ONNX service; ContextCut only connects over HTTP. Prefer wav or pcm for lowest latency.</div>
+      <div class="btn-row">
+        <button type="button" class="btn btn-secondary" id="testTtsBtn" onclick="testTtsService()">🔊 Test Speech</button>
+        <span class="status" id="ttsTestStatus"></span>
+      </div>
+    </div>
+
   </div>
 </div>
 
@@ -2554,12 +2745,16 @@ async function saveSettings() {{
     const ollamaUrl = document.getElementById('ollamaUrl').value;
     const diffusionWorkerUrl = document.getElementById('diffusionWorkerUrl').value;
     const diffusionEnabled = document.getElementById('diffusionEnabled').checked;
+    const ttsBaseUrl = document.getElementById('ttsBaseUrl').value;
+    const ttsVoice = document.getElementById('ttsVoice').value;
+    const ttsFormat = document.getElementById('ttsFormat').value;
+    const ttsEnabled = document.getElementById('ttsEnabled').checked;
     const freeOnly = document.getElementById('freeOnly').checked;
     const localOnly = document.getElementById('ollamaLocalOnly').checked;
     const resp = await fetch('/api/settings/provider', {{
       method: 'POST',
       headers: {{'Content-Type': 'application/json'}},
-      body: JSON.stringify({{provider, api_key: apiKey, custom_url: customUrl, ollama_url: ollamaUrl, diffusion_worker_url: diffusionWorkerUrl, diffusion_enabled: diffusionEnabled, free_only: freeOnly, local_only: localOnly, model: selectedModelName}})
+      body: JSON.stringify({{provider, api_key: apiKey, custom_url: customUrl, ollama_url: ollamaUrl, diffusion_worker_url: diffusionWorkerUrl, diffusion_enabled: diffusionEnabled, tts_base_url: ttsBaseUrl, tts_default_voice: ttsVoice, tts_format: ttsFormat, tts_enabled: ttsEnabled, free_only: freeOnly, local_only: localOnly, model: selectedModelName}})
     }});
     const data = await resp.json();
     if (data.ok) {{
@@ -2595,6 +2790,31 @@ async function testDiffusionWorker() {{
     if (data.ok) {{
       status.className = 'status ok';
       status.textContent = 'OK (' + data.latency_ms + 'ms) ' + (data.models || []).length + ' models' + (data.enabled ? '' : ' — disabled');
+    }} else {{
+      status.className = 'status err';
+      status.textContent = 'Failed: ' + (data.error || 'unknown error');
+    }}
+  }} catch(e) {{
+    status.className = 'status err';
+    status.textContent = 'Failed: ' + e.message;
+  }} finally {{
+    btn.disabled = false;
+  }}
+}}
+
+async function testTtsService() {{
+  const btn = document.getElementById('testTtsBtn');
+  const status = document.getElementById('ttsTestStatus');
+  const url = document.getElementById('ttsBaseUrl').value.trim();
+  btn.disabled = true;
+  status.className = 'status';
+  status.textContent = 'Testing ' + url + ' ...';
+  try {{
+    const resp = await fetch('/api/tts/test?url=' + encodeURIComponent(url));
+    const data = await resp.json();
+    if (data.ok) {{
+      status.className = 'status ok';
+      status.textContent = 'Ready (' + data.latency_ms + 'ms)' + (data.enabled ? '' : ' — disabled');
     }} else {{
       status.className = 'status err';
       status.textContent = 'Failed: ' + (data.error || 'unknown error');
@@ -3326,6 +3546,7 @@ tr.cloud-off td{{background:#0a1a2e!important;color:#22c55e!important;border-top
       <span class="task-badge" id="taskBadge" style="display:none;font-size:9px;color:var(--muted);margin-left:4px"></span>
       <button class="clear-btn" id="resumeBtn" onclick="resumeTask()" style="display:none;font-size:9px;padding:1px 6px" title="Resume previous agent task">↩ Resume</button>
       <button class="clear-btn" id="fsBtn" onclick="toggleFullscreen()" title="Toggle fullscreen (F11)" style="font-size:15px;padding:2px 8px;line-height:1">⛶</button>
+      <button class="clear-btn" id="ttsSpeakBtn" onclick="speakLastReply()" title="Read the last assistant reply aloud (BlueTTS)">🔊</button>
       <button class="clear-btn" id="clearBtn" onclick="clearConversation()" title="Clear conversation (/clear)">Clear</button>
     </div>
     <div class="chat-messages" id="messages" role="log" aria-live="polite" aria-label="Chat messages">
@@ -4722,6 +4943,25 @@ function appendMsg(role, text, statHtml) {{
   box.appendChild(div);
   attachDiffusionImages(div.querySelector('.bubble'), text);
   div.scrollIntoView({{behavior:'smooth', block:'start'}});
+}}
+
+let _ttsAudio = null;
+async function speakLastReply() {{
+  const bubbles = document.querySelectorAll('.msg.assistant .bubble');
+  const text = bubbles.length ? bubbles[bubbles.length - 1].innerText.trim() : '';
+  if (!text) return;
+  try {{
+    const resp = await fetch('/api/tts/speak', {{
+      method: 'POST',
+      headers: {{'Content-Type': 'application/json'}},
+      body: JSON.stringify({{text}})
+    }});
+    const data = await resp.json();
+    if (!data.ok) {{ console.warn('[tts]', data.error); return; }}
+    if (_ttsAudio) _ttsAudio.pause();
+    _ttsAudio = new Audio(data.url);
+    _ttsAudio.play().catch(e => console.warn('[tts] playback blocked', e));
+  }} catch(e) {{ console.warn('[tts]', e); }}
 }}
 
 function showTyping() {{
@@ -6320,6 +6560,143 @@ class DashboardHandler(_SuppressBrokenPipe, BaseHTTPRequestHandler):
         result.update(payload)
         self._send_json(result)
 
+    def _serve_output_audio(self):
+        name = urllib.parse.unquote(self.path.split("?", 1)[0].rsplit("/", 1)[-1])
+        target = (
+            tts_client.OUTPUT_DIR / name if name else tts_client.OUTPUT_DIR
+        ).resolve()
+        if (
+            not name
+            or name != os.path.basename(name)
+            or not target.is_relative_to(tts_client.OUTPUT_DIR)
+            or target.suffix.lower() not in (
+                ".wav",
+                ".pcm",
+                ".mp3",
+                ".flac",
+                ".opus",
+                ".aac",
+            )
+            or not target.is_file()
+        ):
+            self._send_json({"error": "not found"}, 404)
+            return
+        body = target.read_bytes()
+        self.send_response(200)
+        self.send_header(
+            "Content-Type", tts_client.content_type(target.suffix.lstrip("."))
+        )
+        self.send_header("Content-Length", str(len(body)))
+        self.end_headers()
+        self.wfile.write(body)
+
+    def _handle_tts_status(self):
+        if not TTS_ENABLED:
+            self._send_json(
+                {
+                    "ok": False,
+                    "enabled": False,
+                    "error": "local text-to-speech is disabled",
+                }
+            )
+            return
+        self._send_json(tts_client.health())
+
+    def _handle_tts_voices(self):
+        if not TTS_ENABLED:
+            self._send_json(
+                {
+                    "ok": False,
+                    "enabled": False,
+                    "error": "local text-to-speech is disabled",
+                },
+                503,
+            )
+            return
+        self._send_json(
+            {
+                "ok": True,
+                "voices": list(tts_client.voices()),
+                "models": list(tts_client.models()),
+                "default_voice": tts_client.normalize_voice(),
+                "aliases": tts_client.VOICE_ALIASES,
+                "role_voices": tts_client.ROLE_VOICES,
+            }
+        )
+
+    def _handle_tts_test(self):
+        started = time.monotonic()
+        parsed = urllib.parse.urlparse(self.path)
+        qs = urllib.parse.parse_qs(parsed.query)
+        url = (qs.get("url") or [""])[0].strip().rstrip("/") or TTS_BASE_URL
+        root = url[:-3].rstrip("/") if url.endswith("/v1") else url
+        result = {
+            "ok": False,
+            "enabled": TTS_ENABLED,
+            "url": url,
+            "latency_ms": 0,
+        }
+        try:
+            with urllib.request.urlopen(root + "/health", timeout=5) as resp:
+                payload = json.loads(resp.read().decode("utf-8"))
+            status_code = int(resp.status)
+            result.update(
+                {
+                    "ok": status_code == 200,
+                    "status_code": status_code,
+                    "status": payload.get("status", "")
+                    if isinstance(payload, dict)
+                    else "",
+                }
+            )
+            if not result["ok"]:
+                result["error"] = "service returned a non-200 status"
+        except Exception as exc:
+            result["error"] = str(exc)[:300]
+        result["latency_ms"] = int((time.monotonic() - started) * 1000)
+        self._send_json(result)
+
+    def _handle_tts_speak(self, raw_body):
+        if not TTS_ENABLED:
+            self._send_json(
+                {"ok": False, "error": "local text-to-speech is disabled"}, 503
+            )
+            return
+        try:
+            body = json.loads(raw_body or b"{}")
+        except Exception:
+            self._send_json({"ok": False, "error": "invalid JSON body"}, 400)
+            return
+        if not isinstance(body, dict):
+            self._send_json({"ok": False, "error": "invalid JSON body"}, 400)
+            return
+        voice = str(body.get("voice") or "").strip()
+        role = str(body.get("role") or "").strip().lower()
+        segments = body.get("segments")
+        if segments:
+            text = tts_client.compose_briefing(segments)
+        else:
+            text = tts_client.strip_markdown(body.get("text") or "")
+            if text and not voice and role in tts_client.ROLE_VOICES:
+                selected = tts_client.normalize_voice(tts_client.ROLE_VOICES[role])
+                if not re.match(r"^\[[a-z]+\]\s", text):
+                    text = f"[{selected}] {text}"
+        if not text:
+            self._send_json({"ok": False, "error": "no speakable text"}, 400)
+            return
+        try:
+            result = tts_client.save_speech(
+                text,
+                voice=voice or None,
+                response_format=str(body.get("response_format") or "") or None,
+                speed=body.get("speed", 1.0),
+            )
+        except Exception as exc:
+            self._send_json({"ok": False, "error": str(exc)[:300]}, 502)
+            return
+        result["text"] = text[:500]
+        self._send_json(result)
+
     def _experiment_supervisor(self):
         from supervisor import Supervisor
 
@@ -6452,11 +6829,24 @@ class DashboardHandler(_SuppressBrokenPipe, BaseHTTPRequestHandler):
             self._send_json({"ok": False, "error": str(exc)}, 400)
 
     def do_GET(self):
-        if urllib.parse.urlparse(self.path).path == "/api/diffusion/test":
+        path = urllib.parse.urlparse(self.path).path
+        if path == "/api/diffusion/test":
             self._handle_diffusion_test()
             return
-        if urllib.parse.urlparse(self.path).path == "/api/diffusion/status":
+        if path == "/api/diffusion/status":
             self._handle_diffusion_status()
+            return
+        if path == "/api/tts/status":
+            self._handle_tts_status()
+            return
+        if path == "/api/tts/test":
+            self._handle_tts_test()
+            return
+        if path == "/api/tts/voices":
+            self._handle_tts_voices()
+            return
+        if path.startswith("/outputs/audio/"):
+            self._serve_output_audio()
             return
         if self.path.startswith("/api/experiments") or self.path.startswith(
             "/api/approvals"
@@ -7279,6 +7669,10 @@ class DashboardHandler(_SuppressBrokenPipe, BaseHTTPRequestHandler):
             return
         raw_body = self.rfile.read(length)
 
+        if self.path == "/api/tts/speak":
+            self._handle_tts_speak(raw_body)
+            return
+
         if self.path.startswith("/api/experiments"):
             self._handle_experiment_post(raw_body)
             return
@@ -7296,12 +7690,21 @@ class DashboardHandler(_SuppressBrokenPipe, BaseHTTPRequestHandler):
                     _local_only, \
                     UPSTREAM, \
                     DIFFUSION_WORKER_URL, \
-                    DIFFUSION_ENABLED
+                    DIFFUSION_ENABLED, \
+                    TTS_BASE_URL, \
+                    TTS_API_KEY, \
+                    TTS_DEFAULT_VOICE, \
+                    TTS_FORMAT, \
+                    TTS_ENABLED
                 _provider_name = body.get("provider", "Ollama")
                 _custom_base_url = normalize_custom_base(body.get("custom_url", ""))
                 incoming_key = body.get("api_key", "").strip()
                 ollama_url = body.get("ollama_url", "").strip()
                 diffusion_worker_url = body.get("diffusion_worker_url", "").strip()
+                tts_base_url = body.get("tts_base_url", "").strip()
+                tts_api_key = body.get("tts_api_key", "").strip()
+                tts_voice = body.get("tts_default_voice", "").strip()
+                tts_format = body.get("tts_format", "").strip()
                 _free_only = body.get("free_only", False)
                 _local_only = body.get("local_only", False)
                 if diffusion_worker_url:
@@ -7309,6 +7712,23 @@ class DashboardHandler(_SuppressBrokenPipe, BaseHTTPRequestHandler):
                 if "diffusion_enabled" in body:
                     DIFFUSION_ENABLED = bool(body["diffusion_enabled"])
                 diffusion_client.configure(DIFFUSION_WORKER_URL, DIFFUSION_ENABLED)
+                if tts_base_url:
+                    TTS_BASE_URL = tts_base_url
+                if tts_api_key:
+                    TTS_API_KEY = tts_api_key
+                if tts_voice:
+                    TTS_DEFAULT_VOICE = tts_voice
+                if tts_format:
+                    TTS_FORMAT = tts_format
+                if "tts_enabled" in body:
+                    TTS_ENABLED = bool(body["tts_enabled"])
+                tts_client.configure(
+                    base_url=TTS_BASE_URL,
+                    api_key=TTS_API_KEY,
+                    voice=TTS_DEFAULT_VOICE,
+                    response_format=TTS_FORMAT,
+                    enabled=TTS_ENABLED,
+                )
 
                 # If frontend sent masked value, keep server-side key
                 if incoming_key and incoming_key != "••••••••••••••••":
@@ -7323,6 +7743,11 @@ class DashboardHandler(_SuppressBrokenPipe, BaseHTTPRequestHandler):
                 CredentialManager.save("ollama_url", ollama_url)
                 CredentialManager.save("diffusion_worker_url", DIFFUSION_WORKER_URL)
                 CredentialManager.save("diffusion_enabled", DIFFUSION_ENABLED)
+                CredentialManager.save("tts_base_url", TTS_BASE_URL)
+                CredentialManager.save("tts_api_key", TTS_API_KEY)
+                CredentialManager.save("tts_default_voice", TTS_DEFAULT_VOICE)
+                CredentialManager.save("tts_format", TTS_FORMAT)
+                CredentialManager.save("tts_enabled", TTS_ENABLED)
                 CredentialManager.save("free_only", _free_only)
                 CredentialManager.save("local_only", _local_only)
                 if _api_key:
@@ -7881,8 +8306,22 @@ class DashboardHandler(_SuppressBrokenPipe, BaseHTTPRequestHandler):
                 lines = (
                     result.stdout.strip().split("\n") if result.stdout.strip() else []
                 )
+                tts_audio_url = None
+                if TTS_ENABLED:
+                    try:
+                        tts_audio_url = tts_client.save_speech(
+                            "[david] Knowledge ingestion complete. "
+                            f"[noa] {len(lines)} status lines reported.",
+                            filename="ingest-complete.wav",
+                        )["url"]
+                    except Exception as tts_exc:
+                        print(f"[tts] ingestion alert skipped: {tts_exc}", flush=True)
                 resp = json.dumps(
-                    {"ok": True, "output": lines[-10:] if lines else ["No output"]}
+                    {
+                        "ok": True,
+                        "output": lines[-10:] if lines else ["No output"],
+                        "tts_audio_url": tts_audio_url,
+                    }
                 ).encode()
                 self.send_response(200)
                 self.send_header("Content-Type", "application/json")
@@ -8540,14 +8979,17 @@ class DashboardHandler(_SuppressBrokenPipe, BaseHTTPRequestHandler):
                         reasoning_effort=reasoning_effort,
                         max_tokens=max_tokens,
                         extra_tools=(
-                            make_image_tools(
-                                ollama_url=get_current_upstream()
-                                if _provider_name == "Ollama"
-                                else None,
-                                provider=_provider_name,
+                            (
+                                make_image_tools(
+                                    ollama_url=get_current_upstream()
+                                    if _provider_name == "Ollama"
+                                    else None,
+                                    provider=_provider_name,
+                                )
+                                if DIFFUSION_ENABLED
+                                else []
                             )
-                            if DIFFUSION_ENABLED
-                            else []
+                            + (make_tts_tools() if TTS_ENABLED else [])
                         ),
                     )
                 except Exception as e:
@@ -9172,6 +9614,8 @@ class DashboardHandler(_SuppressBrokenPipe, BaseHTTPRequestHandler):
             "/v1/completions",
             "/v1/images/generations",
             "/v1/images/edits",
+            "/v1/audio/speech",
+            "/v1/audio/voices",
         )
         if not self.path.startswith(safe_prefixes):
             self.send_response(404)

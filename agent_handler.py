@@ -2137,6 +2137,8 @@ TOOL_DESCRIPTIONS = {
     "recall": "Retrieve facts from persistent memory (optionally by key). Call at conversation start.",
     "forget": "Delete a fact from persistent memory by key.",
     "compose_tool": "Create a new compound tool that chains multiple primitive tools.",
+    "speak": "Read text aloud with the local BlueTTS voice service; supports [voice] markers for multi-speaker lines.",
+    "audio_briefing": "Read a multi-agent briefing aloud with distinct voices per role (orchestrator=david, researcher=noa, coder/reviewer=adam).",
 }
 
 # ── Agent builder ─────────────────────────────────────────────────────────────
@@ -2161,6 +2163,7 @@ You have access to:
 - plan: Create a structured multi-step plan for complex tasks
 - remember / recall / forget: Persistent key-value memory across sessions
 - compose_tool: Create new compound tools that chain primitive tools
+- speak / audio_briefing: Local BlueTTS speech; [voice] markers switch speakers mid-utterance
 
 NATIVE TOOL CALLS ONLY:
 - Use the native tool-calling interface. Never print tool calls as text.

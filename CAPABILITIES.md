@@ -62,6 +62,7 @@ running: **`shell_exec`**, **`content_write`**, **`publish_content`**, and
 | `plan` | Structured multi-step planning. |
 | `remember` / `recall` / `forget` | Persistent memory. |
 | `compose_tool` | Define a new compound tool at runtime, callable on later turns. |
+| `speak` / `audio_briefing` | Local BlueTTS speech with multi-voice markers and role-based voices (when enabled). |
 | `content_list` / `content_read` / `content_write` / `publish_content` | AEO content workspace (Markdown); `content_write` and `publish_content` require approval. |
 
 Tools are extendable at runtime: `run_python`, `shell_exec`, and `compose_tool` let the
@@ -86,6 +87,31 @@ accepted aliases. Automatic choices are configurable with `DIFFUSION_AUTO_TEXT_M
 `DIFFUSION_AUTO_MULTIREF_MODEL` on the worker. Local model directories are read from
 `DIFFUSION_MODEL_ROOT` (default `Z:\contextcut\models\official`); if a directory is absent,
 the worker falls back to the Hugging Face repo ID.
+
+## Local text-to-speech (BlueTTS)
+
+When `TTS_ENABLED` is true, ContextCut connects to an **always-on** BlueTTS (BlueV3 ONNX)
+service at `TTS_BASE_URL` (default `http://localhost:8000/v1`). It does not start or manage
+the server — only HTTP requests. The worker runs one engine at a time, so ContextCut
+serializes all synthesis calls and splits text longer than 4,000 characters at sentence
+boundaries. If the service is offline, speech features degrade gracefully.
+
+- Agent tools: `speak` reads text aloud; `audio_briefing` accepts a JSON list of
+  `{"role": ..., "text": ...}` segments and assigns one voice per role.
+- Multi-voice: put `[voice]` markers directly in text, e.g.
+  `[david] Retrieval complete. [noa] Here are the findings.` OpenAI aliases (`alloy`,
+  `echo`, `fable`, `onyx`, `nova`, `shimmer`) are mapped automatically.
+- Mixed languages: wrap phrases in `<en>...</en>`, `<he>...</he>`, etc. Markdown code
+  blocks, URLs and formatting are stripped before synthesis; `[voice]` and language tags
+  are preserved.
+- Role voices: orchestrator/planner → `david`, researcher/RAG → `noa`,
+  coder/reviewer → `adam`.
+- Dashboard: the 🔊 button reads the last assistant reply aloud; Settings → LLM Provider
+  has a base URL, voice, format, enable toggle and **Test Speech** button. Successful
+  knowledge re-ingest also produces a short spoken alert.
+- OpenAI-compatible routes: `POST /v1/audio/speech` (full file or `stream_format="audio"`),
+  `GET /v1/audio/voices`, `GET /v1/models`. Audio files are served from
+  `/outputs/audio/<name>`. Prefer `wav` or `pcm` (16-bit mono; this worker reports 44.1 kHz) for lowest latency.
 
 ## Coding with ContextCut
 
@@ -159,6 +185,11 @@ Tools: `knowledge_search`, `knowledge_search_structured`, `knowledge_list_files`
 | `CONTEXTCUT_TOOL_TURN_REASONING` | `low` | Reasoning effort on tool-result turns |
 | `CONTEXTCUT_TOOL_TURN_MAX_TOKENS` | `8192` | Max tokens on tool-result turns |
 | `CONTEXTCUT_USE_OPENCODE` | `0` | Route agent turns through OpenCode |
+| `TTS_BASE_URL` | `http://localhost:8000/v1` | BlueTTS OpenAI-compatible endpoint |
+| `TTS_API_KEY` | `local` | Bearer key sent to BlueTTS |
+| `TTS_DEFAULT_VOICE` | `noa` | Default speech voice |
+| `TTS_FORMAT` | `wav` | Audio format (`wav`, `pcm`, `mp3`, `flac`, `opus`, `aac`) |
+| `TTS_ENABLED` | `true` | Expose speech tools and routes |
 
 ## Adding knowledge
 

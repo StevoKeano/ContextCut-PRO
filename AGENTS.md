@@ -42,6 +42,14 @@
 - Worker `DIFFUSION_AUTO_TEXT_MODEL`, `DIFFUSION_AUTO_EDIT_MODEL`, `DIFFUSION_AUTO_INPAINT_MODEL`, and `DIFFUSION_AUTO_MULTIREF_MODEL` override `auto`; defaults are text/inpaint `z-image-turbo`, edits/multi-reference `flux2-klein`.
 - Proxy `diffusion_client.model_ids()` caches worker `/v1/models` for 30s so dashboard and `/v1/models` lists follow the worker without code edits; fallback list is used if the worker is offline.
 
+## Local TTS (always-on BlueTTS service)
+- `tts/client.py` is an async client for BlueTTS (BlueV3 ONNX) at `TTS_BASE_URL` (default `http://localhost:8000/v1`), auth `Bearer TTS_API_KEY` (default `local`). ContextCut never starts or manages the server process; `GET /health` is probed on demand only, so an offline service degrades gracefully.
+- The worker runs a single ONNX engine, so all synthesis is serialized with an `asyncio.Lock` on a dedicated loop thread; sync callers use `_run(...)`. Inputs longer than 4000 chars are split at sentence boundaries; multiple WAV chunks are merged while preserving the worker's header (this service reports 44.1 kHz mono 16-bit), and PCM chunks are concatenated.
+- `TTS_DEFAULT_VOICE` (default `noa`), `TTS_FORMAT` (default `wav`), `TTS_ENABLED` (default true), `TTS_OUTPUT_DIR` (default `outputs/audio`). Settings → LLM Provider can change these at runtime; values persist via `CredentialManager`.
+- OpenAI-compatible routes: `POST /v1/audio/speech` on the proxy (full file or `stream_format="audio"` chunked), `GET /v1/audio/voices`, `GET /v1/models` (adds `bluev3`); dashboard proxies the same routes and adds `/api/tts/status`, `/api/tts/test`, `/api/tts/voices`, `/api/tts/speak`. Audio is served from `/outputs/audio/<name>`.
+- Agent tools: `make_tts_tools()` in `tts/tools.py` adds `speak` and `audio_briefing` via `build_agent(extra_tools=...)` when `TTS_ENABLED`. Role voices: orchestrator/planner → `david`, researcher/RAG → `noa`, coder/reviewer → `adam`. `[voice]` markers and `<en>/<he>/...` spans are preserved; markdown/URLs are stripped.
+- Dashboard 🔊 button speaks the last reply; successful `/api/embed/reingest` emits a short spoken alert. `verify_tts.py` is the live smoke test (health + multi-voice `.wav` + non-empty check); `tests/test_tts.py` covers units with mocked HTTP.
+
 ## Context Tuning
 - `ContextTuningMiddleware` (`agent_handler.py`) head+tail clamps tool output and shrinks the model call that follows a tool result.
 - `CONTEXTCUT_TOOL_OUTPUT_MAX_CHARS` — default tool output clamp (default 4000; 0 disables)

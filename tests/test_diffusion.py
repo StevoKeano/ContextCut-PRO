@@ -411,8 +411,10 @@ class TestProxyRoutes:
         assert status == 404
         assert b"secret" not in raw
 
-    def test_models_endpoint_appends_diffusion_models(self, make_handler):
+    def test_models_endpoint_appends_diffusion_models(self, make_handler, monkeypatch):
         from qdrant_proxy_final import ProxyHandler
+
+        monkeypatch.setattr("qdrant_proxy_final.TTS_ENABLED", False)
 
         def fake_urlopen(request, timeout=None):
             assert _request_url(request).endswith("/v1/models")
