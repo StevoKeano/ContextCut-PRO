@@ -45,12 +45,17 @@ from agent_policy import (
 
 try:
     from langgraph.checkpoint.memory import InMemorySaver
-    from langchain.agents.middleware import AgentMiddleware, HumanInTheLoopMiddleware
+    from langchain.agents.middleware import (
+        AgentMiddleware,
+        AgentState,
+        HumanInTheLoopMiddleware,
+    )
 
     _AGENT_CHECKPOINTER = InMemorySaver()
 except Exception:  # pragma: no cover - optional dependency drift
     InMemorySaver = None
     AgentMiddleware = None
+    AgentState = None
     HumanInTheLoopMiddleware = None
     _AGENT_CHECKPOINTER = None
 
@@ -80,10 +85,38 @@ TOOL_TURN_REASONING = os.environ.get(
 if TOOL_TURN_REASONING in {"", "default", "off", "none", "false"}:
     TOOL_TURN_REASONING = ""
 
+EMPTY_STOP_RECOVERY_LIMIT = max(
+    0, min(2, _env_int("CONTEXTCUT_EMPTY_STOP_RETRIES", 2))
+)
+EMPTY_STOP_RECOVERY_MESSAGE = (
+    "You stopped without finishing or summarizing. Check whether all requested steps "
+    "are complete; if any remain, call the next tool now, otherwise provide a brief "
+    "completion summary."
+)
+
+INSPECTION_BUDGET = 2
+INSPECTION_TOOL_NAMES = {"read_file", "list_dir", "grep", "find_files"}
+MUTATING_FILE_TOOL_NAMES = {"append_file", "edit_file", "write_file"}
+INSPECTION_BUDGET_MESSAGE = (
+    "Inspection budget reached (2 reads). Do not run more read/python inspection "
+    "commands—call append_file, edit_file, or write_file now."
+)
+
 _TOOL_OUTPUT_LIMITS = {
     "read_file": READ_FILE_OUTPUT_MAX_CHARS,
     "vector_search": SEARCH_OUTPUT_MAX_CHARS,
 }
+
+WRITE_CHUNK_MAX_LINES = 120
+WRITE_CHUNK_MAX_CHARS = 4500
+TOOL_MESSAGE_OUTPUT_MAX_CHARS = 2500
+MESSAGE_OUTPUT_CLAMPED_TOOLS = frozenset({"read_file", "shell_exec"})
+HISTORICAL_WRITE_PAYLOAD_MAX_CHARS = 400
+HISTORICAL_WRITE_ARG_KEYS = frozenset({"content", "code", "new_str"})
+RECENT_MESSAGES_PRESERVED = 4
+TOOL_TURN_LOOKBACK = 3
+READ_SLICE_TOOL_NAMES = frozenset({"read_file", "shell_exec"})
+REPEAT_READ_MESSAGE = "Already in context—proceed directly to writing the next chunk."
 
 
 def _is_strata_model(model_name=None, upstream=None, provider=None) -> bool:
@@ -166,6 +199,184 @@ def clamp_tool_output(text: str, limit: int) -> str:
     head = int(budget * 0.6)
     tail = budget - head
     return text[:head] + marker + text[-tail:]
+
+
+def clamp_tool_output_message(tool_name: str | None, text: str) -> str:
+    """Clamp a ToolMessage string, capping read_file/shell_exec at 2,500 chars."""
+    if tool_name not in MESSAGE_OUTPUT_CLAMPED_TOOLS:
+        return clamp_tool_output(text, tool_output_limit(tool_name))
+    limit = TOOL_MESSAGE_OUTPUT_MAX_CHARS
+    if limit <= 0 or len(text) <= limit:
+        return text
+    marker = "... [0 lines truncated] ..."
+    budget = max(2, limit - len(marker))
+    head = int(budget * 0.6)
+    tail = budget - head
+    removed = text[head : len(text) - tail] if tail else text[head:]
+    truncated_lines = len(removed.splitlines()) or 1
+    marker = f"... [{truncated_lines} lines truncated] ..."
+    budget = max(2, limit - len(marker))
+    head = int(budget * 0.6)
+    tail = budget - head
+    return text[:head] + marker + (text[-tail:] if tail else "")
+
+
+def _write_chunk_error(tool_name: str, content: str) -> str | None:
+    """Return a rejection reason when a single write exceeds the chunk limits."""
+    text = content or ""
+    lines = len(text.splitlines())
+    chars = len(text)
+    if lines <= WRITE_CHUNK_MAX_LINES and chars <= WRITE_CHUNK_MAX_CHARS:
+        return None
+    return (
+        f"{tool_name} error: chunk too large ({lines} lines, {chars} chars; "
+        f"max {WRITE_CHUNK_MAX_LINES} lines / {WRITE_CHUNK_MAX_CHARS} chars). "
+        "Write/append in <= 100-line modular chunks."
+    )
+
+
+def _count_file_lines(path: Path) -> int:
+    try:
+        return len(path.read_text(encoding="utf-8").splitlines())
+    except Exception:
+        return 0
+
+
+def _line_number(value) -> int:
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return 0
+
+
+def _read_slice_key(name: str | None, args: dict) -> tuple | None:
+    """Build the identity of a read slice for per-session deduplication."""
+    if name not in READ_SLICE_TOOL_NAMES:
+        return None
+    path = ""
+    for key in ("path", "file", "file_path", "filename"):
+        if args.get(key):
+            path = str(args[key])
+            break
+    start_line = _line_number(args.get("start_line", args.get("start", 0)))
+    end_line = _line_number(args.get("end_line", args.get("end", 0)))
+    if not path:
+        command = str(args.get("command") or "")
+        range_match = re.search(r"-n\s*['\"]?(\d+),(\d+)p", command)
+        if range_match:
+            start_line, end_line = _line_number(range_match.group(1)), _line_number(
+                range_match.group(2)
+            )
+        path_match = re.search(
+            r"(?:cat|sed|head|tail|less|nl)\s+(?:-[^\s]+\s+)*"
+            r"(?:['\"][^'\"]*['\"]\s+)?([^\s;|&]+)",
+            command,
+        )
+        if not path_match:
+            return None
+        path = path_match.group(1)
+    return (name, path, start_line, end_line)
+
+
+def compact_historical_write_payloads(messages: list) -> list:
+    """Replace large write arguments in old AIMessages with compact receipts."""
+    cutoff = len(messages) - RECENT_MESSAGES_PRESERVED
+    if cutoff <= 0:
+        return messages
+    updated = []
+    changed = False
+    for index, message in enumerate(messages):
+        if index >= cutoff or not isinstance(message, AIMessage):
+            updated.append(message)
+            continue
+        tool_calls = getattr(message, "tool_calls", None) or []
+        new_calls = []
+        message_changed = False
+        for call in tool_calls:
+            if isinstance(call, dict) and isinstance(call.get("args"), dict):
+                args = call["args"]
+                new_args = dict(args)
+                call_changed = False
+                for key in HISTORICAL_WRITE_ARG_KEYS:
+                    val = new_args.get(key)
+                    if isinstance(val, str) and len(val) > HISTORICAL_WRITE_PAYLOAD_MAX_CHARS:
+                        new_args[key] = f"<written to disk: {len(val)} chars>"
+                        call_changed = True
+                if call_changed:
+                    call = {**call, "args": new_args}
+                    message_changed = True
+            new_calls.append(call)
+        if message_changed:
+            message = message.model_copy(update={"tool_calls": new_calls})
+            changed = True
+        updated.append(message)
+    return updated if changed else messages
+
+
+def _tool_call_field(request, field: str, default=None):
+    tool_call = getattr(request, "tool_call", None) if request is not None else None
+    if tool_call is None:
+        return default
+    if isinstance(tool_call, dict):
+        return tool_call.get(field, default)
+    return getattr(tool_call, field, default)
+
+
+def _tool_name(tool) -> str | None:
+    if isinstance(tool, dict):
+        return tool.get("name")
+    return getattr(tool, "name", None)
+
+
+def _run_python_writes_to_disk(code) -> bool:
+    text = str(code or "")
+    if any(
+        marker in text
+        for marker in (
+            ".write_text(",
+            ".write_bytes(",
+            "os.replace(",
+            "os.rename(",
+        )
+    ):
+        return True
+    if "shutil." in text:
+        return True
+    if "Path(" in text and ".write" in text:
+        return True
+    for match in re.finditer(r"\bopen\s*\(([^)]*)\)", text):
+        if re.search(r"['\"][wax][+bt]*['\"]", match.group(1), re.IGNORECASE):
+            return True
+    return False
+
+
+def _tool_call_is_read_only(name: str | None, args: dict) -> bool:
+    if name in INSPECTION_TOOL_NAMES:
+        return True
+    if name == "run_python":
+        return not _run_python_writes_to_disk(args.get("code", ""))
+    return False
+
+
+def _tool_call_writes_file(name: str | None, args: dict) -> bool:
+    if name in MUTATING_FILE_TOOL_NAMES:
+        return True
+    if name == "run_python":
+        return _run_python_writes_to_disk(args.get("code", ""))
+    return False
+
+
+def _tool_result_succeeded(result, name: str | None) -> bool:
+    if result is None or getattr(result, "status", None) == "error":
+        return False
+    content = getattr(result, "content", result)
+    if isinstance(content, str):
+        lowered = content.strip().lower()
+        if lowered.startswith(f"{str(name or '').lower()} error:"):
+            return False
+        if lowered.startswith("error:") or lowered.startswith("traceback"):
+            return False
+    return True
 
 
 def _normalize_workspace(path: str | Path | None) -> Path:
@@ -414,6 +625,14 @@ class AgentTelemetryCallbackHandler(BaseCallbackHandler):
         self._starts = {}
         self._first_tokens = set()
         self._token_counts = {}
+        self._pending_mode = reasoning_mode
+        self._modes = {}
+
+    def note_effective_mode(self, mode: str) -> None:
+        self._pending_mode = mode
+
+    def _mode_for_run(self, run_id: str) -> str:
+        return self._modes.get(run_id, self.reasoning_mode)
 
     @staticmethod
     def _run_id(kwargs) -> str:
@@ -442,12 +661,15 @@ class AgentTelemetryCallbackHandler(BaseCallbackHandler):
 
     def on_llm_start(self, serialized: dict, prompts: list, **kwargs) -> None:
         run_id = self._run_id(kwargs)
+        effective_mode = self._pending_mode
+        self._pending_mode = self.reasoning_mode
+        self._modes[run_id] = effective_mode
         self._starts[run_id] = time.monotonic()
         self._token_counts[run_id] = 0
         self._first_tokens.discard(run_id)
         print(
             f"[{datetime.now().strftime('%H:%M:%S')}] [telemetry] llm start "
-            f"model={self.model_used} reasoning={self.reasoning_mode}",
+            f"model={self.model_used} reasoning={effective_mode}",
             flush=True,
         )
 
@@ -461,7 +683,7 @@ class AgentTelemetryCallbackHandler(BaseCallbackHandler):
             self._first_tokens.add(run_id)
             print(
                 f"[{datetime.now().strftime('%H:%M:%S')}] [telemetry] ttft "
-                f"{time.monotonic() - started:.2f}s reasoning={self.reasoning_mode}",
+                f"{time.monotonic() - started:.2f}s reasoning={self._mode_for_run(run_id)}",
                 flush=True,
             )
 
@@ -477,10 +699,11 @@ class AgentTelemetryCallbackHandler(BaseCallbackHandler):
         else:
             self._token_counts.pop(run_id, None)
         self._first_tokens.discard(run_id)
+        effective_mode = self._modes.pop(run_id, self.reasoning_mode)
         print(
             f"[{datetime.now().strftime('%H:%M:%S')}] [telemetry] llm end "
             f"{elapsed:.2f}s tokens={tokens} rate={tokens / elapsed:.1f} tok/s "
-            f"reasoning={self.reasoning_mode}",
+            f"reasoning={effective_mode}",
             flush=True,
         )
 
@@ -489,11 +712,12 @@ class AgentTelemetryCallbackHandler(BaseCallbackHandler):
         started = self._starts.pop(run_id, None)
         self._token_counts.pop(run_id, None)
         self._first_tokens.discard(run_id)
+        effective_mode = self._modes.pop(run_id, self.reasoning_mode)
         if started is None:
             return
         print(
             f"[{datetime.now().strftime('%H:%M:%S')}] [telemetry] llm error "
-            f"{time.monotonic() - started:.2f}s reasoning={self.reasoning_mode}: {error}",
+            f"{time.monotonic() - started:.2f}s reasoning={effective_mode}: {error}",
             flush=True,
         )
 
@@ -1445,11 +1669,15 @@ def write_file(path: str, content: str, backup: bool = True) -> str:
     Write content to a local file, creating parent directories as needed.
     If backup=True (default) and the file already exists, a timestamped
     .bak copy is made first.
-    Returns confirmation with byte count.
+    Limited to 120 lines / 4,500 characters per call; use append_file for
+    larger files. Returns confirmation with byte count.
     """
     p = resolve_agent_path(path)
     if is_sensitive_path(str(p)):
         return f"Access denied: sensitive path: {path}"
+    chunk_error = _write_chunk_error("write_file", content)
+    if chunk_error:
+        return chunk_error
     if len(content.encode("utf-8", errors="ignore")) > MAX_WRITE_BYTES:
         return f"write_file error: content exceeds {MAX_WRITE_BYTES} bytes"
     try:
@@ -1467,19 +1695,30 @@ def write_file(path: str, content: str, backup: bool = True) -> str:
 @tool
 def append_file(path: str, content: str) -> str:
     """
-    Append content to a local file.
-    Creates the file and parent directories if they don't exist.
+    Append content to a local file, creating it (and parent dirs) if needed.
+    Limited to 120 lines / 4,500 characters per call; append in <= 100-line
+    modular chunks for larger files. Returns only a compact JSON receipt.
     """
     p = resolve_agent_path(path)
     if is_sensitive_path(str(p)):
         return f"Access denied: sensitive path: {path}"
+    chunk_error = _write_chunk_error("append_file", content)
+    if chunk_error:
+        return chunk_error
     if len(content.encode("utf-8", errors="ignore")) > MAX_WRITE_BYTES:
         return f"append_file error: content exceeds {MAX_WRITE_BYTES} bytes"
     try:
         p.parent.mkdir(parents=True, exist_ok=True)
         with p.open("a", encoding="utf-8") as f:
             f.write(content)
-        return f"Appended {len(content.encode())} bytes to {path}"
+        return json.dumps(
+            {
+                "status": "ok",
+                "path": path,
+                "bytes_appended": len(content),
+                "total_lines": _count_file_lines(p),
+            }
+        )
     except Exception as e:
         return f"append_file error: {e}"
 
@@ -2270,8 +2509,8 @@ ALL_TOOLS = [
 TOOL_DESCRIPTIONS = {
     "shell_exec": "Run ONE command without a shell (git, apt, compile, processes). No chaining: ; && || | & $() backticks < > are rejected. NOT for Python — use run_python.",
     "read_file": "Read any local file (text or binary). Use instead of shell_exec cat.",
-    "write_file": "Write / overwrite a local file (auto-backup). Use instead of shell_exec echo/heredoc.",
-    "append_file": "Append content to a file.",
+    "write_file": "Write / overwrite a local file (auto-backup), max 120 lines or 4,500 chars per call. Use instead of shell_exec echo/heredoc.",
+    "append_file": "Append the next section to a file (max 120 lines or 4,500 chars per call); use for files over 100 lines.",
     "diff_files": "Unified diff between two files.",
     "list_dir": "Directory tree listing. Use instead of shell_exec ls.",
     "web_search": "DuckDuckGo web search for up-to-date information.",
@@ -2309,7 +2548,7 @@ You have access to:
 - get_context_logs: Retrieve conversation history for a session
 - get_session_stats: Token counts and context usage for a session
 - ingest_file: Re-ingest a knowledge file into Qdrant
-- Use write_file to write multi-line files. For files longer than ~150 lines, write the scaffold first with write_file and append sections in chunks of ~100–120 lines per append_file call so no single tool call exceeds ~1,500 output tokens.
+- Use write_file for the first chunk and append_file for each later section; see INCREMENTAL DISK-FIRST RULE below.
 - list_knowledge: List all files in KB with chunk counts from Qdrant
 - delete_knowledge: Delete vectors for a file from Qdrant
 - contextcut_help: Return ContextCut PRO's capabilities and usage guide
@@ -2327,6 +2566,18 @@ NATIVE TOOL CALLS ONLY:
   interface so the runtime can execute it.
 - If you receive injected knowledge-base context, that content has already been
   retrieved for you. Do not claim you cannot access the files.
+
+TOOL-EFFICIENCY RULE:
+- When editing or appending to an existing file, inspect only the target region once (e.g., via `read_file`) before writing.
+- Never use `run_python` to read or slice through files in repeated chunks; proceed directly to `edit_file` or `append_file` once the insertion point is known.
+- Do not request the same read slice twice; if it is already in context, proceed directly to writing the next chunk.
+
+INCREMENTAL DISK-FIRST RULE:
+- When creating or extending a file that will exceed 100 lines, NEVER draft the full file in <think> blocks or hold a multi-hundred-line payload in context.
+- Immediately write the skeleton or first section (<= 100 lines) with write_file.
+- Append each subsequent section one section at a time with append_file (<= 100 lines, and never more than 120 lines or 4,500 characters per call).
+- Do not re-read the whole file between appends; use the JSON receipt from append_file to track progress.
+- Run syntax verification (e.g. python3 -m py_compile) only after the final chunk has been written.
 
 DOCUMENT / REPORT RULE:
 - For questions about documents, PDFs, resumes, business plans, LOIs, or
@@ -2496,11 +2747,12 @@ if AgentMiddleware is not None:
         """Trim large tool results and shrink follow-up reasoning turns.
 
         - ``wrap_tool_call`` / ``awrap_tool_call`` head+tail clamp tool output
-          so agent state and checkpoints stay small.
-        - ``wrap_model_call`` / ``awrap_model_call`` cap ``max_tokens`` and
-          lower ``reasoning_effort`` on the model call that follows a tool
-          result, so a large result does not trigger another long reasoning
-          pass.
+          (read_file/shell_exec at 2,500 chars) and short-circuit repeated read
+          slices, so agent state and checkpoints stay small.
+        - ``wrap_model_call`` / ``awrap_model_call`` compact old write payloads,
+          cap ``max_tokens``, and lower ``reasoning_effort`` whenever a tool
+          result appears in the last 3 messages, so /resume and mid-build nudges
+          do not restore a full reasoning budget.
         """
 
         def __init__(
@@ -2508,14 +2760,109 @@ if AgentMiddleware is not None:
             provider: str | None = None,
             model_name: str | None = None,
             upstream: str | None = None,
+            telemetry: AgentTelemetryCallbackHandler | None = None,
         ):
             self.provider = (provider or "").strip().lower()
             self.model_name = model_name
             self.upstream = upstream
+            self.telemetry = telemetry
+            self.read_only_calls = 0
+            self._read_slices = set()
+
+        def reset_inspection_budget(self):
+            self.read_only_calls = 0
+
+        def _new_user_turn(self, state):
+            messages = (state or {}).get("messages") or []
+            return not messages or isinstance(messages[-1], HumanMessage)
+
+        def _seed_read_slices(self, messages):
+            """Remember read slices already present in session history (e.g. resume)."""
+            for message in messages or []:
+                if not isinstance(message, AIMessage):
+                    continue
+                for call in getattr(message, "tool_calls", None) or []:
+                    if not isinstance(call, dict):
+                        continue
+                    key = _read_slice_key(call.get("name"), call.get("args") or {})
+                    if key is not None:
+                        self._read_slices.add(key)
+
+        def before_agent(self, state, runtime):
+            self._seed_read_slices((state or {}).get("messages") or [])
+            if self._new_user_turn(state):
+                self.reset_inspection_budget()
+
+        async def abefore_agent(self, state, runtime):
+            self._seed_read_slices((state or {}).get("messages") or [])
+            if self._new_user_turn(state):
+                self.reset_inspection_budget()
+
+        def _repeat_read_message(self, request, name):
+            return ToolMessage(
+                content=REPEAT_READ_MESSAGE,
+                tool_call_id=_tool_call_field(request, "id", "repeat-read") or "repeat-read",
+                name=name or "tool",
+                status="success",
+            )
+
+        def _note_read_slice(self, name, args, result):
+            key = _read_slice_key(name, args)
+            if key is not None and _tool_result_succeeded(result, name):
+                self._read_slices.add(key)
+
+        def _inspect_tool_call(self, request):
+            name = _tool_call_field(request, "name")
+            args = _tool_call_field(request, "args", {}) or {}
+            if not isinstance(args, dict):
+                args = {}
+            return name, args
+
+        def _budget_tool_message(self, request, name):
+            return ToolMessage(
+                content=INSPECTION_BUDGET_MESSAGE,
+                tool_call_id=_tool_call_field(request, "id", "inspection-budget") or "inspection-budget",
+                name=name or "tool",
+                status="error",
+            )
+
+        def _note_tool_result(self, name, args, result):
+            if _tool_call_is_read_only(name, args):
+                self.read_only_calls += 1
+                print(
+                    f"[{datetime.now().strftime('%H:%M:%S')}] [Agent] "
+                    f"inspection {self.read_only_calls}/{INSPECTION_BUDGET}: {name}",
+                    flush=True,
+                )
+            elif _tool_call_writes_file(name, args) and _tool_result_succeeded(result, name):
+                self.read_only_calls = 0
+                print(
+                    f"[{datetime.now().strftime('%H:%M:%S')}] [Agent] "
+                    f"inspection budget reset after {name}",
+                    flush=True,
+                )
+
+        def _prune_inspection_tools(self, request):
+            if self.read_only_calls < INSPECTION_BUDGET:
+                return request
+            tools = getattr(request, "tools", None) or []
+            if not tools:
+                return request
+            kept = [tool for tool in tools if _tool_name(tool) not in INSPECTION_TOOL_NAMES]
+            if len(kept) == len(tools):
+                return request
+            return request.override(tools=kept)
 
         def _tune_model_request(self, request):
+            request = self._prune_inspection_tools(request)
             messages = request.messages or []
-            if not messages or not isinstance(messages[-1], ToolMessage):
+            compacted = compact_historical_write_payloads(messages)
+            if compacted is not messages:
+                request = request.override(messages=compacted)
+            if not any(
+                isinstance(m, ToolMessage)
+                for m in messages[-TOOL_TURN_LOOKBACK:]
+            ):
                 return request
             model = request.model
             if not hasattr(model, "model_copy"):
@@ -2525,7 +2872,14 @@ if AgentMiddleware is not None:
                 extra_body = dict(getattr(model, "extra_body", None) or {})
                 model_name = self.model_name or getattr(model, "model_name", None)
                 upstream = self.upstream or getattr(model, "openai_api_base", None)
-                if _is_strata_model(model_name, upstream, self.provider):
+                strata = _is_strata_model(model_name, upstream, self.provider)
+                print(
+                    f"[{datetime.now().strftime('%H:%M:%S')}] [telemetry] "
+                    f"tool-turn strata check model={model_name} upstream={upstream} "
+                    f"provider={self.provider} strata={strata}",
+                    flush=True,
+                )
+                if strata:
                     extra_body.pop("reasoning_effort", None)
                     extra_body.pop("budget_tokens", None)
                     extra_body.update(
@@ -2541,6 +2895,8 @@ if AgentMiddleware is not None:
                     model_kwargs["extra_body"] = extra_body
                     updates["extra_body"] = extra_body
                     updates["model_kwargs"] = model_kwargs
+                    if self.telemetry is not None:
+                        self.telemetry.note_effective_mode("thinking disabled")
                 elif TOOL_TURN_REASONING:
                     overrides = reasoning_request_overrides(
                         TOOL_TURN_REASONING,
@@ -2568,20 +2924,115 @@ if AgentMiddleware is not None:
         @staticmethod
         def _clamp_result(result):
             if isinstance(result, ToolMessage) and isinstance(result.content, str):
-                limit = tool_output_limit(result.name)
-                clamped = clamp_tool_output(result.content, limit)
+                clamped = clamp_tool_output_message(result.name, result.content)
                 if clamped != result.content:
                     result = result.model_copy(update={"content": clamped})
             return result
 
+        def _dedupe_read(self, request, name, args):
+            if request is None:
+                return None
+            key = _read_slice_key(name, args)
+            if key is not None and key in self._read_slices:
+                return self._repeat_read_message(request, name)
+            return None
+
         def wrap_tool_call(self, request, handler):
-            return self._clamp_result(handler(request))
+            name, args = self._inspect_tool_call(request)
+            duplicate = self._dedupe_read(request, name, args)
+            if duplicate is not None:
+                return duplicate
+            if _tool_call_is_read_only(name, args) and self.read_only_calls >= INSPECTION_BUDGET:
+                return self._budget_tool_message(request, name)
+            result = self._clamp_result(handler(request))
+            self._note_read_slice(name, args, result)
+            self._note_tool_result(name, args, result)
+            return result
 
         async def awrap_tool_call(self, request, handler):
-            return self._clamp_result(await handler(request))
+            name, args = self._inspect_tool_call(request)
+            duplicate = self._dedupe_read(request, name, args)
+            if duplicate is not None:
+                return duplicate
+            if _tool_call_is_read_only(name, args) and self.read_only_calls >= INSPECTION_BUDGET:
+                return self._budget_tool_message(request, name)
+            result = self._clamp_result(await handler(request))
+            self._note_read_slice(name, args, result)
+            self._note_tool_result(name, args, result)
+            return result
+
+    if AgentState is not None:
+
+        class EmptyStopRecoveryState(AgentState):
+            empty_stop_recoveries: int
+
+        class EmptyStopRecoveryMiddleware(AgentMiddleware):
+            """Recover from an empty assistant turn immediately after a tool."""
+
+            state_schema = EmptyStopRecoveryState
+
+            @staticmethod
+            def _message_text(message) -> str:
+                content = getattr(message, "content", "")
+                if isinstance(content, str):
+                    return content
+                if isinstance(content, list):
+                    parts = []
+                    for block in content:
+                        if isinstance(block, str):
+                            parts.append(block)
+                        elif isinstance(block, dict):
+                            parts.append(str(block.get("text") or ""))
+                        else:
+                            parts.append(str(block))
+                    return "".join(parts)
+                return str(content or "")
+
+            def _empty_stop_update(self, state):
+                if EMPTY_STOP_RECOVERY_LIMIT <= 0:
+                    return None
+                messages = state.get("messages") or []
+                if len(messages) < 2:
+                    return None
+                last = messages[-1]
+                if not isinstance(last, AIMessage):
+                    return None
+                if getattr(last, "tool_calls", None):
+                    return None
+                if self._message_text(last).strip():
+                    return None
+                if not isinstance(messages[-2], ToolMessage):
+                    return None
+                used = int(state.get("empty_stop_recoveries", 0) or 0)
+                if used >= EMPTY_STOP_RECOVERY_LIMIT:
+                    return None
+                print(
+                    f"[{datetime.now().strftime('%H:%M:%S')}] [Agent] "
+                    f"empty-stop recovery {used + 1}/{EMPTY_STOP_RECOVERY_LIMIT}: "
+                    "injecting continuation after ToolMessage",
+                    flush=True,
+                )
+                return {
+                    "messages": [HumanMessage(content=EMPTY_STOP_RECOVERY_MESSAGE)],
+                    "empty_stop_recoveries": used + 1,
+                    "jump_to": "model",
+                }
+
+            def after_model(self, state, runtime):
+                return self._empty_stop_update(state)
+
+            async def aafter_model(self, state, runtime):
+                return self._empty_stop_update(state)
+
+        EmptyStopRecoveryMiddleware.after_model.__can_jump_to__ = ["model"]
+        EmptyStopRecoveryMiddleware.aafter_model.__can_jump_to__ = ["model"]
+
+    else:  # pragma: no cover - optional dependency drift
+        EmptyStopRecoveryMiddleware = None
 
 else:  # pragma: no cover - optional dependency drift
     ContextTuningMiddleware = None
+    EmptyStopRecoveryMiddleware = None
 
 
 def build_agent(model_name: str = None, upstream: str = None,
@@ -2626,6 +3077,10 @@ def build_agent(model_name: str = None, upstream: str = None,
     tool_reasoning_mode = describe_reasoning_overrides(
         TOOL_TURN_REASONING, model_name, upstream, provider, tool_turn=True
     )
+    telemetry = AgentTelemetryCallbackHandler(
+        reasoning_mode=reasoning_mode,
+        model_used=model_name or "qwen3:14b-q8_0",
+    )
     if _is_strata_model(model_name, upstream, provider):
         print(
             f"[{datetime.now().strftime('%H:%M:%S')}] [Agent] reasoning: "
@@ -2651,11 +3106,16 @@ def build_agent(model_name: str = None, upstream: str = None,
             )
         )
     if ContextTuningMiddleware is not None:
-        middleware.append(
-            ContextTuningMiddleware(
-                provider=provider, model_name=model_name, upstream=upstream
-            )
+        context_tuning = ContextTuningMiddleware(
+            provider=provider,
+            model_name=model_name,
+            upstream=upstream,
+            telemetry=telemetry,
         )
+        context_tuning.reset_inspection_budget()
+        middleware.append(context_tuning)
+    if EmptyStopRecoveryMiddleware is not None and EMPTY_STOP_RECOVERY_LIMIT > 0:
+        middleware.append(EmptyStopRecoveryMiddleware())
     agent = create_agent(
         model=llm,
         tools=tools,
@@ -2665,12 +3125,7 @@ def build_agent(model_name: str = None, upstream: str = None,
     )
     agent.recursion_limit = 50
 
-    callbacks = [
-        AgentTelemetryCallbackHandler(
-            reasoning_mode=reasoning_mode,
-            model_used=model_name or "qwen3:14b-q8_0",
-        )
-    ]
+    callbacks = [telemetry]
     if task_id:
         callbacks.append(
             CheckpointCallbackHandler(

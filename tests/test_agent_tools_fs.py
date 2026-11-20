@@ -4,6 +4,7 @@ Tests for filesystem agent tools: ``read_file``, ``write_file``, ``append_file``
 Uses ``tmp_path`` fixture for real file I/O.
 """
 
+import json
 import os
 from pathlib import Path
 
@@ -84,7 +85,14 @@ class TestAppendFile:
         f = tmp_path / "existing.txt"
         f.write_text("base\n")
         result = append_file.invoke({"path": str(f), "content": "appended"})
-        assert "Appended" in result
+        receipt = json.loads(result)
+        assert receipt == {
+            "status": "ok",
+            "path": str(f),
+            "bytes_appended": len("appended"),
+            "total_lines": 2,
+        }
+        assert result.count("appended") == 1
         assert f.read_text() == "base\nappended"
 
     def test_to_new_file(self, tmp_path):
@@ -92,8 +100,59 @@ class TestAppendFile:
 
         f = tmp_path / "new_append.txt"
         result = append_file.invoke({"path": str(f), "content": "first line"})
-        assert "Appended" in result
+        receipt = json.loads(result)
+        assert receipt["status"] == "ok"
+        assert receipt["bytes_appended"] == len("first line")
+        assert receipt["total_lines"] == 1
         assert f.read_text() == "first line"
+
+    def test_receipt_does_not_echo_written_text(self, tmp_path):
+        from agent_handler import append_file
+
+        secret = "s3cr3t-payload\n"
+        result = append_file.invoke({"path": str(tmp_path / "secret.txt"), "content": secret})
+        assert secret.strip() not in result
+        assert json.loads(result)["bytes_appended"] == len(secret)
+
+
+class TestWriteChunkLimits:
+    def test_write_file_rejects_oversized_chunk(self, tmp_path):
+        from agent_handler import write_file
+
+        f = tmp_path / "big.txt"
+        content = "\n".join(f"line {i}" for i in range(121))
+        result = write_file.invoke({"path": str(f), "content": content})
+        assert "chunk too large" in result
+        assert "<= 100-line modular chunks" in result
+        assert not f.exists()
+
+    def test_write_file_rejects_long_single_line(self, tmp_path):
+        from agent_handler import write_file
+
+        f = tmp_path / "wide.txt"
+        result = write_file.invoke({"path": str(f), "content": "x" * 4501})
+        assert "chunk too large" in result
+        assert not f.exists()
+
+    def test_write_file_accepts_limit(self, tmp_path):
+        from agent_handler import write_file
+
+        f = tmp_path / "ok.txt"
+        content = "\n".join(f"line {i}" for i in range(120))
+        result = write_file.invoke({"path": str(f), "content": content, "backup": False})
+        assert "Wrote" in result
+        assert f.read_text() == content
+
+    def test_append_file_rejects_oversized_chunk(self, tmp_path):
+        from agent_handler import append_file
+
+        f = tmp_path / "big.txt"
+        f.write_text("seed\n")
+        content = "\n".join(f"line {i}" for i in range(121))
+        result = append_file.invoke({"path": str(f), "content": content})
+        assert "chunk too large" in result
+        assert "<= 100-line modular chunks" in result
+        assert f.read_text() == "seed\n"
 
 
 class TestListDir:
@@ -143,7 +202,7 @@ class TestWorkspaceResolution:
         result = agent_handler.append_file.invoke(
             {"path": "nested/file.txt", "content": "!"}
         )
-        assert "Appended" in result
+        assert json.loads(result)["status"] == "ok"
         assert (tmp_path / "nested" / "file.txt").read_text() == "workspace!"
 
         listing = agent_handler.list_dir.invoke({"path": ".", "max_depth": 2})
