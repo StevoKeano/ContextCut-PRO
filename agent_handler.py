@@ -110,13 +110,18 @@ _TOOL_OUTPUT_LIMITS = {
 WRITE_CHUNK_MAX_LINES = 120
 WRITE_CHUNK_MAX_CHARS = 4500
 TOOL_MESSAGE_OUTPUT_MAX_CHARS = 2500
-MESSAGE_OUTPUT_CLAMPED_TOOLS = frozenset({"read_file", "shell_exec"})
+MESSAGE_OUTPUT_CLAMPED_TOOLS = frozenset({"read_file", "shell_exec", "run_python"})
 HISTORICAL_WRITE_PAYLOAD_MAX_CHARS = 400
 HISTORICAL_WRITE_ARG_KEYS = frozenset({"content", "code", "new_str"})
 RECENT_MESSAGES_PRESERVED = 4
 TOOL_TURN_LOOKBACK = 3
 READ_SLICE_TOOL_NAMES = frozenset({"read_file", "shell_exec"})
 REPEAT_READ_MESSAGE = "Already in context—proceed directly to writing the next chunk."
+MAX_THINKING_TOKENS_FIRST_TURN = 3072
+MAX_THINKING_TOKENS_TOOL_TURN = 1536
+MAX_TURN_MAX_TOKENS = 8192
+THINKING_BUDGET_KEYS = ("thinking_budget", "budget_tokens", "max_thinking_tokens")
+REPEAT_PYTHON_MESSAGE = "Already executed—do not re-read; call append_file now."
 
 
 def _is_strata_model(model_name=None, upstream=None, provider=None) -> bool:
@@ -219,6 +224,55 @@ def clamp_tool_output_message(tool_name: str | None, text: str) -> str:
     head = int(budget * 0.6)
     tail = budget - head
     return text[:head] + marker + (text[-tail:] if tail else "")
+
+
+def thinking_budget_ceiling(messages) -> int:
+    """Hard cap for thinking tokens, independent of the latest message role."""
+    if any(isinstance(m, ToolMessage) for m in messages or []):
+        return MAX_THINKING_TOKENS_TOOL_TURN
+    return MAX_THINKING_TOKENS_FIRST_TURN
+
+
+def cap_thinking_budget(extra_body: dict, ceiling: int) -> bool:
+    """Clamp every token-budget field in ``extra_body`` to ``ceiling``."""
+    changed = False
+    for key in THINKING_BUDGET_KEYS + ("reasoning_effort",):
+        value = extra_body.get(key)
+        if isinstance(value, bool) or not isinstance(value, (int, float)):
+            continue
+        if value > ceiling:
+            extra_body[key] = ceiling
+            changed = True
+    return changed
+
+
+def normalize_python_code(code) -> str:
+    """Drop whitespace outside string literals so formatting variants match."""
+    text = str(code or "")
+    parts = []
+    last = 0
+    string_pattern = r"(['\"])(?:\\.|(?!\1).)*\1"
+    for match in re.finditer(string_pattern, text, re.DOTALL):
+        parts.append(re.sub(r"\s+", "", text[last : match.start()]))
+        parts.append(match.group(0))
+        last = match.end()
+    parts.append(re.sub(r"\s+", "", text[last:]))
+    return "".join(parts)
+
+
+def python_code_hash(code) -> str:
+    return hashlib.sha256(normalize_python_code(code).encode("utf-8")).hexdigest()
+
+
+def python_reads_files(code) -> bool:
+    """True for snippets that inspect file contents or line ranges."""
+    text = str(code or "")
+    return bool(
+        re.search(
+            r"\bopen\s*\(|\.read\s*\(|\.read_text\s*\(|\.readlines\s*\(|splitlines\s*\(",
+            text,
+        )
+    )
 
 
 def _write_chunk_error(tool_name: str, content: str) -> str | None:
@@ -2523,7 +2577,7 @@ TOOL_DESCRIPTIONS = {
     "list_knowledge": "List all files in KB with chunk counts from Qdrant.",
     "delete_knowledge": "Delete vectors for a file from Qdrant (not the file itself).",
     "contextcut_help": "Return ContextCut PRO's capabilities and usage guide. Use for questions about your own features or how to use ContextCut PRO.",
-    "run_python": "Execute Python code inline (calculations, data analysis, text processing, quick scripts). PREFER this over shell_exec for Python work. NOT for long-running processes.",
+    "run_python": "Execute Python code inline (calculations, data analysis, text processing, quick scripts). Never use it to read or inspect files—use read_file. NOT for long-running processes.",
     "run_sql": "Run a SELECT query on the session database.",
     "plan": "Create a structured multi-step plan for complex tasks that need multiple tool calls.",
     "remember": "Store a fact in persistent memory (key-value across sessions).",
@@ -2569,7 +2623,8 @@ NATIVE TOOL CALLS ONLY:
 
 TOOL-EFFICIENCY RULE:
 - When editing or appending to an existing file, inspect only the target region once (e.g., via `read_file`) before writing.
-- Never use `run_python` to read or slice through files in repeated chunks; proceed directly to `edit_file` or `append_file` once the insertion point is known.
+- NEVER use `run_python` to print or inspect file contents or line ranges: no `open(...).read()`, `.readlines()`, `.splitlines()`, or `Path(...).read_text()`. Use `read_file` once, then write. Repeating the same inspection snippet is blocked.
+- When extending an existing file, immediately call `append_file` with the next <= 100-line chunk; do not re-read, re-derive, or verify the same lines first.
 - Do not request the same read slice twice; if it is already in context, proceed directly to writing the next chunk.
 
 INCREMENTAL DISK-FIRST RULE:
@@ -2747,12 +2802,12 @@ if AgentMiddleware is not None:
         """Trim large tool results and shrink follow-up reasoning turns.
 
         - ``wrap_tool_call`` / ``awrap_tool_call`` head+tail clamp tool output
-          (read_file/shell_exec at 2,500 chars) and short-circuit repeated read
-          slices, so agent state and checkpoints stay small.
+          (read_file/shell_exec/run_python at 2,500 chars), short-circuit
+          repeated read slices and repeated run_python inspection snippets.
         - ``wrap_model_call`` / ``awrap_model_call`` compact old write payloads,
-          cap ``max_tokens``, and lower ``reasoning_effort`` whenever a tool
-          result appears in the last 3 messages, so /resume and mid-build nudges
-          do not restore a full reasoning budget.
+          enforce a hard thinking ceiling on every turn (3,072 tokens before
+          any tool result, 1,536 after), cap ``max_tokens`` at 8,192, and lower
+          ``reasoning_effort`` whenever a tool result is recent.
         """
 
         def __init__(
@@ -2768,6 +2823,7 @@ if AgentMiddleware is not None:
             self.telemetry = telemetry
             self.read_only_calls = 0
             self._read_slices = set()
+            self._executed_python_hashes = set()
 
         def reset_inspection_budget(self):
             self.read_only_calls = 0
@@ -2776,25 +2832,29 @@ if AgentMiddleware is not None:
             messages = (state or {}).get("messages") or []
             return not messages or isinstance(messages[-1], HumanMessage)
 
-        def _seed_read_slices(self, messages):
-            """Remember read slices already present in session history (e.g. resume)."""
+        def _seed_session_state(self, messages):
+            """Remember reads and inspection snippets already in session history."""
             for message in messages or []:
                 if not isinstance(message, AIMessage):
                     continue
                 for call in getattr(message, "tool_calls", None) or []:
                     if not isinstance(call, dict):
                         continue
-                    key = _read_slice_key(call.get("name"), call.get("args") or {})
+                    name = call.get("name")
+                    args = call.get("args") or {}
+                    key = _read_slice_key(name, args)
                     if key is not None:
                         self._read_slices.add(key)
+                    if name == "run_python" and python_reads_files(args.get("code")):
+                        self._executed_python_hashes.add(python_code_hash(args.get("code")))
 
         def before_agent(self, state, runtime):
-            self._seed_read_slices((state or {}).get("messages") or [])
+            self._seed_session_state((state or {}).get("messages") or [])
             if self._new_user_turn(state):
                 self.reset_inspection_budget()
 
         async def abefore_agent(self, state, runtime):
-            self._seed_read_slices((state or {}).get("messages") or [])
+            self._seed_session_state((state or {}).get("messages") or [])
             if self._new_user_turn(state):
                 self.reset_inspection_budget()
 
@@ -2810,6 +2870,34 @@ if AgentMiddleware is not None:
             key = _read_slice_key(name, args)
             if key is not None and _tool_result_succeeded(result, name):
                 self._read_slices.add(key)
+
+        def _repeat_python_message(self, request, name):
+            return ToolMessage(
+                content=REPEAT_PYTHON_MESSAGE,
+                tool_call_id=_tool_call_field(request, "id", "repeat-python")
+                or "repeat-python",
+                name=name or "tool",
+                status="success",
+            )
+
+        def _dedupe_python(self, request, name, args):
+            if request is None or name != "run_python":
+                return None
+            code = args.get("code")
+            if not python_reads_files(code):
+                return None
+            if python_code_hash(code) in self._executed_python_hashes:
+                return self._repeat_python_message(request, name)
+            return None
+
+        def _note_python_hash(self, name, args, result):
+            code = args.get("code")
+            if (
+                name == "run_python"
+                and python_reads_files(code)
+                and _tool_result_succeeded(result, name)
+            ):
+                self._executed_python_hashes.add(python_code_hash(code))
 
         def _inspect_tool_call(self, request):
             name = _tool_call_field(request, "name")
@@ -2859,17 +2947,18 @@ if AgentMiddleware is not None:
             compacted = compact_historical_write_payloads(messages)
             if compacted is not messages:
                 request = request.override(messages=compacted)
-            if not any(
-                isinstance(m, ToolMessage)
-                for m in messages[-TOOL_TURN_LOOKBACK:]
-            ):
-                return request
             model = request.model
             if not hasattr(model, "model_copy"):
                 return request
+
+            ceiling = thinking_budget_ceiling(messages)
+            recent_tool = any(
+                isinstance(m, ToolMessage) for m in messages[-TOOL_TURN_LOOKBACK:]
+            )
             updates = {}
-            if self.provider != "ollama":
-                extra_body = dict(getattr(model, "extra_body", None) or {})
+            extra_body = dict(getattr(model, "extra_body", None) or {})
+            extra_changed = cap_thinking_budget(extra_body, ceiling)
+            if self.provider != "ollama" and recent_tool:
                 model_name = self.model_name or getattr(model, "model_name", None)
                 upstream = self.upstream or getattr(model, "openai_api_base", None)
                 strata = _is_strata_model(model_name, upstream, self.provider)
@@ -2891,9 +2980,9 @@ if AgentMiddleware is not None:
                             tool_turn=True,
                         )
                     )
+                    extra_changed = True
                     model_kwargs = dict(getattr(model, "model_kwargs", None) or {})
                     model_kwargs["extra_body"] = extra_body
-                    updates["extra_body"] = extra_body
                     updates["model_kwargs"] = model_kwargs
                     if self.telemetry is not None:
                         self.telemetry.note_effective_mode("thinking disabled")
@@ -2906,11 +2995,15 @@ if AgentMiddleware is not None:
                         tool_turn=True,
                     )
                     extra_body.update(overrides)
-                    updates["extra_body"] = extra_body
-            if TOOL_TURN_MAX_TOKENS > 0:
-                current = getattr(model, "max_tokens", None)
-                if not current or current > TOOL_TURN_MAX_TOKENS:
-                    updates["max_tokens"] = TOOL_TURN_MAX_TOKENS
+                    extra_changed = True
+            if extra_changed:
+                updates["extra_body"] = extra_body
+            token_cap = MAX_TURN_MAX_TOKENS
+            if 0 < TOOL_TURN_MAX_TOKENS < token_cap:
+                token_cap = TOOL_TURN_MAX_TOKENS
+            current = getattr(model, "max_tokens", None)
+            if not current or current > token_cap:
+                updates["max_tokens"] = token_cap
             if not updates:
                 return request
             return request.override(model=model.model_copy(update=updates))
@@ -2940,24 +3033,30 @@ if AgentMiddleware is not None:
         def wrap_tool_call(self, request, handler):
             name, args = self._inspect_tool_call(request)
             duplicate = self._dedupe_read(request, name, args)
+            if duplicate is None:
+                duplicate = self._dedupe_python(request, name, args)
             if duplicate is not None:
                 return duplicate
             if _tool_call_is_read_only(name, args) and self.read_only_calls >= INSPECTION_BUDGET:
                 return self._budget_tool_message(request, name)
             result = self._clamp_result(handler(request))
             self._note_read_slice(name, args, result)
+            self._note_python_hash(name, args, result)
             self._note_tool_result(name, args, result)
             return result
 
         async def awrap_tool_call(self, request, handler):
             name, args = self._inspect_tool_call(request)
             duplicate = self._dedupe_read(request, name, args)
+            if duplicate is None:
+                duplicate = self._dedupe_python(request, name, args)
             if duplicate is not None:
                 return duplicate
             if _tool_call_is_read_only(name, args) and self.read_only_calls >= INSPECTION_BUDGET:
                 return self._budget_tool_message(request, name)
             result = self._clamp_result(await handler(request))
             self._note_read_slice(name, args, result)
+            self._note_python_hash(name, args, result)
             self._note_tool_result(name, args, result)
             return result
 

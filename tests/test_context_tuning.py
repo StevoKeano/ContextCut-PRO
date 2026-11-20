@@ -95,7 +95,8 @@ class TestToolCallClamping:
             status="success",
         )
         clamped = ContextTuningMiddleware._clamp_result(result)
-        assert "output truncated" in clamped.content
+        assert "lines truncated" in clamped.content
+        assert len(clamped.content) <= 2500
         assert clamped.tool_call_id == "1"
         assert clamped.name == "run_python"
         assert clamped.status == "success"
@@ -143,18 +144,19 @@ class TestToolCallClamping:
 
 
 class TestModelCallTuning:
-    def test_first_turn_keeps_settings(self):
+    def test_first_turn_caps_max_tokens_and_thinking_budget(self):
         from agent_handler import ContextTuningMiddleware
 
         mw = ContextTuningMiddleware(provider="DeepSeek")
         request = _model_request(
             [HumanMessage(content="hi")],
-            extra_body={"reasoning_effort": "high"},
+            extra_body={"reasoning_effort": "high", "thinking_budget": 32578},
             max_tokens=24576,
         )
         out = mw.wrap_model_call(request, lambda req: req)
         assert out.model.extra_body["reasoning_effort"] == "high"
-        assert out.model.max_tokens == 24576
+        assert out.model.extra_body["thinking_budget"] == 3072
+        assert out.model.max_tokens == 8192
 
     def test_tool_turn_lowers_reasoning_and_caps_tokens(self):
         from agent_handler import ContextTuningMiddleware
@@ -384,7 +386,7 @@ class TestMessageOutputClamp:
         from agent_handler import clamp_tool_output_message
 
         text = "".join(f"line {i}\n" for i in range(1000))
-        for name in ("read_file", "shell_exec"):
+        for name in ("read_file", "shell_exec", "run_python"):
             out = clamp_tool_output_message(name, text)
             assert len(out) <= 2500
             assert "lines truncated" in out
@@ -394,7 +396,7 @@ class TestMessageOutputClamp:
     def test_other_tools_keep_general_limit(self):
         from agent_handler import clamp_tool_output_message
 
-        out = clamp_tool_output_message("run_python", "x" * 9000)
+        out = clamp_tool_output_message("vector_search", "x" * 9000)
         assert "output truncated" in out
         assert "lines truncated" not in out
 
@@ -501,7 +503,7 @@ class TestThinkingBudgetLookback:
         assert out.model.extra_body == {"enable_thinking": False}
         assert out.model.max_tokens == 8192
 
-    def test_no_recent_tool_message_keeps_settings(self):
+    def test_old_tool_message_still_uses_lower_ceiling(self):
         from agent_handler import ContextTuningMiddleware
 
         mw = ContextTuningMiddleware(provider="DeepSeek")
@@ -512,12 +514,12 @@ class TestThinkingBudgetLookback:
                 AIMessage(content="thinking", tool_calls=[]),
                 HumanMessage(content="next"),
             ],
-            extra_body={"reasoning_effort": "high"},
+            extra_body={"reasoning_effort": "high", "thinking_budget": 24576},
             max_tokens=24576,
         )
         out = mw.wrap_model_call(request, lambda req: req)
-        assert out.model.extra_body == {"reasoning_effort": "high"}
-        assert out.model.max_tokens == 24576
+        assert out.model.extra_body == {"reasoning_effort": "high", "thinking_budget": 1536}
+        assert out.model.max_tokens == 8192
 
 
 class TestReadSliceDedup:
@@ -581,6 +583,158 @@ class TestReadSliceDedup:
         assert result.content == (
             "Already in context—proceed directly to writing the next chunk."
         )
+
+
+class TestThinkingCeiling:
+    def test_ceiling_values_and_history_detection(self):
+        from agent_handler import (
+            MAX_THINKING_TOKENS_FIRST_TURN,
+            MAX_THINKING_TOKENS_TOOL_TURN,
+            thinking_budget_ceiling,
+        )
+
+        assert MAX_THINKING_TOKENS_FIRST_TURN == 3072
+        assert MAX_THINKING_TOKENS_TOOL_TURN == 1536
+        assert thinking_budget_ceiling([HumanMessage(content="hi")]) == 3072
+        assert thinking_budget_ceiling(
+            [
+                HumanMessage(content="hi"),
+                ToolMessage(content="result", tool_call_id="1"),
+                HumanMessage(content="continue"),
+            ]
+        ) == 1536
+
+    def test_all_budget_keys_clamped(self):
+        from agent_handler import cap_thinking_budget
+
+        body = {
+            "thinking_budget": 32578,
+            "budget_tokens": 24576,
+            "max_thinking_tokens": 9999,
+            "reasoning_effort": 24576,
+            "top_p": 0.9,
+        }
+        assert cap_thinking_budget(body, 3072) is True
+        assert body == {
+            "thinking_budget": 3072,
+            "budget_tokens": 3072,
+            "max_thinking_tokens": 3072,
+            "reasoning_effort": 3072,
+            "top_p": 0.9,
+        }
+        assert cap_thinking_budget(body, 3072) is False
+        assert cap_thinking_budget({"reasoning_effort": "high"}, 3072) is False
+
+    def test_ollama_first_turn_also_capped(self):
+        from agent_handler import ContextTuningMiddleware
+
+        mw = ContextTuningMiddleware(provider="Ollama")
+        request = _model_request(
+            [HumanMessage(content="hi")],
+            extra_body={"thinking_budget": 32578},
+            max_tokens=32768,
+        )
+        out = mw.wrap_model_call(request, lambda req: req)
+        assert out.model.extra_body["thinking_budget"] == 3072
+        assert out.model.max_tokens == 8192
+
+    def test_no_oversized_token_budget_survives_human_turn(self):
+        from agent_handler import ContextTuningMiddleware
+
+        mw = ContextTuningMiddleware(provider="DeepSeek")
+        request = _model_request(
+            [HumanMessage(content="hi")],
+            extra_body={"thinking_budget": 24576, "budget_tokens": 32578},
+            max_tokens=32578,
+        )
+        out = mw.wrap_model_call(request, lambda req: req)
+        assert out.model.extra_body["thinking_budget"] == 3072
+        assert out.model.extra_body["budget_tokens"] == 3072
+        assert 6144 <= out.model.max_tokens <= 8192
+
+
+class TestRunPythonInspectionDedup:
+    @staticmethod
+    def _request(code):
+        return _ToolRequest("run_python", {"code": code})
+
+    def test_near_identical_inspection_snippet_is_blocked(self):
+        from agent_handler import ContextTuningMiddleware
+
+        mw = ContextTuningMiddleware(provider="DeepSeek")
+        first = mw.wrap_tool_call(
+            self._request('print(open("a.py").read())'),
+            lambda req: _tool_message("run_python", "file contents"),
+        )
+        assert first.content == "file contents"
+
+        second = mw.wrap_tool_call(
+            self._request('print( open( "a.py" ).read() )'),
+            lambda req: pytest.fail("duplicate inspection should not execute"),
+        )
+        assert second.content == "Already executed—do not re-read; call append_file now."
+
+    def test_different_inspection_snippet_is_allowed(self):
+        from agent_handler import ContextTuningMiddleware
+
+        mw = ContextTuningMiddleware(provider="DeepSeek")
+        mw.wrap_tool_call(
+            self._request('print(open("a.py").read())'),
+            lambda req: _tool_message("run_python"),
+        )
+        other = mw.wrap_tool_call(
+            self._request('print(open("b.py").read())'),
+            lambda req: _tool_message("run_python", "other file"),
+        )
+        assert other.content == "other file"
+
+    def test_non_file_snippet_is_allowed_twice(self):
+        from agent_handler import ContextTuningMiddleware
+
+        mw = ContextTuningMiddleware(provider="DeepSeek")
+        for _ in range(2):
+            result = mw.wrap_tool_call(
+                self._request("print(2 + 2)"),
+                lambda req: _tool_message("run_python", "4"),
+            )
+            assert result.content == "4"
+
+    def test_history_seeds_executed_hashes(self):
+        from agent_handler import ContextTuningMiddleware
+
+        mw = ContextTuningMiddleware(provider="DeepSeek")
+        mw.before_agent(
+            {
+                "messages": [
+                    AIMessage(
+                        content="",
+                        tool_calls=[
+                            {
+                                "name": "run_python",
+                                "args": {"code": 'lines = open("a.py").read().splitlines()'},
+                                "id": "1",
+                            }
+                        ],
+                    )
+                ]
+            },
+            None,
+        )
+        result = mw.wrap_tool_call(
+            self._request('lines = open("a.py").read().splitlines()'),
+            lambda req: pytest.fail("seeded inspection should not execute"),
+        )
+        assert result.content == "Already executed—do not re-read; call append_file now."
+
+    def test_normalization_and_file_detection_helpers(self):
+        from agent_handler import normalize_python_code, python_code_hash, python_reads_files
+
+        assert normalize_python_code("  a  =  1\n b=2 ") == "a=1b=2"
+        assert python_code_hash("print( open('a').read() )") == python_code_hash(
+            "print(open('a').read())"
+        )
+        assert python_reads_files("for line in open('a').read().splitlines(): print(line)")
+        assert not python_reads_files("print(2 + 2)")
 
 
 class TestBuildAgentMiddleware:

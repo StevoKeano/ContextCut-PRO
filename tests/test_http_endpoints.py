@@ -617,3 +617,22 @@ def test_system_prompt_requires_final_answer_after_tools():
     import agent_handler
 
     assert "FINAL ANSWER IS REQUIRED" in agent_handler.SYSTEM_PROMPT
+
+
+def test_system_prompt_has_tool_efficiency_rule():
+    import agent_handler
+
+    assert "TOOL-EFFICIENCY RULE:" in agent_handler.SYSTEM_PROMPT
+    assert (
+        "- When editing or appending to an existing file, inspect only the target "
+        "region once (e.g., via `read_file`) before writing."
+    ) in agent_handler.SYSTEM_PROMPT
+    assert (
+        "- NEVER use `run_python` to print or inspect file contents or line "
+        "ranges: no `open(...).read()`, `.readlines()`, `.splitlines()`, or "
+        "`Path(...).read_text()`."
+    ) in agent_handler.SYSTEM_PROMPT
+    assert (
+        "- When extending an existing file, immediately call `append_file` with "
+        "the next <= 100-line chunk"
+    ) in agent_handler.SYSTEM_PROMPT
