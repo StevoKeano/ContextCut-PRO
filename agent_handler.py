@@ -85,6 +85,68 @@ _TOOL_OUTPUT_LIMITS = {
 }
 
 
+def _is_strata_model(model_name=None, upstream=None, provider=None) -> bool:
+    name = str(model_name or "").lower()
+    host = str(upstream or "").lower()
+    prov = str(provider or "").lower()
+    return (
+        name.startswith("deepseek")
+        or "ds4" in name
+        or "strata" in host
+        or "strata" in prov
+    )
+
+
+def reasoning_request_overrides(
+    value,
+    model_name=None,
+    upstream=None,
+    provider=None,
+    tool_turn=False,
+) -> dict:
+    normalized = str(value or "").strip().lower()
+    if not _is_strata_model(model_name, upstream, provider):
+        if normalized and normalized != "default":
+            return {"reasoning_effort": normalized}
+        return {}
+    if tool_turn and not normalized:
+        return {"enable_thinking": False}
+    if normalized in {"", "default", "none", "off", "false"}:
+        if normalized in {"none", "off", "false"}:
+            return {"enable_thinking": False}
+        return {"reasoning_effort": 1}
+    budgets = {"low": 1, "medium": 20, "high": 50, "max": 100}
+    if normalized in budgets:
+        return {"reasoning_effort": budgets[normalized]}
+    try:
+        budget = max(1, min(100, int(normalized)))
+    except (TypeError, ValueError):
+        budget = 1
+    return {"reasoning_effort": budget}
+
+
+def describe_reasoning_overrides(
+    value,
+    model_name=None,
+    upstream=None,
+    provider=None,
+    tool_turn=False,
+) -> str:
+    overrides = reasoning_request_overrides(
+        value,
+        model_name=model_name,
+        upstream=upstream,
+        provider=provider,
+        tool_turn=tool_turn,
+    )
+    if overrides.get("enable_thinking") is False:
+        return "thinking disabled"
+    budget = overrides.get("reasoning_effort")
+    if budget is not None:
+        return f"budget {budget}"
+    return "provider default"
+
+
 def tool_output_limit(tool_name: str | None) -> int:
     """Return the max characters kept for *tool_name* (0 disables the cap)."""
     return _TOOL_OUTPUT_LIMITS.get(tool_name or "", TOOL_OUTPUT_MAX_CHARS)
@@ -2239,7 +2301,10 @@ Rules:
     g. system_info: hardware snapshot
     h. ONLY THEN use web_search to supplement findings with current CVEs or
        hardening guidance specific to what was found locally.
-    web_search is NEVER the first tool for a security task. Local enumeration is."""
+       web_search is NEVER the first tool for a security task. Local enumeration is.
+    17. FINAL ANSWER IS REQUIRED: After using tools, always end with a plain-text answer
+       that summarizes the work and key results. Never stop after tool calls alone."""
+
 
 
 def get_system_prompt() -> str:
@@ -2345,8 +2410,15 @@ if AgentMiddleware is not None:
           pass.
         """
 
-        def __init__(self, provider: str | None = None):
+        def __init__(
+            self,
+            provider: str | None = None,
+            model_name: str | None = None,
+            upstream: str | None = None,
+        ):
             self.provider = (provider or "").strip().lower()
+            self.model_name = model_name
+            self.upstream = upstream
 
         def _tune_model_request(self, request):
             messages = request.messages or []
@@ -2356,10 +2428,21 @@ if AgentMiddleware is not None:
             if not hasattr(model, "model_copy"):
                 return request
             updates = {}
-            if TOOL_TURN_REASONING and self.provider != "ollama":
+            if self.provider != "ollama":
                 extra_body = dict(getattr(model, "extra_body", None) or {})
-                extra_body["reasoning_effort"] = TOOL_TURN_REASONING
-                updates["extra_body"] = extra_body
+                if extra_body.get("enable_thinking") is False:
+                    extra_body.pop("reasoning_effort", None)
+                    updates["extra_body"] = extra_body
+                elif TOOL_TURN_REASONING:
+                    overrides = reasoning_request_overrides(
+                        TOOL_TURN_REASONING,
+                        model_name=self.model_name or getattr(model, "model_name", None),
+                        upstream=self.upstream or getattr(model, "openai_api_base", None),
+                        provider=self.provider,
+                        tool_turn=True,
+                    )
+                    extra_body.update(overrides)
+                    updates["extra_body"] = extra_body
             if TOOL_TURN_MAX_TOKENS > 0:
                 current = getattr(model, "max_tokens", None)
                 if not current or current > TOOL_TURN_MAX_TOKENS:
@@ -2404,7 +2487,16 @@ def build_agent(model_name: str = None, upstream: str = None,
     if _SCAN_MODEL and provider in (None, "Ollama"):
         extra_body["keep_alive"] = 0
     if reasoning_effort and reasoning_effort != "default":
-        extra_body["reasoning_effort"] = reasoning_effort
+        extra_body.update(
+            reasoning_request_overrides(
+                reasoning_effort,
+                model_name=model_name,
+                upstream=upstream,
+                provider=provider,
+            )
+        )
+    elif _is_strata_model(model_name, upstream, provider):
+        extra_body.update(reasoning_request_overrides("default", model_name, upstream, provider))
     if extra_body:
         extra["extra_body"] = extra_body
     if max_tokens and max_tokens > 0:
@@ -2420,6 +2512,14 @@ def build_agent(model_name: str = None, upstream: str = None,
         **extra,
         **chat_client_kwargs(),
     )
+    if _is_strata_model(model_name, upstream, provider):
+        print(
+            f"[{datetime.now().strftime('%H:%M:%S')}] [Agent] reasoning: "
+            f"{describe_reasoning_overrides(reasoning_effort, model_name, upstream, provider)}"
+            f" | tool turns: "
+            f"{describe_reasoning_overrides(TOOL_TURN_REASONING, model_name, upstream, provider, tool_turn=True)}",
+            flush=True,
+        )
 
     tools = apply_harness(
         ALL_TOOLS + _get_dynamic_tools() + list(extra_tools or []), user_message
@@ -2439,7 +2539,11 @@ def build_agent(model_name: str = None, upstream: str = None,
             )
         )
     if ContextTuningMiddleware is not None:
-        middleware.append(ContextTuningMiddleware(provider=provider))
+        middleware.append(
+            ContextTuningMiddleware(
+                provider=provider, model_name=model_name, upstream=upstream
+            )
+        )
     agent = create_agent(
         model=llm,
         tools=tools,

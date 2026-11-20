@@ -97,6 +97,17 @@ class TestDashboardHandlerGET:
         assert "toolCount" in html
         assert ".bubble:empty" in html
 
+    def test_dashboard_has_live_status_indicator(self, make_handler):
+        status, raw = make_handler("/", "GET")
+        assert status == 200
+        html = raw.decode("utf-8", errors="replace")
+        assert "function setTypingStatus(status)" in html
+        assert "_typingTimer = setInterval(" in html
+        assert "data.type === 'phase'" in html
+        assert "setTypingStatus('Waiting for approval…')" in html
+        assert "setTypingStatus('Writing response…')" in html
+        assert ".typing span.typing-status" in html
+
     def test_settings_returns_html(self, make_handler):
         status, raw = make_handler("/settings", "GET")
         assert status == 200
@@ -558,3 +569,51 @@ def test_agent_completion_text_fallback():
         == "✅ Agent finished after 1 tool call, but returned no textual summary."
     )
     assert "after 3 tool calls" in qpf.agent_completion_text(3)
+
+
+def test_agent_completion_text_with_tool_records():
+    import qdrant_proxy_final as qpf
+
+    text = qpf.agent_completion_text(
+        3,
+        goal="Build an Electromagnetics learning app",
+        tool_records=[
+            {"name": "run_python", "result": "VSWR = 1.5, Gamma = 0.2"},
+        ],
+    )
+    assert "Build an Electromagnetics learning app" in text
+    assert "run_python: VSWR = 1.5" in text
+    assert "3 tool calls" in text
+
+
+def test_agent_merge_text_state_keeps_best_text_on_tool_only_turn():
+    import qdrant_proxy_final as qpf
+
+    full, best, after = qpf.agent_merge_text_state(
+        "Created the app.",
+        "Created the app.",
+        "Created the app.",
+        "",
+        "",
+    )
+    assert full == "Created the app."
+    assert best == "Created the app."
+    assert after == "Created the app."
+
+
+def test_agent_text_after_last_tool():
+    import qdrant_proxy_final as qpf
+
+    timeline = [
+        ("text", "Planning."),
+        ("tool", "run_python"),
+        ("text", "Created the sample problem."),
+    ]
+    assert qpf.agent_text_after_last_tool(timeline) == "Created the sample problem."
+    assert qpf.agent_text_after_last_tool([("text", "No tools used.")]) == ""
+
+
+def test_system_prompt_requires_final_answer_after_tools():
+    import agent_handler
+
+    assert "FINAL ANSWER IS REQUIRED" in agent_handler.SYSTEM_PROMPT

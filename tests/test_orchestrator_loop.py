@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import subprocess
+import wave
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -44,6 +45,7 @@ def _args(tmp_path: Path, repo: Path, *extra: str):
             "1. Keep the app valid.",
             "--artifacts-dir",
             str(tmp_path / "artifacts"),
+            "--no-tts-live",
             *extra,
         ]
     )
@@ -51,6 +53,65 @@ def _args(tmp_path: Path, repo: Path, *extra: str):
 
 def _agent_result(payload: dict) -> SimpleNamespace:
     return SimpleNamespace(to_dict=lambda: payload)
+
+
+def _write_fake_wav(path: Path, payload: bytes = b"voice") -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with wave.open(str(path), "wb") as wav:
+        wav.setnchannels(1)
+        wav.setsampwidth(2)
+        wav.setframerate(44100)
+        wav.writeframes(payload)
+
+
+def _narration_args(tmp_path: Path, *extra: str):
+    return orchestrator.build_parser().parse_args(
+        [
+            "--workspace",
+            str(tmp_path),
+            "--prompt",
+            "1. Keep the app valid.",
+            "--artifacts-dir",
+            str(tmp_path / "artifacts"),
+            *extra,
+        ]
+    )
+
+
+def _patch_tts(
+    tmp_path: Path,
+    monkeypatch,
+    queued: list[Path],
+    announced: list[tuple[str, dict]] | None = None,
+) -> Path:
+    from tts import client as tts_client
+
+    public_dir = tmp_path / "public-audio"
+
+    def fake_save(text, filename=None, voice=None, response_format=None, **kwargs):
+        target = public_dir / (filename or "speech.wav")
+        _write_fake_wav(target, text.encode("utf-8"))
+        return {
+            "ok": True,
+            "path": str(target),
+            "url": "/outputs/audio/" + target.name,
+            "bytes": target.stat().st_size,
+            "voice": voice,
+        }
+
+    monkeypatch.setattr(tts_client, "is_enabled", lambda: True)
+    monkeypatch.setattr(tts_client, "save_speech", fake_save)
+    monkeypatch.setattr(tts_client, "OUTPUT_DIR", public_dir)
+    monkeypatch.setattr(orchestrator, "_queue_playback", queued.append)
+    if announced is None:
+        monkeypatch.setattr(orchestrator, "_announce_handoff", lambda *_args, **_kwargs: None)
+    else:
+        monkeypatch.setattr(
+            orchestrator,
+            "_announce_handoff",
+            lambda _args, run_id, record, progress=None: announced.append((run_id, record)),
+        )
+    return public_dir
 
 
 def _passing_verifier_report() -> dict:
@@ -353,3 +414,144 @@ def test_check_dirty_workspace_rejects_by_default(tmp_path):
         orchestrator._check_dirty_workspace(repo, allow_dirty=False)
 
     orchestrator._check_dirty_workspace(repo, allow_dirty=True)
+
+
+def test_narrate_handoff_writes_role_record_and_queues_playback(tmp_path, monkeypatch):
+    queued: list[Path] = []
+    announced: list[tuple[str, dict]] = []
+    _patch_tts(tmp_path, monkeypatch, queued, announced)
+    args = _narration_args(tmp_path, "--tts-local-play")
+    artifact_dir = tmp_path / "artifacts" / "run"
+
+    record = orchestrator._narrate_handoff(
+        args,
+        artifact_dir,
+        "reviewer",
+        "Verdict: pass.",
+        "cycle-01",
+        lambda _message: None,
+    )
+
+    assert record is not None
+    assert record["voice"] == "noa"
+    assert record["briefing"].startswith("[noa] Reviewer.")
+    target = artifact_dir / "audio" / "cycle-01-reviewer.wav"
+    assert target.is_file()
+    assert json.loads((artifact_dir / "audio" / "handoff.jsonl").read_text()) == record
+    assert queued == [target]
+    assert len(announced) == 1
+    assert announced[0][0] == "run"
+    assert announced[0][1]["role"] == "reviewer"
+
+
+def test_finalize_handoff_writes_combined_replay_audio(tmp_path, monkeypatch):
+    queued: list[Path] = []
+    public_dir = _patch_tts(tmp_path, monkeypatch, queued)
+    args = _narration_args(tmp_path)
+    artifact_dir = tmp_path / "artifacts" / "run"
+
+    orchestrator._narrate_handoff(
+        args, artifact_dir, "planner", "Start the run.", "01-planner"
+    )
+    orchestrator._narrate_handoff(
+        args, artifact_dir, "reviewer", "Verdict: pass.", "02-reviewer"
+    )
+    manifest = orchestrator._finalize_handoff(args, artifact_dir)
+
+    assert manifest is not None
+    assert (artifact_dir / "audio" / "handoff.wav").is_file()
+    assert (public_dir / f"handoff-{artifact_dir.name}.wav").is_file()
+    assert manifest["audio_url"] == f"/outputs/audio/handoff-{artifact_dir.name}.wav"
+    assert manifest["replay_url"].endswith(manifest["audio_url"])
+    assert [record["voice"] for record in manifest["records"]] == ["lily", "noa"]
+    assert manifest["voice_map"]["reviewer"] == "noa"
+
+
+def test_announce_handoff_posts_segment_to_dashboard(tmp_path, monkeypatch):
+    class FakeResponse:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            return False
+
+    captured = {}
+
+    def fake_urlopen(request, timeout=None):
+        captured["url"] = request.full_url
+        captured["payload"] = json.loads(request.data)
+        return FakeResponse()
+
+    monkeypatch.setattr(orchestrator.urllib.request, "urlopen", fake_urlopen)
+    monkeypatch.setenv(
+        "CONTEXTCUT_HANDOFF_ANNOUNCE_URL",
+        "http://127.0.0.1:18787/api/tts/announce",
+    )
+    args = _narration_args(tmp_path)
+    record = {
+        "step": "cycle-01",
+        "role": "reviewer",
+        "voice": "noa",
+        "url": "/outputs/audio/review.wav",
+        "text": "Verdict: pass.",
+    }
+
+    orchestrator._announce_handoff(args, "run-1", record)
+
+    assert captured["url"] == "http://127.0.0.1:18787/api/tts/announce"
+    assert captured["payload"]["run_id"] == "run-1"
+    assert captured["payload"]["url"] == "/outputs/audio/review.wav"
+
+
+def test_replay_handoff_queues_combined_wav(tmp_path, monkeypatch):
+    artifact_dir = tmp_path / "artifacts" / "run"
+    wav = artifact_dir / "audio" / "handoff.wav"
+    _write_fake_wav(wav)
+    queued: list[Path] = []
+    monkeypatch.setattr(orchestrator, "_queue_playback", lambda path: queued.append(Path(path)))
+    monkeypatch.setattr(orchestrator.shutil, "which", lambda _command: "/usr/bin/aplay")
+
+    assert orchestrator._replay_handoff(artifact_dir) == 0
+    assert queued == [wav.resolve()]
+
+
+def test_playback_worker_reports_player_failure(tmp_path, monkeypatch, capsys):
+    path = tmp_path / "handoff.wav"
+    path.write_bytes(b"fake")
+    result = SimpleNamespace(returncode=1, stderr="Device or resource busy", stdout="")
+    monkeypatch.setattr(orchestrator.shutil, "which", lambda _command: "/usr/bin/aplay")
+    monkeypatch.setattr(orchestrator.subprocess, "run", lambda *_args, **_kwargs: result)
+
+    while not orchestrator._PLAYBACK_QUEUE.empty():
+        orchestrator._PLAYBACK_QUEUE.get_nowait()
+        orchestrator._PLAYBACK_QUEUE.task_done()
+    orchestrator._PLAYBACK_QUEUE.put(path)
+    orchestrator._PLAYBACK_QUEUE.put(None)
+    orchestrator._playback_worker()
+
+    assert "Device or resource busy" in capsys.readouterr().err
+
+
+def test_no_tts_live_skips_narration(tmp_path, monkeypatch):
+    def fail_save(*_args, **_kwargs):
+        raise AssertionError("save_speech should not be called")
+
+    monkeypatch.setattr("tts.client.save_speech", fail_save)
+    args = orchestrator.build_parser().parse_args(
+        [
+            "--workspace",
+            str(tmp_path),
+            "--prompt",
+            "1. Keep the app valid.",
+            "--no-tts-live",
+        ]
+    )
+    artifact_dir = tmp_path / "artifacts" / "run"
+
+    assert (
+        orchestrator._narrate_handoff(
+            args, artifact_dir, "planner", "Start", "01-planner"
+        )
+        is None
+    )
+    assert not (artifact_dir / "audio").exists()

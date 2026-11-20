@@ -50,7 +50,8 @@ class TestHelpers:
         text = (
             "# Heading\n[david] Read this `code` from "
             "[docs](https://example.com/x) <he>שלום</he> **loudly**.\n"
-            "```python\nprint('secret')\n```"
+            "```python\nprint('secret')\n```\n"
+            "voice_test.py and implementer_done stay intact."
         )
         clean = client.strip_markdown(text)
         assert "Heading" in clean
@@ -59,6 +60,8 @@ class TestHelpers:
         assert "https://" not in clean
         assert "print" not in clean
         assert "**" not in clean
+        assert "voice_test.py" in clean
+        assert "implementer_done" in clean
 
     def test_compose_briefing_assigns_role_voices(self):
         from tts import client
@@ -70,10 +73,33 @@ class TestHelpers:
                 {"role": "coder", "text": "Patch applied."},
             ]
         )
-        assert briefing.startswith("[david] Plan ready.")
-        assert "[noa] Findings" in briefing
-        assert "[adam] Patch applied." in briefing
+        assert briefing.startswith("[lily] Planner. Plan ready.")
+        assert "[tamar] Researcher. Findings" in briefing
+        assert "[maya] Implementer. Patch applied." in briefing
         assert "https://" not in briefing
+
+    def test_role_voices_are_distinct_female_voices(self):
+        from tts import client
+
+        roles = (
+            "planner",
+            "implementer",
+            "reviewer",
+            "execution",
+            "researcher",
+            "assistant",
+        )
+        voices = [client.ROLE_VOICES[role] for role in roles]
+        assert len(set(voices)) == len(roles)
+        assert set(voices) <= set(client.NATIVE_VOICES)
+
+    def test_compose_briefing_keeps_explicit_voice_marker_and_adds_label(self):
+        from tts import client
+
+        briefing = client.compose_briefing(
+            [{"role": "reviewer", "text": "[yael] Looks good."}]
+        )
+        assert briefing == "[yael] Reviewer. Looks good."
 
     def test_wav_rewrapping_produces_valid_header(self):
         import wave
@@ -306,8 +332,52 @@ class TestRoutes:
         assert status == 200
         data = json.loads(raw.split(b"\r\n\r\n", 1)[-1])
         assert data["ok"] is True
-        assert captured["text"].startswith("[adam] Summary")
+        assert captured["text"].startswith("[maya] Implementer. Summary")
         assert "https://" not in captured["text"]
+
+    def test_tts_announce_and_events_roundtrip(self, make_handler, monkeypatch, tmp_path):
+        from qdrant_proxy_final import reset_tts_events
+
+        reset_tts_events()
+        monkeypatch.setattr("qdrant_proxy_final.TTS_ENABLED", True)
+        monkeypatch.setattr(
+            "qdrant_proxy_final.tts_client.OUTPUT_DIR", tmp_path / "audio"
+        )
+        payload = {
+            "run_id": "run-1",
+            "step": "cycle-01",
+            "role": "reviewer",
+            "voice": "noa",
+            "url": "/outputs/audio/review.wav",
+            "text": "Verdict: pass.",
+        }
+        status, raw = make_handler(
+            "/api/tts/announce", "POST", json.dumps(payload).encode()
+        )
+        assert status == 200
+        announced = json.loads(raw.split(b"\r\n\r\n", 1)[-1])
+        assert announced["ok"] is True
+
+        status, raw = make_handler("/api/tts/events?since=0", "GET")
+        assert status == 200
+        events = json.loads(raw.split(b"\r\n\r\n", 1)[-1])
+        assert events["ok"] is True
+        assert events["latest"] == 1
+        assert events["events"][0]["role"] == "reviewer"
+        assert events["events"][0]["url"] == "/outputs/audio/review.wav"
+
+    def test_tts_announce_rejects_external_url(self, make_handler, monkeypatch):
+        from qdrant_proxy_final import reset_tts_events
+
+        reset_tts_events()
+        monkeypatch.setattr("qdrant_proxy_final.TTS_ENABLED", True)
+        status, raw = make_handler(
+            "/api/tts/announce",
+            "POST",
+            json.dumps({"url": "https://evil.example/x.wav"}).encode(),
+        )
+        assert status == 400
+        assert b"under /outputs/audio/" in raw
 
 
 class TestTools:

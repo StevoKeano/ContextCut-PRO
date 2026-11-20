@@ -72,6 +72,67 @@ class TestBuildAgent:
         assert "aeo_probe" in tool_names
 
 
+class TestStrataReasoning:
+    def test_none_disables_thinking(self):
+        from agent_handler import reasoning_request_overrides
+
+        assert reasoning_request_overrides(
+            "none", model_name="deepseek-v4.1-flash"
+        ) == {"enable_thinking": False}
+
+    def test_low_maps_to_small_budget(self):
+        from agent_handler import reasoning_request_overrides
+
+        assert reasoning_request_overrides(
+            "low", model_name="deepseek-v4.1-flash"
+        ) == {"reasoning_effort": 1}
+
+    def test_high_and_max_map_to_larger_budgets(self):
+        from agent_handler import reasoning_request_overrides
+
+        assert reasoning_request_overrides(
+            "high", model_name="deepseek-v4.1-flash"
+        ) == {"reasoning_effort": 50}
+        assert reasoning_request_overrides(
+            "max", model_name="deepseek-v4.1-flash"
+        ) == {"reasoning_effort": 100}
+
+    def test_tool_turn_none_keeps_thinking_disabled(self):
+        from agent_handler import reasoning_request_overrides
+
+        assert reasoning_request_overrides(
+            "none",
+            model_name="deepseek-v4.1-flash",
+            tool_turn=True,
+        ) == {"enable_thinking": False}
+
+    def test_non_strata_values_are_unchanged(self):
+        from agent_handler import reasoning_request_overrides
+
+        assert reasoning_request_overrides(
+            "low", model_name="qwen3:14b-q8_0"
+        ) == {"reasoning_effort": "low"}
+
+    @patch("agent_handler.ChatOpenAI")
+    @patch("agent_handler.create_agent")
+    @patch("agent_handler._get_dynamic_tools", return_value=[])
+    def test_build_agent_applies_strata_overrides(
+        self, mock_dyn, mock_create_agent, mock_chat
+    ):
+        from agent_handler import build_agent
+
+        mock_create_agent.return_value = MagicMock()
+        build_agent(
+            model_name="deepseek-v4.1-flash",
+            upstream="http://192.168.137.1:8080",
+            provider="Custom",
+            reasoning_effort="none",
+        )
+        call_kwargs = mock_chat.call_args[1]
+        assert call_kwargs["extra_body"]["enable_thinking"] is False
+        assert "reasoning_effort" not in call_kwargs["extra_body"]
+
+
 class TestStreamChunkTimeoutConfig:
     @patch("agent_handler.ChatOpenAI")
     @patch("agent_handler.create_agent")

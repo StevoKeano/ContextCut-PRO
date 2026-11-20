@@ -13,6 +13,8 @@ Examples:
     python3 orchestrator.py --mode verify --workspace ~/dev/project \
         --prompt-file task.txt --baseline b965be6 \
         --implementer-run-id 20261111-150819-71536f
+
+    python3 orchestrator.py --replay ~/.contextcut/orchestrations/20261119-120000-abc123
 """
 
 from __future__ import annotations
@@ -21,12 +23,17 @@ import argparse
 import hashlib
 import json
 import os
+import queue
 import re
 import shlex
 import shutil
+import socket
 import subprocess
 import sys
+import threading
 import time
+import urllib.error
+import urllib.request
 import uuid
 from dataclasses import dataclass, field
 from datetime import datetime
@@ -48,6 +55,253 @@ MAX_REPORT_CHARS = 12000
 
 def _env_flag(name: str) -> bool:
     return os.environ.get(name, "").strip().lower() in ("1", "true", "yes", "on")
+
+
+_PLAYBACK_QUEUE: queue.Queue[Path | None] = queue.Queue()
+_PLAYBACK_LOCK = threading.Lock()
+_PLAYBACK_STATE = {"started": False}
+_ANNOUNCE_WARNED = {"value": False}
+
+
+def _player_command(path: Path) -> list[str]:
+    configured = os.environ.get("CONTEXTCUT_TTS_PLAYER", "aplay -q").strip()
+    return [*shlex.split(configured), str(path)]
+
+
+def _replay_url(public_name: str) -> str:
+    host = os.environ.get("CONTEXTCUT_DASHBOARD_HOST", "").strip()
+    if not host:
+        try:
+            host = socket.gethostbyname(socket.gethostname())
+        except OSError:
+            host = "127.0.0.1"
+    port = os.environ.get("CONTEXTCUT_DASHBOARD_PORT", "18787").strip() or "18787"
+    return f"http://{host}:{port}/outputs/audio/{public_name}"
+
+
+def _handoff_announce_url() -> str:
+    configured = os.environ.get("CONTEXTCUT_HANDOFF_ANNOUNCE_URL", "").strip()
+    if configured:
+        return configured.rstrip("/")
+    port = os.environ.get("CONTEXTCUT_DASHBOARD_PORT", "18787").strip() or "18787"
+    return f"http://127.0.0.1:{port}/api/tts/announce"
+
+
+def _announce_handoff(
+    args: argparse.Namespace,
+    run_id: str,
+    record: dict[str, Any],
+    progress: Callable[[str], None] | None = None,
+) -> None:
+    if not getattr(args, "tts_announce", True):
+        return
+    url = str(record.get("url") or "")
+    if not url:
+        return
+    payload = {
+        "run_id": run_id,
+        "step": record.get("step") or "",
+        "role": record.get("role") or "assistant",
+        "voice": record.get("voice") or "",
+        "url": url,
+        "text": record.get("text") or "",
+    }
+    try:
+        request = urllib.request.Request(
+            _handoff_announce_url(),
+            data=json.dumps(payload, ensure_ascii=False).encode("utf-8"),
+            headers={"Content-Type": "application/json"},
+            method="POST",
+        )
+        with urllib.request.urlopen(request, timeout=5):
+            pass
+    except Exception as exc:
+        if _ANNOUNCE_WARNED["value"]:
+            return
+        _ANNOUNCE_WARNED["value"] = True
+        message = (
+            "[tts-live] dashboard announce unavailable ("
+            f"{_brief_text(exc, 120)}); open the replay URL in the dashboard"
+        )
+        if progress:
+            progress(message)
+        else:
+            print(message, file=sys.stderr, flush=True)
+
+
+def _playback_worker() -> None:
+    while True:
+        path = _PLAYBACK_QUEUE.get()
+        try:
+            if path is None:
+                return
+            command = _player_command(path)
+            if not command:
+                print("[tts-playback] empty CONTEXTCUT_TTS_PLAYER command", file=sys.stderr, flush=True)
+                continue
+            if not shutil.which(command[0]):
+                print(
+                    f"[tts-playback] player not found: {command[0]}; audio file: {path}",
+                    file=sys.stderr,
+                    flush=True,
+                )
+                continue
+            result = subprocess.run(
+                command,
+                stdin=subprocess.DEVNULL,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                text=True,
+                check=False,
+            )
+            if result.returncode != 0 or result.stderr.strip():
+                detail = _brief_text(result.stderr or result.stdout or "no details", 300)
+                print(
+                    f"[tts-playback] {command[0]} exit={result.returncode}: {detail}",
+                    file=sys.stderr,
+                    flush=True,
+                )
+        finally:
+            _PLAYBACK_QUEUE.task_done()
+
+
+def _queue_playback(path: Path) -> None:
+    with _PLAYBACK_LOCK:
+        if not _PLAYBACK_STATE["started"]:
+            _PLAYBACK_STATE["started"] = True
+            threading.Thread(target=_playback_worker, daemon=True).start()
+    _PLAYBACK_QUEUE.put(Path(path))
+
+
+def _brief_text(value: Any, limit: int = 320) -> str:
+    text = re.sub(r"\s+", " ", str(value or "")).strip()
+    if len(text) <= limit:
+        return text
+    return text[:limit].rsplit(" ", 1)[0] + "..."
+
+
+def _narrate_handoff(
+    args: argparse.Namespace,
+    artifact_dir: Path,
+    role: str,
+    text: str,
+    step: str,
+    progress: Callable[[str], None] | None = None,
+) -> dict[str, Any] | None:
+    if not getattr(args, "tts_live", True):
+        return None
+    try:
+        from tts import client as tts_client
+    except Exception as exc:
+        if progress:
+            progress(f"[tts] unavailable: {exc}")
+        return None
+    if not tts_client.is_enabled():
+        return None
+    audio_dir = artifact_dir / "audio"
+    audio_dir.mkdir(parents=True, exist_ok=True)
+    safe_role = re.sub(r"[^a-z0-9_-]+", "-", role.lower()).strip("-") or "assistant"
+    name = f"{step}-{safe_role}.wav"
+    voice = tts_client.normalize_voice(
+        tts_client.ROLE_VOICES.get(role, tts_client.DEFAULT_VOICE)
+    )
+    briefing = tts_client.compose_briefing([{"role": role, "text": text}])
+    try:
+        saved = tts_client.save_speech(
+            briefing, filename=name, voice=voice, response_format="wav"
+        )
+        source = Path(saved["path"])
+        target = audio_dir / name
+        if source.resolve() != target.resolve():
+            shutil.copyfile(source, target)
+    except Exception as exc:
+        if progress:
+            progress(f"[tts] skipped {role}: {_brief_text(exc, 160)}")
+        return None
+    record = {
+        "step": step,
+        "role": role,
+        "voice": voice,
+        "text": text,
+        "briefing": briefing,
+        "path": str(target),
+        "url": saved.get("url"),
+    }
+    with (audio_dir / "handoff.jsonl").open("a", encoding="utf-8") as handle:
+        handle.write(json.dumps(record, ensure_ascii=False) + "\n")
+    _announce_handoff(args, artifact_dir.name, record, progress)
+    if getattr(args, "tts_local_play", False):
+        _queue_playback(target)
+    return record
+
+
+def _finalize_handoff(
+    args: argparse.Namespace, artifact_dir: Path
+) -> dict[str, Any] | None:
+    if not getattr(args, "tts_live", True):
+        return None
+    manifest_path = artifact_dir / "audio" / "handoff.jsonl"
+    if not manifest_path.is_file():
+        return None
+    try:
+        records = [
+            json.loads(line)
+            for line in manifest_path.read_text(encoding="utf-8").splitlines()
+            if line.strip()
+        ]
+    except (OSError, ValueError):
+        return None
+    paths = [Path(record.get("path") or "") for record in records]
+    paths = [path for path in paths if path.is_file()]
+    if not paths:
+        return None
+    try:
+        from tts import client as tts_client
+
+        combined = tts_client._merge_wav([path.read_bytes() for path in paths])
+    except Exception:
+        return None
+    audio_dir = artifact_dir / "audio"
+    combined_path = audio_dir / "handoff.wav"
+    combined_path.write_bytes(combined)
+    public_name = f"handoff-{artifact_dir.name}.wav"
+    public_dir = Path(tts_client.OUTPUT_DIR)
+    public_dir.mkdir(parents=True, exist_ok=True)
+    public_path = public_dir / public_name
+    public_path.write_bytes(combined)
+    manifest = {
+        "voice_map": dict(tts_client.ROLE_VOICES),
+        "records": records,
+        "audio_path": str(combined_path),
+        "public_path": str(public_path),
+        "audio_url": "/outputs/audio/" + public_name,
+        "replay_url": _replay_url(public_name),
+    }
+    (audio_dir / "handoff.json").write_text(
+        json.dumps(manifest, indent=2, ensure_ascii=False) + "\n", encoding="utf-8"
+    )
+    return manifest
+
+
+def _replay_handoff(artifact_dir: Path) -> int:
+    root = Path(artifact_dir).expanduser().resolve()
+    candidate = root / "audio" / "handoff.wav"
+    if not candidate.is_file() and root.is_file():
+        candidate = root
+    if not candidate.is_file():
+        print(f"no handoff audio found under {root}", file=sys.stderr)
+        return 2
+    command = _player_command(candidate)
+    if not command or not shutil.which(command[0]):
+        print(
+            f"no audio player found ({command[0] if command else 'empty command'}); "
+            f"audio file: {candidate}",
+            file=sys.stderr,
+        )
+        return 2
+    _queue_playback(candidate)
+    _PLAYBACK_QUEUE.join()
+    return 0
 
 
 IGNORE_DIRS = {
@@ -1547,6 +1801,15 @@ def _run_cycle(
             f"[cycle {cycle}] implementer {implementer.get('status')} "
             f"run={implementer.get('run_id')} steps={implementer.get('steps')}"
         )
+        _narrate_handoff(
+            args,
+            artifact_dir,
+            "implementer",
+            f"Cycle {cycle}: {implementer.get('status')} in "
+            f"{implementer.get('steps')} steps. {_brief_text(implementer.get('output'))}",
+            f"cycle-{cycle:02d}",
+            progress,
+        )
     else:
         implementer = {
             "status": "not-run",
@@ -1615,6 +1878,18 @@ def _run_cycle(
             )
         )
         _save_checks(cycle_dir, checks)
+
+    failed_checks = [check for check in checks if not check.passed]
+    _narrate_handoff(
+        args,
+        artifact_dir,
+        "execution",
+        f"Cycle {cycle}: {len(failed_checks)} of {len(checks)} checks failed. "
+        f"{_brief_text('; '.join(f'{check.name}: {check.error}' for check in failed_checks if check.error))}",
+            f"cycle-{cycle:02d}",
+
+        progress,
+    )
 
     verifier: dict[str, Any]
     verifier_report: dict[str, Any] | None = None
@@ -1730,6 +2005,19 @@ def _run_cycle(
             f"[cycle {cycle}] verifier {verifier_status} "
             f"run={verifier.get('run_id')} steps={verifier.get('steps')}"
         )
+        verdict = str((verifier_report or {}).get("overall") or verifier_status)
+        concerns = [
+            *((verifier_report or {}).get("unresolved") or []),
+            *(issue for mandate in ((verifier_report or {}).get("mandates") or []) for issue in (mandate.get("issues") or [])),
+        ]
+        _narrate_handoff(
+            args,
+            artifact_dir,
+            "reviewer",
+            f"Cycle {cycle}: review verdict {verdict}. {_brief_text('; '.join(concerns))}",
+            f"cycle-{cycle:02d}",
+            progress,
+        )
         gate = gate_report(
             verifier_report,
             mandates,
@@ -1747,6 +2035,18 @@ def _run_cycle(
         }
         _write_json(cycle_dir / "verifier" / "result.json", verifier)
         gate = gate_checks(checks)
+
+    gate_data = gate.to_dict()
+    _narrate_handoff(
+        args,
+        artifact_dir,
+        "gate",
+        f"Cycle {cycle}: gate {'passed' if gate_data.get('passed') else 'failed'}. "
+        f"{_brief_text('; '.join(gate_data.get('failures') or []))}",
+            f"cycle-{cycle:02d}",
+
+        progress,
+    )
 
     cycle_report = {
         "cycle": cycle,
@@ -1840,6 +2140,14 @@ def orchestrate(args: argparse.Namespace, original_prompt: str) -> dict[str, Any
     progress(f"[orchestrator] id={orchestration_id}")
     progress(f"[orchestrator] workspace={workspace}")
     progress(f"[orchestrator] mode={args.mode} baseline={baseline or 'unavailable'}")
+    _narrate_handoff(
+        args,
+        artifact_dir,
+        "orchestrator",
+        f"Starting {args.mode} in {workspace.name}.",
+        "start",
+        progress,
+    )
 
     max_cycles = 1 if args.mode in {"verify", "check"} else args.max_cycles
     cycles: list[dict[str, Any]] = []
@@ -1868,6 +2176,7 @@ def orchestrate(args: argparse.Namespace, original_prompt: str) -> dict[str, Any
             break
 
     final_gate = cycles[-1]["gate"] if cycles else {"passed": False, "failures": ["no cycles ran"], "warnings": []}
+    handoff = _finalize_handoff(args, artifact_dir)
     report = {
         "orchestration": {
             "id": orchestration_id,
@@ -1881,6 +2190,9 @@ def orchestrate(args: argparse.Namespace, original_prompt: str) -> dict[str, Any
             "opencode_model_verifier": _opencode_model(args, "plan"),
             "opencode_cache": bool(getattr(args, "opencode_cache", False)),
             "artifacts": str(artifact_dir),
+            "handoff_audio_url": handoff.get("audio_url") if handoff else None,
+            "handoff_replay_url": handoff.get("replay_url") if handoff else None,
+            "handoff_audio_path": handoff.get("audio_path") if handoff else None,
         },
         "overall": "pass" if final_gate["passed"] else "fail",
         "failures": final_gate["failures"],
@@ -1895,6 +2207,9 @@ def orchestrate(args: argparse.Namespace, original_prompt: str) -> dict[str, Any
     else:
         print(f"ORCHESTRATION {report['overall'].upper()}")
         print(f"Artifacts: {artifact_dir}")
+        if handoff:
+            print(f"Handoff audio: {handoff['replay_url']}")
+            print(f"Handoff file: {handoff['audio_path']}")
         for failure in report["failures"]:
             print(f"FAIL: {failure}")
         for warning in report["warnings"]:
@@ -1920,7 +2235,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--prompt", dest="prompt_text", default=None, help="implementer task text")
     parser.add_argument("--prompt-file", type=Path, help="read the original prompt from a file")
     parser.add_argument("--mandates-file", type=Path, help="JSON mandate checklist")
-    parser.add_argument("--workspace", required=True, help="project workspace")
+    parser.add_argument("--workspace", default=None, help="project workspace")
     parser.add_argument(
         "--mode",
         choices=("run", "verify", "check"),
@@ -1972,6 +2287,29 @@ def build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument("--protected", action="append", default=[], help="path that must not change")
     parser.add_argument("--artifacts-dir", default=str(DEFAULT_ARTIFACT_ROOT))
+    parser.add_argument(
+        "--tts-live",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help="synthesize role-tagged handoffs and announce them to the dashboard",
+    )
+    parser.add_argument(
+        "--tts-announce",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help="POST handoff segments to the dashboard for browser playback",
+    )
+    parser.add_argument(
+        "--tts-local-play",
+        action="store_true",
+        help="also play handoffs on the Ubuntu host via CONTEXTCUT_TTS_PLAYER",
+    )
+    parser.add_argument(
+        "--replay",
+        metavar="ARTIFACT_DIR",
+        default=None,
+        help="play a previous orchestration's handoff.wav and exit",
+    )
     parser.add_argument("--allow-dirty", action="store_true", help="allow dirty workspace in run mode")
     parser.add_argument("--allow-running", action="store_true", help="verify an active implementer run")
     parser.add_argument(
@@ -1990,6 +2328,10 @@ def main(argv: Sequence[str] | None = None) -> int:
     parser = build_parser()
     args = parser.parse_args(argv)
     try:
+        if args.replay:
+            return _replay_handoff(Path(args.replay))
+        if not args.workspace:
+            parser.error("--workspace is required unless --replay is used")
         original_prompt = _resolve_prompt(args)
         if args.max_cycles < 1:
             parser.error("--max-cycles must be at least 1")
@@ -2007,6 +2349,9 @@ def main(argv: Sequence[str] | None = None) -> int:
                         "opencode_model": _opencode_model(args, "build"),
                         "opencode_model_verifier": _opencode_model(args, "plan"),
                         "opencode_cache": args.opencode_cache,
+                        "tts_live": args.tts_live,
+                        "tts_announce": args.tts_announce,
+                        "tts_local_play": args.tts_local_play,
                         "implementer_max_steps": args.implementer_max_steps,
                         "verifier_max_steps": args.verifier_max_steps,
                         "implementer_timeout": args.implementer_timeout,

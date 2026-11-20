@@ -55,19 +55,54 @@ VOICE_ALIASES = {
     "shimmer": "lily",
 }
 ROLE_VOICES = {
-    "orchestrator": "david",
-    "planner": "david",
-    "coordinator": "david",
-    "system": "david",
-    "researcher": "noa",
-    "rag": "noa",
-    "retriever": "noa",
-    "analyst": "noa",
-    "assistant": "noa",
-    "coder": "adam",
-    "developer": "adam",
-    "reviewer": "adam",
-    "verifier": "adam",
+    "orchestrator": "lily",
+    "planner": "lily",
+    "architect": "lily",
+    "coordinator": "lily",
+    "system": "lily",
+    "implementer": "maya",
+    "coder": "maya",
+    "developer": "maya",
+    "build": "maya",
+    "verifier": "noa",
+    "reviewer": "noa",
+    "audit": "noa",
+    "execution": "shira",
+    "executor": "shira",
+    "gate": "shira",
+    "error": "shira",
+    "errors": "shira",
+    "tests": "shira",
+    "researcher": "tamar",
+    "rag": "tamar",
+    "retriever": "tamar",
+    "analyst": "tamar",
+    "assistant": "emma",
+}
+ROLE_LABELS = {
+    "orchestrator": "Orchestrator",
+    "planner": "Planner",
+    "architect": "Architect",
+    "coordinator": "Coordinator",
+    "system": "System",
+    "implementer": "Implementer",
+    "coder": "Implementer",
+    "developer": "Implementer",
+    "build": "Build",
+    "verifier": "Reviewer",
+    "reviewer": "Reviewer",
+    "audit": "Audit",
+    "execution": "Executor",
+    "executor": "Executor",
+    "gate": "Gate",
+    "error": "Error",
+    "errors": "Error",
+    "tests": "Tests",
+    "researcher": "Researcher",
+    "rag": "Retrieval",
+    "retriever": "Retrieval",
+    "analyst": "Analyst",
+    "assistant": "Assistant",
 }
 CONTENT_TYPES = {
     "wav": "audio/wav",
@@ -243,7 +278,12 @@ def strip_markdown(text: str) -> str:
     value = re.sub(rf"<(?!/?(?:{_lang_tag})\b)[^>]+>", " ", value)
     value = re.sub(r"^\s{0,3}#{1,6}\s*", "", value, flags=re.MULTILINE)
     value = re.sub(r"^\s*[-*+]\s+", "", value, flags=re.MULTILINE)
-    value = re.sub(r"[*_~]{1,3}", "", value)
+    value = re.sub(r"\*\*(.+?)\*\*", r"\1", value)
+    value = re.sub(r"__(.+?)__", r"\1", value)
+    value = re.sub(r"~~(.+?)~~", r"\1", value)
+    value = re.sub(r"(?<![A-Za-z0-9])\*(.+?)\*(?![A-Za-z0-9])", r"\1", value)
+    value = re.sub(r"(?<![A-Za-z0-9])_(.+?)_(?![A-Za-z0-9])", r"\1", value)
+    value = re.sub(r"[*_~]+(?=\s|$)", " ", value)
     value = re.sub(r"[ \t]+", " ", value)
     value = re.sub(r"\n{3,}", "\n\n", value)
     return value.strip()
@@ -269,10 +309,15 @@ def compose_briefing(segments, default_voice=None) -> str:
         voice = normalize_voice(
             item.get("voice") or ROLE_VOICES.get(role) or default_voice
         )
-        if re.match(r"^\[[a-z]+\]\s", text):
-            lines.append(text)
+        label = ROLE_LABELS.get(role, "")
+        marker = re.match(r"^(\[[a-z]+\]\s*)", text)
+        if marker:
+            prefix = marker.group(1)
+            body = text[marker.end():]
+            lines.append(f"{prefix}{label}. {body}" if label else text)
         else:
-            lines.append(f"[{voice}] {text}")
+            body = f"{label}. {text}" if label else text
+            lines.append(f"[{voice}] {body}")
     return " ".join(lines)
 
 

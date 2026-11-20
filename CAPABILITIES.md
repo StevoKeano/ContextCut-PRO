@@ -99,13 +99,15 @@ boundaries. If the service is offline, speech features degrade gracefully.
 - Agent tools: `speak` reads text aloud; `audio_briefing` accepts a JSON list of
   `{"role": ..., "text": ...}` segments and assigns one voice per role.
 - Multi-voice: put `[voice]` markers directly in text, e.g.
-  `[david] Retrieval complete. [noa] Here are the findings.` OpenAI aliases (`alloy`,
+  `[lily] Retrieval complete. [noa] Here are the findings.` OpenAI aliases (`alloy`,
   `echo`, `fable`, `onyx`, `nova`, `shimmer`) are mapped automatically.
 - Mixed languages: wrap phrases in `<en>...</en>`, `<he>...</he>`, etc. Markdown code
   blocks, URLs and formatting are stripped before synthesis; `[voice]` and language tags
   are preserved.
-- Role voices: orchestrator/planner → `david`, researcher/RAG → `noa`,
-  coder/reviewer → `adam`.
+- Distinct female role voices: orchestrator/planner → `lily`, implementer/coder → `maya`,
+  verifier/reviewer → `noa`, execution/gate/errors → `shira`, researcher/RAG → `tamar`,
+  assistant → `emma`. Each role-tagged segment also gets a spoken label (`Planner.`,
+  `Implementer.`, `Reviewer.`, `Executor.`).
 - Dashboard: the 🔊 button reads the last assistant reply aloud; Settings → LLM Provider
   has a base URL, voice, format, enable toggle and **Test Speech** button. Successful
   knowledge re-ingest also produces a short spoken alert.
@@ -136,8 +138,14 @@ Three ways to code with it:
      --implementer-model qwen3-coder:30b --verifier-model qwen3:14b-q8_0 \
      --check-command "python3 verify.py index.html" --json
    ```
-   `--mode verify` re-audits without re-running the implementer. `--use-opencode` routes
-   agent turns through OpenCode (`--agent build` / `--agent plan`).
+    `--mode verify` re-audits without re-running the implementer. `--use-opencode` routes
+    agent turns through OpenCode (`--agent build` / `--agent plan`). Role-tagged handoffs
+    are synthesized by default (`--no-tts-live` disables) and POSTed to the dashboard for
+    live browser playback via the 🎧 Live button. Each run also writes
+    `audio/handoff.jsonl`, per-role WAVs, and a combined `audio/handoff.wav`, published at
+    `/outputs/audio/handoff-<id>.wav` in `final-report.json`. Replay on the host with
+    `python3 orchestrator.py --replay <artifact-dir>`.
+
 
 The worker/orchestrator jail file tools to `--workspace` and run commands via an
 executable allowlist. Point `--workspace` at a throwaway directory when using an untrusted model.
@@ -190,6 +198,8 @@ Tools: `knowledge_search`, `knowledge_search_structured`, `knowledge_list_files`
 | `TTS_DEFAULT_VOICE` | `noa` | Default speech voice |
 | `TTS_FORMAT` | `wav` | Audio format (`wav`, `pcm`, `mp3`, `flac`, `opus`, `aac`) |
 | `TTS_ENABLED` | `true` | Expose speech tools and routes |
+| `CONTEXTCUT_TTS_PLAYER` | `aplay -q` | Local command used by `--tts-local-play` and `--replay` |
+| `CONTEXTCUT_HANDOFF_ANNOUNCE_URL` | `http://127.0.0.1:18787/api/tts/announce` | Dashboard endpoint for live browser handoff playback |
 
 ## Adding knowledge
 

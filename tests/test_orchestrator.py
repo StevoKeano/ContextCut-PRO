@@ -570,6 +570,7 @@ def test_run_cycle_runs_implementer_and_verifier_with_fake_agents(tmp_path, monk
             "python3 -m py_compile app.py",
             "--artifacts-dir",
             str(tmp_path / "artifacts"),
+            "--no-tts-live",
         ]
     )
 
@@ -704,6 +705,7 @@ def test_run_cycle_gate_fails_when_implementer_errors_and_citations_invalid(tmp_
             "1. Keep the app valid.",
             "--artifacts-dir",
             str(tmp_path / "artifacts"),
+            "--no-tts-live",
         ]
     )
 

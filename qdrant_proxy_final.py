@@ -290,6 +290,53 @@ tts_client.configure(
     enabled=TTS_ENABLED,
 )
 
+_TTS_EVENT_LOCK = threading.Lock()
+_TTS_EVENTS = deque(maxlen=200)
+_TTS_EVENT_SEQ = {"value": 0}
+
+
+def announce_tts_event(payload: dict) -> dict:
+    url = str(payload.get("url") or "").strip()
+    if not url.startswith("/outputs/audio/"):
+        raise ValueError("url must be under /outputs/audio/")
+    with _TTS_EVENT_LOCK:
+        _TTS_EVENT_SEQ["value"] += 1
+        event = {
+            "seq": _TTS_EVENT_SEQ["value"],
+            "run_id": str(payload.get("run_id") or "")[:80],
+            "step": str(payload.get("step") or "")[:80],
+            "role": str(payload.get("role") or "assistant")[:40],
+            "voice": str(payload.get("voice") or tts_client.DEFAULT_VOICE)[:40],
+            "url": url,
+            "text": str(payload.get("text") or "")[:500],
+            "ts": time.time(),
+        }
+        _TTS_EVENTS.append(event)
+        try:
+            log_path = Path(tts_client.OUTPUT_DIR) / "handoff-events.jsonl"
+            log_path.parent.mkdir(parents=True, exist_ok=True)
+            with log_path.open("a", encoding="utf-8") as handle:
+                handle.write(json.dumps(event, ensure_ascii=False) + "\n")
+        except OSError:
+            pass
+    return {"ok": True, "seq": event["seq"], "event": event}
+
+
+def get_tts_events(since: int = 0) -> list[dict]:
+    with _TTS_EVENT_LOCK:
+        return [dict(event) for event in _TTS_EVENTS if event["seq"] > since]
+
+
+def latest_tts_event_seq() -> int:
+    with _TTS_EVENT_LOCK:
+        return _TTS_EVENT_SEQ["value"]
+
+
+def reset_tts_events() -> None:
+    with _TTS_EVENT_LOCK:
+        _TTS_EVENTS.clear()
+        _TTS_EVENT_SEQ["value"] = 0
+
 
 def diffusion_model_names() -> list:
     return list(diffusion_client.model_ids()) if DIFFUSION_ENABLED else []
@@ -501,14 +548,77 @@ def _opencode_chat_model(model_name: str | None) -> str | None:
     return None
 
 
-def agent_completion_text(tool_count: int) -> str:
+def _has_substantive_text(text: str | None) -> bool:
+    return bool(re.search(r"[A-Za-z]{3,}|[\u4e00-\u9fff]", text or ""))
+
+
+def agent_text_after_last_tool(timeline: list[tuple]) -> str:
+    from agent_handler import extract_textual_tool_calls, strip_textual_tool_calls
+
+    tool_indexes = [
+        index for index, item in enumerate(timeline) if item[0] == "tool"
+    ]
+    if not tool_indexes:
+        return ""
+    segment = "".join(
+        text for kind, text in timeline[tool_indexes[-1] + 1:] if kind == "text"
+    )
+    if extract_textual_tool_calls(segment):
+        segment = strip_textual_tool_calls(segment)
+    return segment
+
+
+def agent_merge_text_state(
+    full_output: str,
+    best_text: str,
+    text_after_last_tool: str,
+    candidate: str,
+    segment: str,
+) -> tuple[str, str, str]:
+    if candidate.strip():
+        full_output = candidate
+        best_text = candidate
+    if _has_substantive_text(segment):
+        text_after_last_tool = segment
+    return full_output, best_text, text_after_last_tool
+
+
+def agent_tool_digest(tool_records: list[dict] | None, limit: int = 240) -> str:
+    lines = []
+    for record in (tool_records or [])[:12]:
+        if not isinstance(record, dict):
+            continue
+        name = str(record.get("name") or "tool")[:40]
+        result = str(record.get("result") or "").strip()
+        result = re.sub(r"\s+", " ", result)
+        if len(result) > limit:
+            result = result[:limit].rstrip() + "…"
+        lines.append(f"- {name}: {result or 'no output'}")
+    return "\n".join(lines)
+
+
+def agent_completion_text(
+    tool_count: int,
+    goal: str | None = None,
+    tool_records: list[dict] | None = None,
+) -> str:
     """Fallback summary when an Agent run ends without textual output."""
-    if tool_count:
+    if not tool_count:
+        return "✅ Agent finished but returned no textual response."
+    digest = agent_tool_digest(tool_records)
+    if not digest:
         return (
             f"✅ Agent finished after {tool_count} tool call"
             f"{'s' if tool_count != 1 else ''}, but returned no textual summary."
         )
-    return "✅ Agent finished but returned no textual response."
+    parts = [
+        f"I completed the request using {tool_count} tool call"
+        f"{'s' if tool_count != 1 else ''}, but the model did not return a final summary."
+    ]
+    if goal:
+        parts.append("Request: " + re.sub(r"\s+", " ", str(goal))[:240])
+    parts.append("Tool results:\n" + digest)
+    return "\n".join(parts)[:4000]
 
 
 async def _run_opencode_chat(
@@ -3398,6 +3508,7 @@ tr:hover td{{background:var(--surf2)}}
 .typing{{display:flex;gap:4px;padding:9px 13px;background:var(--surf2);border:1px solid var(--border);border-radius:var(--r);width:fit-content}}
 .typing span{{width:6px;height:6px;border-radius:50%;background:var(--muted);animation:blink 1.2s infinite}}
 .typing span:nth-child(2){{animation-delay:.2s}}.typing span:nth-child(3){{animation-delay:.4s}}
+.typing span.typing-status{{width:auto;height:auto;border-radius:0;background:transparent;animation:none;margin-left:7px;color:var(--muted);font-size:12px}}
 @keyframes blink{{0%,100%{{opacity:.2}}50%{{opacity:1}}}}
 /* input bar */
 .chat-input-bar{{border-top:1px solid var(--border);padding:10px;display:flex;flex-direction:column;gap:8px;flex-shrink:0;background:var(--surf)}}
@@ -3547,6 +3658,7 @@ tr.cloud-off td{{background:#0a1a2e!important;color:#22c55e!important;border-top
       <button class="clear-btn" id="resumeBtn" onclick="resumeTask()" style="display:none;font-size:9px;padding:1px 6px" title="Resume previous agent task">↩ Resume</button>
       <button class="clear-btn" id="fsBtn" onclick="toggleFullscreen()" title="Toggle fullscreen (F11)" style="font-size:15px;padding:2px 8px;line-height:1">⛶</button>
       <button class="clear-btn" id="ttsSpeakBtn" onclick="speakLastReply()" title="Read the last assistant reply aloud (BlueTTS)">🔊</button>
+      <button class="clear-btn" id="ttsLiveBtn" onclick="toggleTtsLive()" title="Play orchestrator handoff audio live in this browser">🎧 Live</button>
       <button class="clear-btn" id="clearBtn" onclick="clearConversation()" title="Clear conversation (/clear)">Clear</button>
     </div>
     <div class="chat-messages" id="messages" role="log" aria-live="polite" aria-label="Chat messages">
@@ -4946,6 +5058,12 @@ function appendMsg(role, text, statHtml) {{
 }}
 
 let _ttsAudio = null;
+let _ttsLiveEnabled = false;
+let _ttsLiveSince = 0;
+let _ttsLiveTimer = null;
+let _ttsLiveQueue = [];
+let _ttsLivePlaying = false;
+
 async function speakLastReply() {{
   const bubbles = document.querySelectorAll('.msg.assistant .bubble');
   const text = bubbles.length ? bubbles[bubbles.length - 1].innerText.trim() : '';
@@ -4964,17 +5082,100 @@ async function speakLastReply() {{
   }} catch(e) {{ console.warn('[tts]', e); }}
 }}
 
-function showTyping() {{
-  if (document.getElementById('typing-indicator')) return;
+function playNextTtsLive() {{
+  if (_ttsLivePlaying || !_ttsLiveQueue.length) return;
+  const event = _ttsLiveQueue.shift();
+  _ttsLivePlaying = true;
+  const audio = new Audio(event.url);
+  const done = () => {{ _ttsLivePlaying = false; playNextTtsLive(); }};
+  audio.onended = done;
+  audio.onerror = done;
+  audio.play().catch(e => {{ console.warn('[tts-live] playback blocked', e); done(); }});
+}}
+
+async function pollTtsLive() {{
+  if (!_ttsLiveEnabled) return;
+  try {{
+    const resp = await fetch('/api/tts/events?since=' + _ttsLiveSince);
+    const data = await resp.json();
+    if (!data.ok) return;
+    for (const event of (data.events || [])) {{
+      _ttsLiveSince = Math.max(_ttsLiveSince, event.seq || 0);
+      _ttsLiveQueue.push(event);
+    }}
+    if ((data.latest || 0) > _ttsLiveSince) _ttsLiveSince = data.latest;
+    playNextTtsLive();
+  }} catch(e) {{ console.warn('[tts-live]', e); }}
+}}
+
+async function toggleTtsLive() {{
+  _ttsLiveEnabled = !_ttsLiveEnabled;
+  const btn = document.getElementById('ttsLiveBtn');
+  if (_ttsLiveEnabled) {{
+    try {{
+      const Ctx = window.AudioContext || window.webkitAudioContext;
+      if (Ctx) {{ const ctx = new Ctx(); ctx.resume().catch(() => {{}}); }}
+    }} catch(e) {{}}
+    btn.textContent = '🎧 Live ON';
+    btn.style.color = 'var(--accent)';
+    try {{
+      const resp = await fetch('/api/tts/events?since=0');
+      const data = await resp.json();
+      _ttsLiveSince = data.latest || 0;
+    }} catch(e) {{ _ttsLiveSince = 0; }}
+    if (!_ttsLiveTimer) _ttsLiveTimer = setInterval(pollTtsLive, 1000);
+    pollTtsLive();
+  }} else {{
+    btn.textContent = '🎧 Live';
+    btn.style.color = '';
+    if (_ttsLiveTimer) clearInterval(_ttsLiveTimer);
+    _ttsLiveTimer = null;
+    _ttsLiveQueue = [];
+  }}
+}}
+
+let _typingTimer = null;
+let _typingStarted = 0;
+function setTypingStatus(status) {{
+  const div = document.getElementById('typing-indicator');
+  if (!div) {{ showTyping(status); return; }}
+  let label = div.querySelector('.typing-status');
+  if (!label) {{
+    label = document.createElement('span');
+    label.className = 'typing-status';
+    div.querySelector('.typing').appendChild(label);
+  }}
+  label.dataset.base = status;
+  label.textContent = status;
   const box = document.getElementById('messages');
-  const div = document.createElement('div');
-  div.className = 'msg assistant'; div.id = 'typing-indicator';
-  div.innerHTML = '<div class="typing"><span></span><span></span><span></span></div>';
-  box.appendChild(div);
-  div.scrollIntoView({{behavior:'smooth', block:'start'}});
+  if (box) box.appendChild(div);
+}}
+function showTyping(status) {{
+  let div = document.getElementById('typing-indicator');
+  if (!div) {{
+    const box = document.getElementById('messages');
+    div = document.createElement('div');
+    div.className = 'msg assistant'; div.id = 'typing-indicator';
+    div.innerHTML = '<div class="typing"><span></span><span></span><span></span><span class="typing-status">Working…</span></div>';
+    box.appendChild(div);
+    div.scrollIntoView({{behavior:'smooth', block:'start'}});
+    _typingStarted = Date.now();
+    if (_typingTimer) clearInterval(_typingTimer);
+    _typingTimer = setInterval(() => {{
+      const el = document.getElementById('typing-indicator');
+      if (!el) {{ clearInterval(_typingTimer); _typingTimer = null; return; }}
+      const label = el.querySelector('.typing-status');
+      if (label && label.dataset.base) {{
+        const secs = Math.floor((Date.now() - _typingStarted) / 1000);
+        label.textContent = label.dataset.base + ' · ' + secs + 's';
+      }}
+    }}, 1000);
+  }}
+  if (status) setTypingStatus(status);
 }}
 
 function removeTyping() {{
+  if (_typingTimer) {{ clearInterval(_typingTimer); _typingTimer = null; }}
   const el = document.getElementById('typing-indicator');
   if (el) el.remove();
 }}
@@ -5442,11 +5643,10 @@ async function sendMessage(taskIdOverride) {{
   setSendStop();
   appendMsg('user', text, '');
   conversationHistory.push({{role:'user', content:text}});
-  showTyping();
+  showTyping('Preparing request…');
 
   function ensureBubble() {{
     if (assistantDiv) return;
-    removeTyping();
     const box = document.getElementById('messages');
     assistantDiv = document.createElement('div');
     assistantDiv.className = 'msg assistant';
@@ -5545,6 +5745,7 @@ async function sendMessage(taskIdOverride) {{
                 showSecurityAlert(data.alert);
               }} else if (data.approval) {{
                 renderApproval(data);
+                setTypingStatus('Waiting for approval…');
               }} else if (data.type === 'approval_resolved') {{
                 markApprovalResolved(data.approval_id, data.status, data.message);
               }} else if (data.type === 'reset') {{
@@ -5568,10 +5769,13 @@ async function sendMessage(taskIdOverride) {{
                   mdiv.textContent = '\u26a0 ' + (data.message || '');
                   assistantDiv.insertBefore(mdiv, bubble);
                 }}
+              }} else if (data.type === 'phase') {{
+                setTypingStatus(data.phase || 'Working…');
               }} else if (data.reasoning) {{
                 updateThinking(data.reasoning);
+                setTypingStatus('Thinking…');
               }} else if (data.token) {{
-                removeTyping();
+                setTypingStatus('Writing response…');
                 if (thinkingBlock) thinkingBlock.open = false;
                 fullText += data.token;
                 ensureBubble();
@@ -5588,7 +5792,10 @@ async function sendMessage(taskIdOverride) {{
                 toolCount += 1;
                 if (data.name === 'generate_image' || data.name === 'edit_image') {{
                   startGenerationProgress(data.name, data.input);
-                }} else if (!fullText) showTyping();
+                  setTypingStatus('Generating image…');
+                }} else {{
+                  setTypingStatus('Running ' + data.name + '…');
+                }}
               }} else if (data.name && data.result) {{
                 let existing = null;
                 if (assistantDiv) {{
@@ -5611,7 +5818,8 @@ async function sendMessage(taskIdOverride) {{
                 }}
                 if (data.name === 'generate_image' || data.name === 'edit_image') {{
                   markGenerationProgressDone();
-                }} else if (!fullText) showTyping();
+                }}
+                setTypingStatus('Continuing…');
               }} else if (data.type === 'correction') {{
                 ensureBubble();
                 const corrDiv = document.createElement('div');
@@ -6590,6 +6798,56 @@ class DashboardHandler(_SuppressBrokenPipe, BaseHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(body)
 
+    def _handle_tts_events(self):
+        parsed = urllib.parse.urlparse(self.path)
+        qs = urllib.parse.parse_qs(parsed.query)
+        try:
+            since = max(0, int((qs.get("since") or ["0"])[0]))
+        except (TypeError, ValueError):
+            since = 0
+        if not TTS_ENABLED:
+            self._send_json(
+                {
+                    "ok": False,
+                    "enabled": False,
+                    "since": since,
+                    "latest": latest_tts_event_seq(),
+                    "events": [],
+                    "error": "local text-to-speech is disabled",
+                }
+            )
+            return
+        self._send_json(
+            {
+                "ok": True,
+                "since": since,
+                "latest": latest_tts_event_seq(),
+                "events": get_tts_events(since),
+                "role_voices": tts_client.ROLE_VOICES,
+            }
+        )
+
+    def _handle_tts_announce(self, raw_body):
+        if not TTS_ENABLED:
+            self._send_json(
+                {"ok": False, "error": "local text-to-speech is disabled"}, 503
+            )
+            return
+        try:
+            body = json.loads(raw_body or b"{}")
+        except Exception:
+            self._send_json({"ok": False, "error": "invalid JSON body"}, 400)
+            return
+        if not isinstance(body, dict):
+            self._send_json({"ok": False, "error": "invalid JSON body"}, 400)
+            return
+        try:
+            result = announce_tts_event(body)
+        except ValueError as exc:
+            self._send_json({"ok": False, "error": str(exc)}, 400)
+            return
+        self._send_json(result)
+
     def _handle_tts_status(self):
         if not TTS_ENABLED:
             self._send_json(
@@ -6679,8 +6937,15 @@ class DashboardHandler(_SuppressBrokenPipe, BaseHTTPRequestHandler):
             text = tts_client.strip_markdown(body.get("text") or "")
             if text and not voice and role in tts_client.ROLE_VOICES:
                 selected = tts_client.normalize_voice(tts_client.ROLE_VOICES[role])
-                if not re.match(r"^\[[a-z]+\]\s", text):
-                    text = f"[{selected}] {text}"
+                label = tts_client.ROLE_LABELS.get(role, "")
+                marker = re.match(r"^(\[[a-z]+\]\s*)", text)
+                if marker:
+                    prefix = marker.group(1)
+                    remainder = text[marker.end():]
+                    if label and not remainder.startswith(label + ". "):
+                        text = f"{prefix}{label}. {remainder}"
+                else:
+                    text = f"[{selected}] {label}. {text}" if label else f"[{selected}] {text}"
         if not text:
             self._send_json({"ok": False, "error": "no speakable text"}, 400)
             return
@@ -6835,6 +7100,9 @@ class DashboardHandler(_SuppressBrokenPipe, BaseHTTPRequestHandler):
             return
         if path == "/api/diffusion/status":
             self._handle_diffusion_status()
+            return
+        if path == "/api/tts/events":
+            self._handle_tts_events()
             return
         if path == "/api/tts/status":
             self._handle_tts_status()
@@ -7669,6 +7937,9 @@ class DashboardHandler(_SuppressBrokenPipe, BaseHTTPRequestHandler):
             return
         raw_body = self.rfile.read(length)
 
+        if self.path == "/api/tts/announce":
+            self._handle_tts_announce(raw_body)
+            return
         if self.path == "/api/tts/speak":
             self._handle_tts_speak(raw_body)
             return
@@ -9128,6 +9399,10 @@ class DashboardHandler(_SuppressBrokenPipe, BaseHTTPRequestHandler):
 
                     called_tools = set()
                     full_output = ""
+                    best_text = ""
+                    text_after_last_tool = ""
+                    tool_records = []
+                    done_emitted = False
                     raw_repair_failed = False
                     step_counter = ckpt_mgr.latest_step_number(task_id)
                     config = _agent_config(task_id)
@@ -9150,10 +9425,14 @@ class DashboardHandler(_SuppressBrokenPipe, BaseHTTPRequestHandler):
                         emit({"type": "warning", "warning": agent_warning})
 
                     async def _invoke_and_stream(msgs, capture_only=False):
-                        nonlocal full_output, step_counter
+                        nonlocal full_output, step_counter, best_text, text_after_last_tool
                         local_tools = set()
                         collected = []
+                        timeline = []
                         llm_started = time.monotonic()
+                        first_chunk_logged = False
+                        tool_started = {}
+                        phase_sent = set()
                         try:
                             async with asyncio.timeout(AGENT_TIMEOUT):
                                     stream_input = (
@@ -9169,6 +9448,30 @@ class DashboardHandler(_SuppressBrokenPipe, BaseHTTPRequestHandler):
                                         kind = event.get("event", "")
                                         if kind == "on_chat_model_stream":
                                             chunk = event.get("data", {}).get("chunk", None)
+                                            if chunk and not first_chunk_logged:
+                                                first_chunk_logged = True
+                                                print(
+                                                    f"[{datetime.now().strftime('%H:%M:%S')}] [timing] "
+                                                    f"first stream event {time.monotonic() - llm_started:.2f}s",
+                                                    flush=True,
+                                                )
+                                            if chunk and not capture_only:
+                                                call_chunks = getattr(chunk, "tool_call_chunks", None) or []
+                                                for call_chunk in call_chunks:
+                                                    call_name = (
+                                                        call_chunk.get("name")
+                                                        if isinstance(call_chunk, dict)
+                                                        else getattr(call_chunk, "name", None)
+                                                    )
+                                                    if call_name and (call_name, "write") not in phase_sent:
+                                                        phase_sent.add((call_name, "write"))
+                                                        emit({'type': 'phase', 'phase': f'writing a tool call: {call_name}'})
+                                                        print(
+                                                            f"[{datetime.now().strftime('%H:%M:%S')}] [timing] "
+                                                            f"tool call streamed {time.monotonic() - llm_started:.2f}s ({call_name})",
+                                                            flush=True,
+                                                        )
+                                                        break
                                             if chunk:
                                                 reasoning = extract_reasoning(chunk)
                                                 if reasoning and not capture_only:
@@ -9190,6 +9493,7 @@ class DashboardHandler(_SuppressBrokenPipe, BaseHTTPRequestHandler):
                                                     text = text.get("text", "")
                                                 if isinstance(text, str) and text:
                                                     collected.append(text)
+                                                    timeline.append(("text", text))
                                                     raw_markers = (
                                                         "<function=",
                                                         "<parameter=",
@@ -9217,7 +9521,22 @@ class DashboardHandler(_SuppressBrokenPipe, BaseHTTPRequestHandler):
                                                 )
                                             else:
                                                 cmd = str(tool_input)[:200]
+                                            timeline.append(("tool", tool_name))
+                                            tool_records.append({
+                                                "name": tool_name,
+                                                "run_id": tool_run_id,
+                                                "input": str(cmd)[:400],
+                                                "result": "",
+                                            })
+                                            tool_started[tool_run_id] = time.monotonic()
                                             print(f"[{datetime.now().strftime('%H:%M:%S')}] [Agent] \U0001f9e0 {tool_name}({cmd[:120]})", flush=True)
+                                            print(
+                                                f"[{datetime.now().strftime('%H:%M:%S')}] [timing] "
+                                                f"tool {tool_name} started at {time.monotonic() - llm_started:.2f}s",
+                                                flush=True,
+                                            )
+                                            if not capture_only:
+                                                emit({'type': 'phase', 'phase': f'running {tool_name}'})
                                             if tool_name == "shell_exec" and not _shell_is_safe(cmd):
                                                 emit({'name': tool_name, 'input': cmd, 'shell_mode': shell_mode, 'run_id': tool_run_id})
                                                 emit({'name': tool_name, 'result': 'Blocked by safety policy (dangerous pattern).', 'type': 'tool_result', 'run_id': tool_run_id})
@@ -9237,7 +9556,20 @@ class DashboardHandler(_SuppressBrokenPipe, BaseHTTPRequestHandler):
                                             output_str = (
                                                 str(output_data)[:2000] if output_data else ""
                                             )
+                                            for record in reversed(tool_records):
+                                                if record.get("run_id") == tool_run_id:
+                                                    record["result"] = output_str
+                                                    break
                                             print(f"[{datetime.now().strftime('%H:%M:%S')}] [Agent] \u2705 {tool_name} -> {output_str[:80]}", flush=True)
+                                            started_at = tool_started.pop(tool_run_id, None)
+                                            if started_at is not None:
+                                                print(
+                                                    f"[{datetime.now().strftime('%H:%M:%S')}] [timing] "
+                                                    f"tool {tool_name} completed in {time.monotonic() - started_at:.2f}s",
+                                                    flush=True,
+                                                )
+                                            if not capture_only:
+                                                emit({'type': 'phase', 'phase': f'finished {tool_name}'})
                                             emit({'name': tool_name, 'result': output_str, 'type': 'tool_result', 'run_id': tool_run_id})
                                             image_done_response = ""
                                             if (
@@ -9265,13 +9597,24 @@ class DashboardHandler(_SuppressBrokenPipe, BaseHTTPRequestHandler):
                                                 print(f"[{datetime.now().strftime('%H:%M:%S')}] [checkpoint] save error: {cp_err}", flush=True)
                                             if image_done_response:
                                                 full_output = image_done_response
+                                                best_text = image_done_response
+                                                text_after_last_tool = image_done_response
                                                 print(
                                                     f"[{datetime.now().strftime('%H:%M:%S')}] [Agent] 🖼 Image ready; stopping after one generation",
                                                     flush=True,
                                                 )
-                                                emit({'response': image_done_response, 'type': 'done'})
                                                 raise _AgentAbort()
-                            full_output = "".join(collected)
+                            candidate = "".join(collected)
+                            segment = agent_text_after_last_tool(timeline)
+                            full_output, best_text, text_after_last_tool = (
+                                agent_merge_text_state(
+                                    full_output,
+                                    best_text,
+                                    text_after_last_tool,
+                                    candidate,
+                                    segment,
+                                )
+                            )
                             print(
                                 f"[{datetime.now().strftime('%H:%M:%S')}] [timing] agent LLM stream "
                                 f"{time.monotonic() - llm_started:.2f}s tools={len(local_tools)}",
@@ -9296,11 +9639,86 @@ class DashboardHandler(_SuppressBrokenPipe, BaseHTTPRequestHandler):
                             raise _AgentAbort()
                         return local_tools
 
+                    def _clean_final_text(text):
+                        text = (text or "").strip()
+                        if not text:
+                            return ""
+                        if extract_textual_tool_calls(text):
+                            cleaned = strip_textual_tool_calls(text)
+                            text = cleaned if _has_substantive_text(cleaned) else ""
+                        return text.strip()
+
+                    async def _request_final_summary():
+                        emit({'type': 'phase', 'phase': 'finalizing answer'})
+                        try:
+                            from langchain_openai import ChatOpenAI
+                            from agent_handler import chat_client_kwargs
+                        except Exception:
+                            return ""
+                        digest = agent_tool_digest(tool_records)
+                        prompt = (
+                            "The assistant used tools but ended without a final answer. "
+                            "Do not call tools. Reply with a concise final answer summarizing "
+                            "what was completed, including key values, file paths, and image "
+                            "URLs from the tool results.\n\n"
+                            f"User request: {goal}\n\nTool results:\n{digest}"
+                        )
+                        messages = [
+                            SystemMessage(
+                                content="You are writing the final user-facing summary. Never call tools."
+                            ),
+                            HumanMessage(content=prompt),
+                        ]
+                        try:
+                            llm = ChatOpenAI(
+                                model=model_name or DEFAULT_MODEL,
+                                openai_api_base=get_current_upstream() + "/v1",
+                                openai_api_key=get_current_api_key() or "not-needed",
+                                temperature=0.2,
+                                streaming=False,
+                                max_tokens=600,
+                                **chat_client_kwargs(),
+                            )
+                            result = await asyncio.to_thread(llm.invoke, messages)
+                            return _clean_final_text(_content_text(result.content))
+                        except Exception as exc:
+                            print(
+                                f"[{datetime.now().strftime('%H:%M:%S')}] [Agent] summary failed: {exc}",
+                                flush=True,
+                            )
+                            return ""
+
+                    def _finalize_and_emit():
+                        nonlocal done_emitted, full_output
+                        if done_emitted:
+                            return full_output
+                        final_output = _clean_final_text(
+                            text_after_last_tool or best_text or full_output
+                        )
+                        if not final_output:
+                            final_output = agent_completion_text(
+                                len(called_tools), goal=goal, tool_records=tool_records
+                            )
+                        full_output = final_output
+                        emit_alerts()
+                        tok_count = len(final_output.split())
+                        print(
+                            f"[{datetime.now().strftime('%H:%M:%S')}] [Agent] \U0001f3af Done "
+                            f"({tok_count} words, {len(called_tools)} tools)",
+                            flush=True,
+                        )
+                        try:
+                            emit({"response": final_output, "type": "done"})
+                        except _AgentAbort:
+                            pass
+                        done_emitted = True
+                        return final_output
+
                     # First pass: stream + track tools
                     try:
                         called_tools = await _invoke_and_stream(input_messages)
                     except _AgentAbort:
-                        return full_output
+                        return _finalize_and_emit()
 
                     # Human-in-the-loop approvals: the agent graph pauses at
                     # high-impact tool calls; resolve decisions and resume.
@@ -9324,7 +9742,7 @@ class DashboardHandler(_SuppressBrokenPipe, BaseHTTPRequestHandler):
                                 Command(resume={"decisions": decisions})
                             )
                     except _AgentAbort:
-                        return full_output
+                        return _finalize_and_emit()
 
                     # Layer 1a: Repair raw textual tool calls
                     try:
@@ -9374,11 +9792,14 @@ class DashboardHandler(_SuppressBrokenPipe, BaseHTTPRequestHandler):
                         if raw_calls:
                             raw_repair_failed = True
                             full_output = malformed_tool_call_message(raw_calls)
+                            best_text = full_output
+                            text_after_last_tool = full_output
                             emit({"type": "warning", "warning": full_output})
                         else:
                             full_output = strip_textual_tool_calls(full_output)
+                            best_text = full_output
                     except _AgentAbort:
-                        return full_output
+                        return _finalize_and_emit()
 
                     # Layer 1: Check tool usage and re-run if needed
                     try:
@@ -9399,7 +9820,7 @@ class DashboardHandler(_SuppressBrokenPipe, BaseHTTPRequestHandler):
                             blocked, reason = _check_tool_usage(message, called_tools)
                             retry_count += 1
                     except _AgentAbort:
-                        return full_output
+                        return _finalize_and_emit()
 
                     # Layer 2: Self-correction loop (skip for trivial responses, no-op for deep scans)
                     final_output = full_output
@@ -9479,32 +9900,20 @@ class DashboardHandler(_SuppressBrokenPipe, BaseHTTPRequestHandler):
                                 print(f"[{datetime.now().strftime('%H:%M:%S')}] [Agent] \u2705 All issues resolved after {correction_retries} correction(s)", flush=True)
                             final_output = full_output
                         except _AgentAbort:
-                            final_output = full_output
-                            return full_output
+                            return _finalize_and_emit()
                         except ImportError:
                             pass
                         except Exception as scan_e:
                             emit({'error': str(scan_e), 'type': 'correction'})
 
-                    if not final_output.strip():
-                        final_output = agent_completion_text(len(called_tools))
-
-                    leftover_raw = extract_textual_tool_calls(final_output)
-                    if leftover_raw:
-                        cleaned = strip_textual_tool_calls(final_output)
-                        final_output = (
-                            cleaned
-                            if re.search(r"[A-Za-z]{3,}", cleaned)
-                            else malformed_tool_call_message(leftover_raw)
-                        )
-                    emit_alerts()
-                    tok_count = len(final_output.split())
-                    print(f"[{datetime.now().strftime('%H:%M:%S')}] [Agent] \U0001f3af Done ({tok_count} words, {len(called_tools)} tools)", flush=True)
-                    try:
-                        emit({'response': final_output, 'type': 'done'})
-                    except _AgentAbort:
-                        pass
-                    return final_output
+                    if called_tools and not _has_substantive_text(
+                        _clean_final_text(text_after_last_tool)
+                    ):
+                        summary = await _request_final_summary()
+                        if summary:
+                            best_text = summary
+                            text_after_last_tool = summary
+                    return _finalize_and_emit()
 
                 print(f"[{datetime.now().strftime('%H:%M:%S')}] [Agent] 🤖 Agent session started for model '{model_name}'", flush=True)
                 if not is_stream:

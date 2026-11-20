@@ -306,6 +306,7 @@ def test_run_cycle_threads_use_opencode_and_agent_modes(tmp_path, monkeypatch):
             "--use-opencode",
             "--artifacts-dir",
             str(tmp_path / "artifacts"),
+            "--no-tts-live",
         ]
     )
 
