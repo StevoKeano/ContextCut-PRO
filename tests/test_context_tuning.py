@@ -730,6 +730,12 @@ class TestRunPythonInspectionDedup:
         from agent_handler import normalize_python_code, python_code_hash, python_reads_files
 
         assert normalize_python_code("  a  =  1\n b=2 ") == "a=1b=2"
+        assert normalize_python_code('print(open("a.py").read())') == (
+            'print(open("a.py").read())'
+        )
+        assert normalize_python_code('print( open( "a.py" ).read() )') == (
+            normalize_python_code('print(open("a.py").read())')
+        )
         assert python_code_hash("print( open('a').read() )") == python_code_hash(
             "print(open('a').read())"
         )

@@ -5,12 +5,14 @@ Uses the new `create_agent` API from LangChain 1.3+ (langgraph-based).
 All tools call ContextCut-PRO internals directly.
 """
 
+import io
 import os
 import re
 import json
 import uuid
 import hashlib
 import shlex
+import tokenize
 import subprocess
 import shutil
 import threading
@@ -247,17 +249,21 @@ def cap_thinking_budget(extra_body: dict, ceiling: int) -> bool:
 
 
 def normalize_python_code(code) -> str:
-    """Drop whitespace outside string literals so formatting variants match."""
+    """Normalize code by joining significant token strings."""
+    ignored = {
+        tokenize.NL,
+        tokenize.NEWLINE,
+        tokenize.INDENT,
+        tokenize.DEDENT,
+        tokenize.COMMENT,
+        tokenize.ENCODING,
+    }
     text = str(code or "")
-    parts = []
-    last = 0
-    string_pattern = r"(['\"])(?:\\.|(?!\1).)*\1"
-    for match in re.finditer(string_pattern, text, re.DOTALL):
-        parts.append(re.sub(r"\s+", "", text[last : match.start()]))
-        parts.append(match.group(0))
-        last = match.end()
-    parts.append(re.sub(r"\s+", "", text[last:]))
-    return "".join(parts)
+    try:
+        tokens = tokenize.generate_tokens(io.StringIO(text).readline)
+        return "".join(token.string for token in tokens if token.type not in ignored)
+    except (tokenize.TokenError, IndentationError):
+        return re.sub(r"\s+", "", text)
 
 
 def python_code_hash(code) -> str:
