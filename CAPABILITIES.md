@@ -190,7 +190,7 @@ Tools: `knowledge_search`, `knowledge_search_structured`, `knowledge_list_files`
 | `CONTEXTCUT_AGENT_WORKSPACE` | proxy dir | Agent working directory |
 | `CONTEXTCUT_TOOL_OUTPUT_MAX_CHARS` | `4000` | Tool-output clamp |
 | `CONTEXTCUT_READ_FILE_OUTPUT_MAX_CHARS` | `12000` | `read_file` clamp |
-| `CONTEXTCUT_TOOL_TURN_REASONING` | `low` | Reasoning effort on tool-result turns |
+| `CONTEXTCUT_TOOL_TURN_REASONING` | `none` | Reasoning effort on tool-result turns (STRATA suppresses thinking after tools) |
 | `CONTEXTCUT_TOOL_TURN_MAX_TOKENS` | `8192` | Max tokens on tool-result turns |
 | `CONTEXTCUT_USE_OPENCODE` | `0` | Route agent turns through OpenCode |
 | `TTS_BASE_URL` | `http://localhost:8000/v1` | BlueTTS OpenAI-compatible endpoint |

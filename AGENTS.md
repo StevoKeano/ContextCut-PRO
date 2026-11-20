@@ -57,7 +57,7 @@
 - `CONTEXTCUT_TOOL_OUTPUT_MAX_CHARS` — default tool output clamp (default 4000; 0 disables)
 - `CONTEXTCUT_READ_FILE_OUTPUT_MAX_CHARS` — `read_file` clamp (default 12000)
 - `CONTEXTCUT_SEARCH_OUTPUT_MAX_CHARS` — `vector_search` clamp (default 6000)
-- `CONTEXTCUT_TOOL_TURN_REASONING` — reasoning effort on tool-result turns (default `low`; `off` disables; skipped for Ollama)
+- `CONTEXTCUT_TOOL_TURN_REASONING` — reasoning effort on tool-result turns (default `none`; `off`/`none` disables; STRATA always disables `<think>` after tool results; skipped for Ollama)
 - `CONTEXTCUT_TOOL_TURN_MAX_TOKENS` — `max_tokens` cap on tool-result turns (default 8192; 0 disables)
 
 

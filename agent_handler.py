@@ -14,6 +14,7 @@ import shlex
 import subprocess
 import shutil
 import threading
+import time
 from datetime import datetime
 from pathlib import Path
 from typing import Any
@@ -74,7 +75,7 @@ READ_FILE_OUTPUT_MAX_CHARS = _env_int("CONTEXTCUT_READ_FILE_OUTPUT_MAX_CHARS", 1
 SEARCH_OUTPUT_MAX_CHARS = _env_int("CONTEXTCUT_SEARCH_OUTPUT_MAX_CHARS", 6000)
 TOOL_TURN_MAX_TOKENS = _env_int("CONTEXTCUT_TOOL_TURN_MAX_TOKENS", 8192)
 TOOL_TURN_REASONING = os.environ.get(
-    "CONTEXTCUT_TOOL_TURN_REASONING", "low"
+    "CONTEXTCUT_TOOL_TURN_REASONING", "none"
 ).strip().lower()
 if TOOL_TURN_REASONING in {"", "default", "off", "none", "false"}:
     TOOL_TURN_REASONING = ""
@@ -94,6 +95,7 @@ def _is_strata_model(model_name=None, upstream=None, provider=None) -> bool:
         or "ds4" in name
         or "strata" in host
         or "strata" in prov
+        or "deepseek" in prov
     )
 
 
@@ -109,11 +111,9 @@ def reasoning_request_overrides(
         if normalized and normalized != "default":
             return {"reasoning_effort": normalized}
         return {}
-    if tool_turn and not normalized:
+    if tool_turn or normalized in {"none", "off", "false"}:
         return {"enable_thinking": False}
-    if normalized in {"", "default", "none", "off", "false"}:
-        if normalized in {"none", "off", "false"}:
-            return {"enable_thinking": False}
+    if normalized in {"", "default"}:
         return {"reasoning_effort": 1}
     budgets = {"low": 1, "medium": 20, "high": 50, "max": 100}
     if normalized in budgets:
@@ -405,6 +405,98 @@ class CheckpointCallbackHandler(BaseCallbackHandler):
         if saved is None:
             print(f"[checkpoint] WARNING checkpoint save failed for task {self.task_id} "
                   f"step {self.step_number}", flush=True)
+
+
+class AgentTelemetryCallbackHandler(BaseCallbackHandler):
+    def __init__(self, reasoning_mode: str, model_used: str):
+        self.reasoning_mode = reasoning_mode
+        self.model_used = model_used
+        self._starts = {}
+        self._first_tokens = set()
+        self._token_counts = {}
+
+    @staticmethod
+    def _run_id(kwargs) -> str:
+        return str(kwargs.get("run_id") or "default")
+
+    @staticmethod
+    def _usage_tokens(response) -> int | None:
+        llm_output = getattr(response, "llm_output", None) or {}
+        if isinstance(llm_output, dict):
+            usage = llm_output.get("token_usage") or llm_output.get("usage") or {}
+            if isinstance(usage, dict):
+                for key in ("completion_tokens", "output_tokens", "total_tokens"):
+                    if usage.get(key):
+                        return int(usage[key])
+        try:
+            generations = getattr(response, "generations", None) or []
+            if generations and generations[0]:
+                message = getattr(generations[0][0], "message", None)
+                metadata = getattr(message, "usage_metadata", None) or {}
+                for key in ("output_tokens", "total_tokens"):
+                    if metadata.get(key):
+                        return int(metadata[key])
+        except Exception:
+            pass
+        return None
+
+    def on_llm_start(self, serialized: dict, prompts: list, **kwargs) -> None:
+        run_id = self._run_id(kwargs)
+        self._starts[run_id] = time.monotonic()
+        self._token_counts[run_id] = 0
+        self._first_tokens.discard(run_id)
+        print(
+            f"[{datetime.now().strftime('%H:%M:%S')}] [telemetry] llm start "
+            f"model={self.model_used} reasoning={self.reasoning_mode}",
+            flush=True,
+        )
+
+    def on_llm_new_token(self, token: str, **kwargs) -> None:
+        run_id = self._run_id(kwargs)
+        started = self._starts.get(run_id)
+        if started is None:
+            return
+        self._token_counts[run_id] = self._token_counts.get(run_id, 0) + 1
+        if run_id not in self._first_tokens:
+            self._first_tokens.add(run_id)
+            print(
+                f"[{datetime.now().strftime('%H:%M:%S')}] [telemetry] ttft "
+                f"{time.monotonic() - started:.2f}s reasoning={self.reasoning_mode}",
+                flush=True,
+            )
+
+    def on_llm_end(self, response: Any, **kwargs) -> None:
+        run_id = self._run_id(kwargs)
+        started = self._starts.pop(run_id, None)
+        if started is None:
+            return
+        elapsed = max(time.monotonic() - started, 0.0001)
+        tokens = self._usage_tokens(response)
+        if tokens is None:
+            tokens = self._token_counts.pop(run_id, 0)
+        else:
+            self._token_counts.pop(run_id, None)
+        self._first_tokens.discard(run_id)
+        print(
+            f"[{datetime.now().strftime('%H:%M:%S')}] [telemetry] llm end "
+            f"{elapsed:.2f}s tokens={tokens} rate={tokens / elapsed:.1f} tok/s "
+            f"reasoning={self.reasoning_mode}",
+            flush=True,
+        )
+
+    def on_llm_error(self, error: BaseException, **kwargs) -> None:
+        run_id = self._run_id(kwargs)
+        started = self._starts.pop(run_id, None)
+        self._token_counts.pop(run_id, None)
+        self._first_tokens.discard(run_id)
+        if started is None:
+            return
+        print(
+            f"[{datetime.now().strftime('%H:%M:%S')}] [telemetry] llm error "
+            f"{time.monotonic() - started:.2f}s reasoning={self.reasoning_mode}: {error}",
+            flush=True,
+        )
+
 
 def startup_cleanup():
     """Purge checkpoints older than 24h on proxy start."""
@@ -2217,6 +2309,7 @@ You have access to:
 - get_context_logs: Retrieve conversation history for a session
 - get_session_stats: Token counts and context usage for a session
 - ingest_file: Re-ingest a knowledge file into Qdrant
+- Use write_file to write multi-line files. For files longer than ~150 lines, write the scaffold first with write_file and append sections in chunks of ~100–120 lines per append_file call so no single tool call exceeds ~1,500 output tokens.
 - list_knowledge: List all files in KB with chunk counts from Qdrant
 - delete_knowledge: Delete vectors for a file from Qdrant
 - contextcut_help: Return ContextCut PRO's capabilities and usage guide
@@ -2430,14 +2523,29 @@ if AgentMiddleware is not None:
             updates = {}
             if self.provider != "ollama":
                 extra_body = dict(getattr(model, "extra_body", None) or {})
-                if extra_body.get("enable_thinking") is False:
+                model_name = self.model_name or getattr(model, "model_name", None)
+                upstream = self.upstream or getattr(model, "openai_api_base", None)
+                if _is_strata_model(model_name, upstream, self.provider):
                     extra_body.pop("reasoning_effort", None)
+                    extra_body.pop("budget_tokens", None)
+                    extra_body.update(
+                        reasoning_request_overrides(
+                            TOOL_TURN_REASONING,
+                            model_name=model_name,
+                            upstream=upstream,
+                            provider=self.provider,
+                            tool_turn=True,
+                        )
+                    )
+                    model_kwargs = dict(getattr(model, "model_kwargs", None) or {})
+                    model_kwargs["extra_body"] = extra_body
                     updates["extra_body"] = extra_body
+                    updates["model_kwargs"] = model_kwargs
                 elif TOOL_TURN_REASONING:
                     overrides = reasoning_request_overrides(
                         TOOL_TURN_REASONING,
-                        model_name=self.model_name or getattr(model, "model_name", None),
-                        upstream=self.upstream or getattr(model, "openai_api_base", None),
+                        model_name=model_name,
+                        upstream=upstream,
                         provider=self.provider,
                         tool_turn=True,
                     )
@@ -2512,12 +2620,16 @@ def build_agent(model_name: str = None, upstream: str = None,
         **extra,
         **chat_client_kwargs(),
     )
+    reasoning_mode = describe_reasoning_overrides(
+        reasoning_effort, model_name, upstream, provider
+    )
+    tool_reasoning_mode = describe_reasoning_overrides(
+        TOOL_TURN_REASONING, model_name, upstream, provider, tool_turn=True
+    )
     if _is_strata_model(model_name, upstream, provider):
         print(
             f"[{datetime.now().strftime('%H:%M:%S')}] [Agent] reasoning: "
-            f"{describe_reasoning_overrides(reasoning_effort, model_name, upstream, provider)}"
-            f" | tool turns: "
-            f"{describe_reasoning_overrides(TOOL_TURN_REASONING, model_name, upstream, provider, tool_turn=True)}",
+            f"{reasoning_mode} | tool turns: {tool_reasoning_mode}",
             flush=True,
         )
 
@@ -2553,11 +2665,19 @@ def build_agent(model_name: str = None, upstream: str = None,
     )
     agent.recursion_limit = 50
 
-    if task_id:
-        handler = CheckpointCallbackHandler(
-            task_id, goal or "", model_name or "qwen3:14b-q8_0"
+    callbacks = [
+        AgentTelemetryCallbackHandler(
+            reasoning_mode=reasoning_mode,
+            model_used=model_name or "qwen3:14b-q8_0",
         )
-        agent = agent.with_config({"callbacks": [handler]})
+    ]
+    if task_id:
+        callbacks.append(
+            CheckpointCallbackHandler(
+                task_id, goal or "", model_name or "qwen3:14b-q8_0"
+            )
+        )
+    agent = agent.with_config({"callbacks": callbacks})
 
     return agent
 

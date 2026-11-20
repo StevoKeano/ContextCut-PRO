@@ -19,7 +19,12 @@ class TestBuildAgent:
         mock_create_agent.return_value = mock_agent
 
         result = build_agent(model_name="test-model", upstream="http://localhost:11434", api_key="test-key")
-        assert result == mock_agent
+        assert result == mock_agent.with_config.return_value
+        callbacks = mock_agent.with_config.call_args.args[0]["callbacks"]
+        assert any(
+            type(item).__name__ == "AgentTelemetryCallbackHandler"
+            for item in callbacks
+        )
         mock_chat.assert_called_once()
         mock_create_agent.assert_called_once()
 
@@ -73,38 +78,71 @@ class TestBuildAgent:
 
 
 class TestStrataReasoning:
-    def test_none_disables_thinking(self):
+    @pytest.mark.parametrize("value", ["none", "off", "false"])
+    def test_disabled_values_authoritatively_disable_thinking(self, value):
         from agent_handler import reasoning_request_overrides
 
         assert reasoning_request_overrides(
-            "none", model_name="deepseek-v4.1-flash"
+            value, model_name="deepseek-v4.1-flash"
         ) == {"enable_thinking": False}
 
-    def test_low_maps_to_small_budget(self):
+    @pytest.mark.parametrize(
+        ("value", "budget"),
+        [("low", 1), ("medium", 20), ("high", 50), ("max", 100)],
+    )
+    def test_preset_budgets(self, value, budget):
         from agent_handler import reasoning_request_overrides
 
         assert reasoning_request_overrides(
-            "low", model_name="deepseek-v4.1-flash"
+            value, model_name="deepseek-v4.1-flash"
+        ) == {"reasoning_effort": budget}
+
+    def test_default_budget_matches_low_preset(self):
+        from agent_handler import reasoning_request_overrides
+
+        assert reasoning_request_overrides(
+            "default", model_name="deepseek-v4.1-flash"
         ) == {"reasoning_effort": 1}
 
-    def test_high_and_max_map_to_larger_budgets(self):
+    @pytest.mark.parametrize(
+        ("value", "budget"), [("0", 1), ("50", 50), ("5000", 100)]
+    )
+    def test_raw_budget_is_clamped(self, value, budget):
         from agent_handler import reasoning_request_overrides
 
         assert reasoning_request_overrides(
-            "high", model_name="deepseek-v4.1-flash"
-        ) == {"reasoning_effort": 50}
-        assert reasoning_request_overrides(
-            "max", model_name="deepseek-v4.1-flash"
-        ) == {"reasoning_effort": 100}
+            value, model_name="deepseek-v4.1-flash"
+        ) == {"reasoning_effort": budget}
 
-    def test_tool_turn_none_keeps_thinking_disabled(self):
+    def test_invalid_value_falls_back_to_low_preset(self):
         from agent_handler import reasoning_request_overrides
 
         assert reasoning_request_overrides(
-            "none",
+            "nonsense", model_name="deepseek-v4.1-flash"
+        ) == {"reasoning_effort": 1}
+
+    @pytest.mark.parametrize("value", ["", "low", "high", "max"])
+    def test_tool_turn_always_disables_strata_thinking(self, value):
+        from agent_handler import reasoning_request_overrides
+
+        assert reasoning_request_overrides(
+            value,
             model_name="deepseek-v4.1-flash",
             tool_turn=True,
         ) == {"enable_thinking": False}
+
+    def test_describe_reasoning_modes(self):
+        from agent_handler import describe_reasoning_overrides
+
+        assert describe_reasoning_overrides(
+            "none", model_name="deepseek-v4.1-flash"
+        ) == "thinking disabled"
+        assert describe_reasoning_overrides(
+            "max", model_name="deepseek-v4.1-flash"
+        ) == "budget 100"
+        assert describe_reasoning_overrides(
+            "low", model_name="deepseek-v4.1-flash", tool_turn=True
+        ) == "thinking disabled"
 
     def test_non_strata_values_are_unchanged(self):
         from agent_handler import reasoning_request_overrides
@@ -131,6 +169,92 @@ class TestStrataReasoning:
         call_kwargs = mock_chat.call_args[1]
         assert call_kwargs["extra_body"]["enable_thinking"] is False
         assert "reasoning_effort" not in call_kwargs["extra_body"]
+
+
+class TestStrataToolTurnSuppression:
+    @staticmethod
+    def _request(extra_body):
+        from langchain_core.messages import ToolMessage
+
+        class FakeModel:
+            def __init__(self, body):
+                self.extra_body = dict(body)
+                self.max_tokens = None
+
+            def model_copy(self, update=None):
+                model = FakeModel(self.extra_body)
+                for key, value in (update or {}).items():
+                    setattr(model, key, value)
+                return model
+
+        class FakeRequest:
+            def __init__(self, model, messages):
+                self.model = model
+                self.messages = messages
+
+            def override(self, *, model):
+                self.model = model
+                return self
+
+        return FakeRequest(
+            FakeModel(extra_body),
+            [
+                ToolMessage(
+                    content="ok", name="shell_exec", tool_call_id="tool-1", id="tool-1"
+                )
+            ],
+        )
+
+    def test_clears_budgets_and_disables_thinking_after_tool_message(self):
+        from agent_handler import ContextTuningMiddleware
+
+        middleware = ContextTuningMiddleware(
+            provider="Custom",
+            model_name="deepseek-v4.1-flash",
+            upstream="http://192.168.137.1:8080",
+        )
+        tuned = middleware._tune_model_request(
+            self._request(
+                {
+                    "enable_thinking": True,
+                    "reasoning_effort": 4096,
+                    "budget_tokens": 8192,
+                }
+            )
+        )
+        assert tuned.model.extra_body == {"enable_thinking": False}
+
+
+class TestAgentTelemetry:
+    def test_logs_ttft_and_token_rate(self, capsys):
+        from agent_handler import AgentTelemetryCallbackHandler
+
+        handler = AgentTelemetryCallbackHandler("thinking disabled", "deepseek-v4.1-flash")
+        response = MagicMock()
+        response.llm_output = {"token_usage": {"completion_tokens": 10}}
+        handler.on_llm_start({}, [], run_id="run-1")
+        handler.on_llm_new_token("a", run_id="run-1")
+        handler.on_llm_end(response, run_id="run-1")
+
+        output = capsys.readouterr().out
+        assert "[telemetry] llm start" in output
+        assert "[telemetry] ttft" in output
+        assert "[telemetry] llm end" in output
+        assert "tokens=10" in output
+        assert "tok/s" in output
+        assert "reasoning=thinking disabled" in output
+
+    @patch("agent_handler.ChatOpenAI")
+    @patch("agent_handler.create_agent")
+    def test_build_agent_attaches_telemetry(self, mock_create_agent, mock_chat):
+        from agent_handler import AgentTelemetryCallbackHandler, build_agent
+
+        mock_agent = MagicMock()
+        mock_create_agent.return_value = mock_agent
+        build_agent(upstream="http://localhost:11434")
+
+        callbacks = mock_agent.with_config.call_args.args[0]["callbacks"]
+        assert any(isinstance(item, AgentTelemetryCallbackHandler) for item in callbacks)
 
 
 class TestStreamChunkTimeoutConfig:
@@ -204,7 +328,7 @@ class TestContextTuningWiring:
         )
 
         call_kwargs = mock_chat.call_args[1]
-        assert call_kwargs["extra_body"] == {"reasoning_effort": "high"}
+        assert call_kwargs["extra_body"] == {"reasoning_effort": 50}
         assert call_kwargs["max_tokens"] == 24576
 
         middleware = mock_create_agent.call_args[1]["middleware"]

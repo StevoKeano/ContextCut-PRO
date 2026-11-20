@@ -168,7 +168,7 @@ class TestModelCallTuning:
             max_tokens=24576,
         )
         out = mw.wrap_model_call(request, lambda req: req)
-        assert out.model.extra_body["reasoning_effort"] == "low"
+        assert out.model.extra_body == {"enable_thinking": False}
         assert out.model.max_tokens == 8192
 
     def test_tool_turn_keeps_lower_user_cap(self):
@@ -209,7 +209,7 @@ class TestModelCallTuning:
             max_tokens=24576,
         )
         out = asyncio.run(mw.awrap_model_call(request, handler))
-        assert out.model.extra_body["reasoning_effort"] == "low"
+        assert out.model.extra_body == {"enable_thinking": False}
         assert out.model.max_tokens == 8192
 
 
