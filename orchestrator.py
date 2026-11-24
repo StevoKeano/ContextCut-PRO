@@ -1598,6 +1598,7 @@ def run_agent(
     reasoning: str,
     max_tokens: int,
     ctx_limit: int,
+    reasoning_budget_tokens: int | None = None,
     progress: Callable[[str], None],
     use_opencode: bool = False,
     agent_mode: str = "build",
@@ -1628,6 +1629,7 @@ def run_agent(
         max_steps=max_steps,
         timeout=timeout,
         reasoning=reasoning,
+        reasoning_budget_tokens=reasoning_budget_tokens,
         max_tokens=max_tokens,
         ctx_limit=ctx_limit,
         progress=progress,
@@ -1783,6 +1785,7 @@ def _run_cycle(
                 max_steps=args.implementer_max_steps,
                 timeout=args.implementer_timeout,
                 reasoning=args.reasoning,
+                reasoning_budget_tokens=getattr(args, "reasoning_budget_tokens", None),
                 max_tokens=args.max_tokens,
                 ctx_limit=args.ctx_limit,
                 progress=progress,
@@ -1927,6 +1930,7 @@ def _run_cycle(
                 max_steps=args.verifier_max_steps,
                 timeout=args.verifier_timeout,
                 reasoning=args.verifier_reasoning,
+                reasoning_budget_tokens=getattr(args, "reasoning_budget_tokens", None),
                 max_tokens=args.verifier_max_tokens,
                 ctx_limit=args.ctx_limit,
                 progress=progress,
@@ -2276,6 +2280,12 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--ctx-limit", type=int, default=DEFAULT_CTX_LIMIT)
     parser.add_argument("--reasoning", default="default")
     parser.add_argument("--verifier-reasoning", default="default")
+    parser.add_argument(
+        "--reasoning-budget-tokens",
+        type=int,
+        default=None,
+        help="Strata thinking budget in tokens (default 256; 0 disables)",
+    )
     parser.add_argument("--max-cycles", type=int, default=2)
     parser.add_argument("--check-timeout", type=float, default=DEFAULT_CHECK_TIMEOUT)
     parser.add_argument("--check-command", action="append", default=[], help="custom check command")

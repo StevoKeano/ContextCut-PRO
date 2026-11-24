@@ -229,6 +229,41 @@ def test_parser_use_opencode_flag_and_environment(tmp_path, monkeypatch):
     assert orchestrator.build_parser().parse_args(base).use_opencode is True
 
 
+def test_parser_reasoning_budget_and_token_defaults(tmp_path):
+    base = ["--workspace", str(tmp_path), "--prompt", "task"]
+    args = orchestrator.build_parser().parse_args(base + ["--reasoning-budget-tokens", "128"])
+    assert args.reasoning_budget_tokens == 128
+    assert orchestrator.build_parser().parse_args(base).reasoning_budget_tokens is None
+    assert args.max_tokens == orchestrator.DEFAULT_MAX_TOKENS
+    assert args.verifier_max_tokens == orchestrator.DEFAULT_VERIFIER_MAX_TOKENS
+
+
+def test_run_agent_forwards_reasoning_budget(tmp_path, monkeypatch):
+    captured = {}
+
+    def fake_run_task(prompt, **kwargs):
+        captured.update(kwargs)
+        return SimpleNamespace()
+
+    monkeypatch.setattr(coding_agent, "run_task", fake_run_task)
+    orchestrator.run_agent(
+        "task",
+        workspace=tmp_path,
+        model="deepseek-v4.1-flash",
+        base_url="http://192.168.137.1:8080/v1",
+        api_key=None,
+        max_steps=1,
+        timeout=1,
+        reasoning="low",
+        max_tokens=16384,
+        ctx_limit=32768,
+        progress=lambda _: None,
+        reasoning_budget_tokens=256,
+    )
+    assert captured["reasoning_budget_tokens"] == 256
+    assert captured["max_tokens"] == 16384
+
+
 def test_opencode_model_resolution_uses_mapping_and_per_agent_env(tmp_path, monkeypatch):
     monkeypatch.delenv("CONTEXTCUT_OPENCODE_MODEL", raising=False)
     monkeypatch.delenv("CONTEXTCUT_OPENCODE_MODEL_BUILD", raising=False)

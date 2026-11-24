@@ -25,6 +25,12 @@
 - `CONTEXTCUT_SCAN_MODEL` — separate model for confidence scan (default: unset = disabled).
   Must be different from the agent model to avoid self-evaluation.
   E.g. `qwen3:4b` or `llama3.2:1b-instruct-q4_K_M`
+- `CONTEXTCUT_CODING_REASONING_BUDGET_TOKENS` — Strata thinking cap for `coding_agent.py` /
+  `orchestrator.py` (default 256; `0` disables); CLI: `--reasoning-budget-tokens`.
+- `CONTEXTCUT_REASONING_BUDGET_TOKENS` — Strata thinking cap for dashboard chat/agent requests
+  (default 256; `0` disables). Stale browser `cc_maxTok` values below 16384 auto-migrate once.
+- Agent-mode `build_agent()` sends `max_tokens` from `CONTEXTCUT_MAX_TOKENS` (fallback 16384);
+  `ContextTuningMiddleware` uses the same ceiling for every turn.
 
 ## Local Diffusion (separate GPU worker)
 - `diffusion/worker.py` runs on the Windows RTX 4090 host in native Windows Python (`Z:\contextcut\diffusion-venv`), not on Ubuntu; stdlib `http.server` binds `DIFFUSION_HOST:DIFFUSION_PORT` (default `0.0.0.0:8189`).
@@ -58,7 +64,9 @@
 - `CONTEXTCUT_READ_FILE_OUTPUT_MAX_CHARS` — `read_file` clamp (default 12000)
 - `CONTEXTCUT_SEARCH_OUTPUT_MAX_CHARS` — `vector_search` clamp (default 6000)
 - `CONTEXTCUT_TOOL_TURN_REASONING` — reasoning effort on tool-result turns (default `none`; `off`/`none` disables; STRATA always disables `<think>` after tool results; skipped for Ollama)
-- `CONTEXTCUT_TOOL_TURN_MAX_TOKENS` — `max_tokens` cap on tool-result turns (default 8192; 0 disables)
+ - `CONTEXTCUT_TOOL_TURN_MAX_TOKENS` — `max_tokens` cap on tool-result turns (default 8192; 0 disables)
+ - `CONTEXTCUT_AGENT_KB` — automatic KB retrieval on Agent runs (default `0`/off; dashboard 📚 KB toggle or `/api/agent` `kb:true` opts in; explicit `vector_search` unaffected). Enabled lookups are recorded in Context Usage immediately, not only at run completion.
+
 
 
 ## Self-Knowledge (capabilities)

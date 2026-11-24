@@ -8,6 +8,7 @@ All tools call ContextCut-PRO internals directly.
 import io
 import os
 import re
+from collections import deque
 import json
 import uuid
 import hashlib
@@ -76,11 +77,15 @@ def _env_int(name: str, default: int) -> int:
         return default
 
 
-# Context tuning: keep large tool results and follow-up reasoning turns small.
+# Context tuning: keep large tool results small but allow full agent answers.
+_configured_agent_max_tokens = _env_int("CONTEXTCUT_MAX_TOKENS", 16384)
+AGENT_MAX_TOKENS = (
+    _configured_agent_max_tokens if _configured_agent_max_tokens > 0 else 16384
+)
 TOOL_OUTPUT_MAX_CHARS = _env_int("CONTEXTCUT_TOOL_OUTPUT_MAX_CHARS", 4000)
 READ_FILE_OUTPUT_MAX_CHARS = _env_int("CONTEXTCUT_READ_FILE_OUTPUT_MAX_CHARS", 12000)
 SEARCH_OUTPUT_MAX_CHARS = _env_int("CONTEXTCUT_SEARCH_OUTPUT_MAX_CHARS", 6000)
-TOOL_TURN_MAX_TOKENS = _env_int("CONTEXTCUT_TOOL_TURN_MAX_TOKENS", 8192)
+TOOL_TURN_MAX_TOKENS = _env_int("CONTEXTCUT_TOOL_TURN_MAX_TOKENS", AGENT_MAX_TOKENS)
 TOOL_TURN_REASONING = os.environ.get(
     "CONTEXTCUT_TOOL_TURN_REASONING", "none"
 ).strip().lower()
@@ -121,9 +126,26 @@ READ_SLICE_TOOL_NAMES = frozenset({"read_file", "shell_exec"})
 REPEAT_READ_MESSAGE = "Already in context—proceed directly to writing the next chunk."
 MAX_THINKING_TOKENS_FIRST_TURN = 3072
 MAX_THINKING_TOKENS_TOOL_TURN = 1536
-MAX_TURN_MAX_TOKENS = 8192
-THINKING_BUDGET_KEYS = ("thinking_budget", "budget_tokens", "max_thinking_tokens")
+MAX_TURN_MAX_TOKENS = AGENT_MAX_TOKENS
+STRATA_REASONING_BUDGET_TOKENS = _env_int("CONTEXTCUT_REASONING_BUDGET_TOKENS", 256)
+THINKING_BUDGET_KEYS = (
+    "thinking_budget",
+    "budget_tokens",
+    "max_thinking_tokens",
+    "reasoning_budget_tokens",
+)
 REPEAT_PYTHON_MESSAGE = "Already executed—do not re-read; call append_file now."
+TAIL_CONTEXT_LINES = 30
+TAIL_CONTEXT_MARKER = "[harness tail context]"
+APPEND_INTENT_RE = re.compile(
+    r"\b(append(?:_file)?|appending|extend(?:ing)?|continue|continuing|"
+    r"add(?:\s+(?:a\s+)?module)?|add(?:\s+to)?)\b",
+    re.IGNORECASE,
+)
+APPEND_TARGET_PATH_RE = re.compile(
+    r"(?<![\w])(?:[A-Za-z]:[\\/]|~?[\\/])?[\w.\-]+(?:[\\/][\w.\-]+)*"
+    r"\.[A-Za-z][A-Za-z0-9_]*\b"
+)
 
 
 def _is_strata_model(model_name=None, upstream=None, provider=None) -> bool:
@@ -154,15 +176,20 @@ def reasoning_request_overrides(
     if tool_turn or normalized in {"none", "off", "false"}:
         return {"enable_thinking": False}
     if normalized in {"", "default"}:
-        return {"reasoning_effort": 1}
-    budgets = {"low": 1, "medium": 20, "high": 50, "max": 100}
-    if normalized in budgets:
-        return {"reasoning_effort": budgets[normalized]}
-    try:
-        budget = max(1, min(100, int(normalized)))
-    except (TypeError, ValueError):
-        budget = 1
-    return {"reasoning_effort": budget}
+        overrides = {"reasoning_effort": 1}
+    else:
+        budgets = {"low": 1, "medium": 20, "high": 50, "max": 100}
+        if normalized in budgets:
+            overrides = {"reasoning_effort": budgets[normalized]}
+        else:
+            try:
+                budget = max(1, min(100, int(normalized)))
+            except (TypeError, ValueError):
+                budget = 1
+            overrides = {"reasoning_effort": budget}
+    if STRATA_REASONING_BUDGET_TOKENS > 0:
+        overrides["reasoning_budget_tokens"] = STRATA_REASONING_BUDGET_TOKENS
+    return overrides
 
 
 def describe_reasoning_overrides(
@@ -475,6 +502,58 @@ def resolve_agent_path(path: str | Path) -> Path:
     if not p.is_absolute():
         p = AGENT_WORKSPACE / p
     return p.resolve()
+
+
+def _append_target_from_text(text) -> str | None:
+    content = str(text or "")
+    if not APPEND_INTENT_RE.search(content):
+        return None
+    for match in APPEND_TARGET_PATH_RE.finditer(content):
+        candidate = match.group(0).strip().strip("\"'`) ,;:")
+        lowered = candidate.lower()
+        if lowered.startswith(("http://", "https://", "www.")):
+            continue
+        if resolve_agent_path(candidate).is_file():
+            return candidate
+    return None
+
+
+def _file_tail(path: str | Path, limit: int = TAIL_CONTEXT_LINES) -> dict | None:
+    resolved = resolve_agent_path(path)
+    if not resolved.is_file():
+        return None
+    try:
+        with resolved.open("r", encoding="utf-8", errors="replace") as handle:
+            count = 0
+            tail = deque(maxlen=limit)
+            for line in handle:
+                count += 1
+                tail.append(line)
+    except OSError:
+        return None
+    if not tail:
+        return None
+    return {
+        "path": str(path),
+        "resolved": str(resolved),
+        "start": count - len(tail) + 1,
+        "end": count,
+        "text": "".join(tail).rstrip("\r\n"),
+    }
+
+
+def _tail_context_note(tail: dict) -> str:
+    return (
+        f"{TAIL_CONTEXT_MARKER} resolved={tail['resolved']}\n"
+        f"Tail of {tail['path']} (lines {tail['start']}-{tail['end']}):\n"
+        f"{tail['text']}\n"
+        "Tail is already in context; emit append_file on Turn 1 without inspection."
+    )
+
+
+def _tail_context_key(tail: dict) -> str:
+    payload = f"{tail['resolved']}\n{tail['text']}".encode("utf-8")
+    return hashlib.sha256(payload).hexdigest()
 
 
 def _stream_chunk_timeout_setting() -> float | None:
@@ -807,7 +886,25 @@ BLOCKED_PREFIXES = [
     "apt ",
     "apt-get ",
     "dpkg ",
+    "sed ",
+    "awk ",
+    "cat ",
+    "head ",
+    "tail ",
+    "grep ",
 ]
+
+SHELL_FILE_INSPECTION_COMMANDS = frozenset(
+    {"sed", "awk", "cat", "head", "tail", "grep"}
+)
+
+
+def _shell_inspects_files(command: str) -> bool:
+    try:
+        argv = shlex.split(command)
+    except ValueError:
+        return False
+    return bool(argv) and Path(argv[0]).name.lower() in SHELL_FILE_INSPECTION_COMMANDS
 
 
 def _shell_is_safe(cmd: str) -> bool:
@@ -816,6 +913,8 @@ def _shell_is_safe(cmd: str) -> bool:
     Execution safety is enforced by ``agent_policy.parse_command`` and by
     running subprocesses without a shell.
     """
+    if _shell_inspects_files(cmd):
+        return False
     try:
         parse_command(cmd)
         return True
@@ -1642,6 +1741,11 @@ def shell_exec(command: str) -> str:
     Commands outside the allowlist require CONTEXTCUT_AGENT_SHELL_ALLOWLIST_ONLY=0.
     High-impact calls are paused by the human approval gate.
     """
+    if _shell_inspects_files(command):
+        return (
+            "BLOCKED: shell_exec cannot use sed/awk/cat/head/tail/grep to inspect "
+            "files. Use read_file once instead."
+        )
     strict = os.environ.get("CONTEXTCUT_AGENT_SHELL_ALLOWLIST_ONLY", "1").strip().lower() not in {
         "0",
         "false",
@@ -1771,12 +1875,16 @@ def append_file(path: str, content: str) -> str:
         p.parent.mkdir(parents=True, exist_ok=True)
         with p.open("a", encoding="utf-8") as f:
             f.write(content)
+        total_lines = _count_file_lines(p)
+        with p.open("r", encoding="utf-8", errors="replace") as f:
+            last_lines = [line.rstrip("\r\n") for line in deque(f, maxlen=5)]
         return json.dumps(
             {
                 "status": "ok",
                 "path": path,
                 "bytes_appended": len(content),
-                "total_lines": _count_file_lines(p),
+                "total_lines": total_lines,
+                "last_5_lines": last_lines,
             }
         )
     except Exception as e:
@@ -2540,6 +2648,650 @@ def _get_dynamic_tools() -> list:
 
 # ── Tool registry ─────────────────────────────────────────────────────────────
 
+
+
+# ── EMCraft Locked Shell & Playwright Smoke-Test Gate ─────────────────────────
+
+_EMCRAFT_ANCHOR = "/* === EMCRAFT_MODULES_ANCHOR === */"
+
+_EMCRAFT_SHELL_TEMPLATE = """<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>__TITLE__</title>
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/katex@0.16.9/dist/katex.min.css" crossorigin="anonymous" />
+<script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.9/dist/katex.min.js" crossorigin="anonymous"></script>
+<script type="importmap">
+{
+  "imports": {
+    "three": "https://unpkg.com/three@0.160.0/build/three.module.js",
+    "three/addons/": "https://unpkg.com/three@0.160.0/examples/jsm/"
+  }
+}
+</script>
+<style>
+  :root {
+    --bg: #0b0f19;
+    --panel: rgba(15, 23, 42, 0.86);
+    --border: rgba(56, 189, 248, 0.22);
+    --text: #e2e8f0;
+    --muted: #94a3b8;
+    --accent: #38bdf8;
+    --ok: #68d391;
+    --bad: #fc8181;
+  }
+  * { box-sizing: border-box; }
+  html, body {
+    margin: 0; height: 100%; overflow: hidden;
+    background: var(--bg); color: var(--text);
+    font-family: ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+    font-size: 13px;
+  }
+  #shell { display: grid; grid-template-rows: auto 1fr; height: 100%; }
+  #topbar {
+    display: flex; align-items: center; gap: 16px;
+    padding: 10px 16px;
+    border-bottom: 1px solid rgba(56,189,248,0.15);
+    background: rgba(2,6,23,0.6);
+  }
+  #topbar h1 { margin: 0; font-weight: 700; letter-spacing: 0.04em; font-size: 15px; color: #f1f5f9; }
+  #topbar .sub { color: var(--muted); font-size: 12px; }
+  #topbar .badge {
+    margin-left: auto; font-size: 11px; color: var(--accent);
+    background: rgba(56,189,248,0.12); border: 1px solid rgba(56,189,248,0.3);
+    padding: 3px 9px; border-radius: 999px; font-variant-numeric: tabular-nums;
+  }
+  #body { display: grid; grid-template-columns: 244px 1fr; min-height: 0; }
+  #sidebar {
+    border-right: 1px solid rgba(56,189,248,0.12);
+    background: rgba(2,6,23,0.45);
+    overflow-y: auto;
+    padding: 10px 8px;
+  }
+  #sidebar h2 {
+    margin: 0; font-size: 10px; text-transform: uppercase; letter-spacing: 0.14em;
+    color: var(--muted); padding: 6px 8px 10px; font-weight: 600;
+  }
+  #module-list { display: flex; flex-direction: column; gap: 4px; }
+  .mod-btn {
+    display: flex; align-items: flex-start; gap: 8px;
+    width: 100%; text-align: left;
+    padding: 8px 10px;
+    border-radius: 8px; border: 1px solid transparent;
+    background: transparent; color: var(--text);
+    font-size: 12px; line-height: 1.35; cursor: pointer;
+  }
+  .mod-btn:hover { background: rgba(56,189,248,0.08); }
+  .mod-btn.active { background: rgba(56,189,248,0.16); border-color: rgba(56,189,248,0.4); }
+  .mod-btn .num { font-size: 10px; color: var(--muted); font-variant-numeric: tabular-nums; min-width: 16px; margin-top: 1px; }
+  #main { display: flex; flex-direction: column; min-height: 0; }
+  #stage { flex: 1; position: relative; min-height: 0; overflow: hidden; background: #0a0e13; }
+  #stage canvas.webgl, #chart-canvas {
+    position: absolute; inset: 0; width: 100% !important; height: 100% !important; display: block;
+  }
+  #chart-canvas { display: none; z-index: 2; pointer-events: none; }
+  #controls {
+    position: absolute; top: 12px; right: 12px; width: 295px;
+    max-height: calc(100% - 24px); overflow-y: auto;
+    background: var(--panel); border: 1px solid var(--border); border-radius: 12px;
+    box-shadow: 0 12px 40px rgba(0,0,0,0.55); backdrop-filter: blur(14px);
+    padding: 12px 14px; font-size: 12px; z-index: 10;
+  }
+  .ctl { margin-bottom: 10px; display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 4px; }
+  .ctl:last-child { margin-bottom: 0; }
+  .ctl label { color: var(--muted); font-size: 11px; flex: 1 1 auto; }
+  .ctl .val { color: var(--accent); font-size: 11px; font-variant-numeric: tabular-nums; min-width: 44px; text-align: right; }
+  .ctl input[type="range"] {
+    width: 100%; height: 4px; border-radius: 2px; order: 3;
+    background: rgba(56,189,248,0.2); outline: none; -webkit-appearance: none;
+  }
+  .ctl input[type="range"]::-webkit-slider-thumb {
+    -webkit-appearance: none; width: 14px; height: 14px; border-radius: 50%;
+    background: var(--accent); cursor: pointer; box-shadow: 0 0 8px rgba(56,189,248,0.6);
+  }
+  .ctl input[type="checkbox"] { accent-color: var(--accent); }
+  .ctl select {
+    width: 100%; padding: 6px 8px; border-radius: 7px;
+    background: rgba(2,6,23,0.75); color: var(--text);
+    border: 1px solid rgba(56,189,248,0.25); font-size: 12px; outline: none;
+  }
+  #hud {
+    position: absolute; left: 12px; bottom: 12px; width: 380px; max-width: calc(100% - 330px);
+    background: var(--panel); border: 1px solid var(--border); border-radius: 12px;
+    box-shadow: 0 12px 40px rgba(0,0,0,0.55); backdrop-filter: blur(14px);
+    padding: 12px 14px; font-size: 12px; z-index: 10;
+  }
+  #hud-title { font-weight: 600; color: #f1f5f9; font-size: 12px; margin-bottom: 6px; }
+  #hud-eq { color: #cbd5e1; min-height: 20px; margin-bottom: 8px; }
+  #hud-eq .katex { font-size: 0.95em; }
+  #hud-values { display: grid; grid-template-columns: 1fr auto; gap: 3px 12px; }
+  #hud-values .k { color: var(--muted); font-size: 11px; }
+  #hud-values .v {
+    font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+    color: var(--accent); font-variant-numeric: tabular-nums; font-size: 12px; text-align: right;
+  }
+  #bottom {
+    height: 31vh; min-height: 185px;
+    display: grid; grid-template-columns: 1fr 1fr;
+    border-top: 1px solid rgba(56,189,248,0.12);
+    background: rgba(2,6,23,0.5);
+  }
+  #lesson, #quiz { overflow-y: auto; padding: 14px 16px; }
+  #lesson { border-right: 1px solid rgba(56,189,248,0.12); }
+  #lesson h3, #quiz h3 { margin: 0 0 8px; font-size: 13px; color: #f1f5f9; }
+  #lesson p { margin: 0 0 8px; font-size: 12px; line-height: 1.55; color: #cbd5e1; }
+  #lesson .eq, #lesson .eqblock { margin: 8px 0; color: #e2e8f0; }
+  .qcard { margin-bottom: 12px; }
+  .qcard .qtext { font-size: 12px; color: #e2e8f0; margin-bottom: 6px; }
+  .qcard .opts { display: flex; flex-direction: column; gap: 4px; }
+  .qcard .opts button {
+    text-align: left; padding: 5px 9px; border-radius: 6px; cursor: pointer;
+    background: rgba(15, 23, 42, 0.7); color: #cbd5e1;
+    border: 1px solid rgba(56,189,248,0.18); font-size: 11.5px;
+  }
+  .qcard .opts button:hover { background: rgba(56,189,248,0.12); }
+  .qcard .opts button.correct { border-color: var(--ok); background: rgba(104,211,145,0.18); color: #f0fff4; }
+  .qcard .opts button.wrong { border-color: var(--bad); background: rgba(252,129,129,0.18); color: #fff5f5; }
+  .qcard .fb { font-size: 11px; color: var(--muted); margin-top: 4px; }
+  @media (max-width: 900px) {
+    #body { grid-template-columns: 1fr; }
+    #sidebar { display: none; }
+    #controls { width: 240px; }
+    #hud { width: calc(100% - 24px); max-width: none; }
+    #bottom { grid-template-columns: 1fr; height: 40vh; }
+    #lesson { border-right: none; border-bottom: 1px solid rgba(56,189,248,0.12); }
+  }
+</style>
+</head>
+<body>
+<div id="shell">
+  <header id="topbar">
+    <h1>__TITLE__</h1>
+    <span class="sub">__SUBTITLE__</span>
+    <span class="badge" id="status-badge">0 / 0</span>
+  </header>
+  <div id="body">
+    <aside id="sidebar">
+      <h2>Modules</h2>
+      <div id="module-list"></div>
+    </aside>
+    <section id="main">
+      <div id="stage">
+        <canvas id="chart-canvas"></canvas>
+        <div id="controls"></div>
+        <div id="hud">
+          <div id="hud-title">—</div>
+          <div id="hud-eq"></div>
+          <div id="hud-values"></div>
+        </div>
+      </div>
+      <div id="bottom">
+        <div id="lesson"></div>
+        <div id="quiz"></div>
+      </div>
+    </section>
+  </div>
+</div>
+<script type="module">
+import * as THREE from "three";
+import { OrbitControls } from "three/addons/controls/OrbitControls.js";
+
+const stageEl    = document.getElementById("stage");
+const chartEl    = document.getElementById("chart-canvas");
+const controlsEl = document.getElementById("controls");
+const hudTitle   = document.getElementById("hud-title");
+const hudEq      = document.getElementById("hud-eq");
+const hudValues  = document.getElementById("hud-values");
+const lessonEl   = document.getElementById("lesson");
+const quizEl     = document.getElementById("quiz");
+const moduleList = document.getElementById("module-list");
+const badgeEl    = document.getElementById("status-badge");
+
+const renderer = new THREE.WebGLRenderer({ antialias: true });
+const initW = Math.max(1, stageEl.clientWidth || window.innerWidth - 244);
+const initH = Math.max(1, stageEl.clientHeight || Math.round(window.innerHeight * 0.6));
+renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 2));
+renderer.setSize(initW, initH);
+renderer.setClearColor(0x0a0e13, 1);
+renderer.domElement.classList.add("webgl");
+renderer.domElement.style.outline = "none";
+stageEl.appendChild(renderer.domElement);
+
+const scene = new THREE.Scene();
+scene.fog = new THREE.FogExp2(0x0a0e13, 0.03);
+const camera = new THREE.PerspectiveCamera(50, initW / initH, 0.1, 200);
+camera.position.set(4.6, 3.6, 5.6);
+
+const controls = new OrbitControls(camera, renderer.domElement);
+controls.enableDamping = false;
+controls.enableZoom = false;
+controls.minDistance = 1.5;
+controls.maxDistance = 40;
+
+renderer.domElement.addEventListener("wheel", (e) => {
+  e.preventDefault();
+  const dir = Math.sign(e.deltaY);
+  if (!dir) return;
+  const offset = camera.position.clone().sub(controls.target);
+  const dist = offset.length() || 1;
+  const factor = dir > 0 ? 1.04 : 1 / 1.04;
+  offset.setLength(Math.min(40, Math.max(1.5, dist * factor)));
+  camera.position.copy(controls.target).add(offset);
+}, { passive: false });
+
+scene.add(new THREE.AmbientLight(0xffffff, 0.65));
+const dirLight = new THREE.DirectionalLight(0xffffff, 0.9);
+dirLight.position.set(5, 8, 6);
+scene.add(dirLight);
+
+const content = new THREE.Group();
+scene.add(content);
+
+function disposeObj(o) {
+  o.traverse(n => {
+    const isSharedArrowGeo = n.isArrowHelper || (n.parent && n.parent.isArrowHelper);
+    if (!isSharedArrowGeo && n.geometry) n.geometry.dispose();
+    if (n.material) {
+      if (Array.isArray(n.material)) n.material.forEach(m => m.dispose());
+      else n.material.dispose();
+    }
+  });
+}
+
+function clearContent() {
+  while (content.children.length) disposeObj(content.children.pop());
+}
+
+function addAxes(group, len = 3.2) {
+  const mk = (color, a, b) => new THREE.Line(
+    new THREE.BufferGeometry().setFromPoints([a, b]),
+    new THREE.LineBasicMaterial({ color, transparent: true, opacity: 0.75 })
+  );
+  group.add(mk(0xef4444, new THREE.Vector3(-len, 0, 0), new THREE.Vector3(len, 0, 0)));
+  group.add(mk(0x22c55e, new THREE.Vector3(0, -len, 0), new THREE.Vector3(0, len, 0)));
+  group.add(mk(0x3b82f6, new THREE.Vector3(0, 0, -len), new THREE.Vector3(0, 0, len)));
+}
+
+function addGrid(group, size = 8, y = -2.2) {
+  const g = new THREE.GridHelper(size, 16, 0x1e2a36, 0x1e2a36);
+  g.position.y = y;
+  group.add(g);
+}
+
+function addArrowField(group, fn, opts = {}) {
+  if (Array.isArray(group)) {
+    const color = typeof fn === "number" ? fn : 0x7fd1ff;
+    const g = new THREE.Group();
+    for (const v of group) {
+      const dir = v.dir.clone().normalize();
+      const L = v.len ?? 1;
+      g.add(new THREE.ArrowHelper(dir, v.origin, L, color, L * 0.25, L * 0.15));
+    }
+    content.add(g);
+    return g;
+  }
+  const { range = 1.8, step = 0.6, color = 0x4fd1c5, scale = 0.35, maxLen = 0.55 } = opts;
+  const arrows = [];
+  for (let x = -range; x <= range + 1e-9; x += step) {
+    for (let y = -range; y <= range + 1e-9; y += step) {
+      for (let z = -range; z <= range + 1e-9; z += step) {
+        const v = fn(x, y, z);
+        const len = Math.hypot(v[0], v[1], v[2]);
+        if (len < 1e-6) continue;
+        const dir = new THREE.Vector3(v[0], v[1], v[2]).normalize();
+        const L = Math.min(len * scale, maxLen);
+        const arrow = new THREE.ArrowHelper(dir, new THREE.Vector3(x, y, z), L, color, L * 0.35, L * 0.2);
+        group.add(arrow);
+        arrows.push(arrow);
+      }
+    }
+  }
+  return arrows;
+}
+
+function renderMath(el, tex, display = true) {
+  if (window.katex) {
+    try { katex.render(tex, el, { throwOnError: false, displayMode: display }); return; } catch (e) {}
+  }
+  el.textContent = tex;
+}
+
+function renderAllMath(root) {
+  root.querySelectorAll("[data-tex]").forEach(el => {
+    renderMath(el, el.getAttribute("data-tex"), el.classList.contains("eq") || el.classList.contains("eqblock"));
+  });
+}
+
+function setHud(title, eqTex, rows) {
+  hudTitle.textContent = title;
+  renderMath(hudEq, eqTex, true);
+  hudValues.innerHTML = rows.map(r => `<span class="k">${r.k}</span><span class="v">${r.v}</span>`).join("");
+}
+
+function fmt(v, d = 3) {
+  return isFinite(v) ? (v >= 0 ? "+" : "") + v.toFixed(d) : "—";
+}
+
+const modules = [];
+
+/* === EMCRAFT_MODULES_ANCHOR === */
+
+let activeIdx = 0;
+const progress = {};
+
+function buildModuleList() {
+  moduleList.innerHTML = "";
+  modules.forEach((m, i) => {
+    const b = document.createElement("button");
+    b.type = "button";
+    b.className = "mod-btn";
+    b.dataset.idx = String(i);
+    b.innerHTML = `<span class="num">${i + 1}.</span>${m.title}`;
+    b.addEventListener("click", () => selectModule(i));
+    moduleList.appendChild(b);
+  });
+}
+
+function buildControls(mod) {
+  controlsEl.innerHTML = "";
+  if (!mod.state) mod.state = {};
+  (mod.controls || []).forEach(c => {
+    if (!(c.id in mod.state)) mod.state[c.id] = c.value;
+    const row = document.createElement("div");
+    row.className = "ctl";
+    const lab = document.createElement("label");
+    lab.textContent = c.label || c.id;
+    row.appendChild(lab);
+    if (c.type === "select") {
+      const sel = document.createElement("select");
+      (c.options || []).forEach(opt => {
+        const o = document.createElement("option");
+        o.value = opt; o.textContent = opt;
+        if (opt === mod.state[c.id]) o.selected = true;
+        sel.appendChild(o);
+      });
+      sel.addEventListener("change", () => { mod.state[c.id] = sel.value; mod.update(); });
+      row.appendChild(sel);
+    } else if (c.type === "check") {
+      const inp = document.createElement("input");
+      inp.type = "checkbox";
+      inp.checked = !!mod.state[c.id];
+      inp.addEventListener("change", () => { mod.state[c.id] = inp.checked; mod.update(); });
+      row.appendChild(inp);
+    } else {
+      const inp = document.createElement("input");
+      inp.type = "range";
+      inp.min = c.min ?? 0; inp.max = c.max ?? 1; inp.step = c.step ?? 0.01;
+      inp.value = mod.state[c.id];
+      const val = document.createElement("span");
+      val.className = "val";
+      val.textContent = Number(mod.state[c.id]).toFixed(2);
+      inp.addEventListener("input", () => {
+        mod.state[c.id] = parseFloat(inp.value);
+        val.textContent = Number(mod.state[c.id]).toFixed(2);
+        mod.update();
+      });
+      row.appendChild(inp);
+      row.appendChild(val);
+    }
+    controlsEl.appendChild(row);
+  });
+}
+
+function buildLesson(mod) {
+  const raw = mod.lesson || mod.blurb || "";
+  lessonEl.innerHTML = raw.trim().startsWith("<") ? raw : `<h3>${mod.title}</h3><p>${raw}</p>`;
+  renderAllMath(lessonEl);
+}
+
+function buildQuiz(mod) {
+  quizEl.innerHTML = "<h3>Concept Check</h3>";
+  const key = mod.id || String(activeIdx);
+  progress[key] = progress[key] || {};
+  (mod.quiz || []).forEach((q, qi) => {
+    const card = document.createElement("div");
+    card.className = "qcard";
+    const qt = document.createElement("div");
+    qt.className = "qtext";
+    qt.textContent = `${qi + 1}. ${q.q}`;
+    card.appendChild(qt);
+    const opts = document.createElement("div");
+    opts.className = "opts";
+    const fb = document.createElement("div");
+    fb.className = "fb";
+    q.options.forEach((opt, oi) => {
+      const btn = document.createElement("button");
+      btn.type = "button";
+      btn.textContent = opt;
+      btn.addEventListener("click", () => {
+        progress[key][qi] = oi;
+        opts.querySelectorAll("button").forEach((b, idx) => {
+          b.classList.toggle("correct", idx === q.answer);
+          b.classList.toggle("wrong", idx === oi && oi !== q.answer);
+        });
+        fb.textContent = oi === q.answer ? ("✓ " + (q.explain || "Correct")) : ("✗ " + (q.explain || "Try again"));
+        updateBadge();
+      });
+      opts.appendChild(btn);
+    });
+    card.appendChild(opts);
+    card.appendChild(fb);
+    quizEl.appendChild(card);
+  });
+  updateBadge();
+}
+
+function updateBadge() {
+  let correct = 0, total = 0;
+  modules.forEach((m, i) => {
+    const saved = progress[m.id || String(i)] || {};
+    (m.quiz || []).forEach((q, qi) => { total++; if (saved[qi] === q.answer) correct++; });
+  });
+  badgeEl.textContent = `${correct} / ${total} CORRECT`;
+}
+
+function selectModule(idx) {
+  if (!modules.length || idx < 0 || idx >= modules.length) return;
+  activeIdx = idx;
+  const mod = modules[idx];
+  moduleList.querySelectorAll(".mod-btn").forEach(b => b.classList.toggle("active", Number(b.dataset.idx) === idx));
+  buildControls(mod);
+  buildLesson(mod);
+  buildQuiz(mod);
+  clearContent();
+  camera.position.set(4.6, 3.6, 5.6);
+  controls.target.set(0, 0, 0);
+  controls.update();
+  chartEl.style.display = "none";
+  renderer.domElement.style.display = "block";
+  if (typeof mod.build === "function") mod.build();
+  mod._built = true;
+  if (typeof mod.update === "function") mod.update();
+  renderer.render(scene, camera);
+}
+
+function onResize() {
+  const rect = stageEl.getBoundingClientRect();
+  const w = Math.max(1, Math.round(rect.width || stageEl.clientWidth));
+  const h = Math.max(1, Math.round(rect.height || stageEl.clientHeight));
+  camera.aspect = w / h;
+  camera.updateProjectionMatrix();
+  renderer.setSize(w, h);
+  chartEl.width = Math.round(w * Math.min(window.devicePixelRatio || 1, 2));
+  chartEl.height = Math.round(h * Math.min(window.devicePixelRatio || 1, 2));
+  const mod = modules[activeIdx];
+  if (mod && mod._built && typeof mod.update === "function") {
+    mod.update();
+    renderer.render(scene, camera);
+  }
+}
+
+buildModuleList();
+selectModule(0);
+window.addEventListener("resize", onResize);
+if (window.ResizeObserver) new ResizeObserver(onResize).observe(stageEl);
+onResize();
+
+let last = performance.now();
+function animate(now) {
+  const dt = Math.min(0.05, (now - last) / 1000);
+  last = now;
+  const mod = modules[activeIdx];
+  if (mod && mod._built && typeof mod.tick === "function") mod.tick(dt);
+  controls.update();
+  if (!Number.isFinite(camera.position.x) || !Number.isFinite(camera.position.y) || !Number.isFinite(camera.position.z)) {
+    camera.position.set(4.6, 3.6, 5.6);
+    controls.target.set(0, 0, 0);
+    controls.update();
+  }
+  renderer.render(scene, camera);
+  requestAnimationFrame(animate);
+}
+requestAnimationFrame(animate);
+</script>
+</body>
+</html>
+"""
+
+
+def _check_emcraft_structure(html: str) -> list[str]:
+    """Static contract and layout check for EMCraft HTML files."""
+    issues = []
+    for selector in ("#shell {", "#body {", "#sidebar {", "#stage {", "#module-list {"):
+        if selector not in html:
+            issues.append(f"Missing required layout CSS rule: {selector}")
+    if "</html>" in html:
+        trailing = html.split("</html>", 1)[1].strip()
+        if trailing:
+            issues.append(f"Unexpected trailing content after </html> ({len(trailing)} chars)")
+    if html.count("<script") != html.count("</script>"):
+        issues.append("Unbalanced <script> / </script> tags")
+    for m in re.finditer(r"update\s*\(([^)]*)\)", html):
+        params = [x.strip() for x in m.group(1).split(",") if x.strip()]
+        if len(params) > 1:
+            issues.append(
+                f"Module update({m.group(1)}) expects {len(params)} args; UI controller calls mod.update() with 0 args"
+            )
+    return issues
+
+
+@tool
+def init_emcraft_shell(path: str, title: str, subtitle: str = "") -> str:
+    """
+    Create a new EMCraft interactive 3D HTML file from the locked canonical shell.
+    Includes full vertical sidebar CSS, WebGL stage sizing, smooth wheel zoom,
+    and the /* === EMCRAFT_MODULES_ANCHOR === */ insertion marker.
+    """
+    p = resolve_agent_path(path)
+    if is_sensitive_path(str(p)):
+        return f"Access denied: sensitive path: {path}"
+    p.parent.mkdir(parents=True, exist_ok=True)
+    rendered = (
+        _EMCRAFT_SHELL_TEMPLATE
+        .replace("__TITLE__", title)
+        .replace("__SUBTITLE__", subtitle)
+    )
+    p.write_text(rendered, encoding="utf-8")
+    return f"Initialized locked EMCraft shell at {path} ({len(rendered)} bytes). Insert modules at {_EMCRAFT_ANCHOR}."
+
+
+@tool
+def append_emcraft_module(path: str, module_code: str) -> str:
+    """
+    Insert a single `modules.push({...});` block at /* === EMCRAFT_MODULES_ANCHOR === */
+    inside an EMCraft HTML file, preserving the locked shell and UI controller.
+    """
+    p = resolve_agent_path(path)
+    if is_sensitive_path(str(p)):
+        return f"Access denied: sensitive path: {path}"
+    if not p.is_file():
+        return f"append_emcraft_module error: file not found: {path}"
+    html = p.read_text(encoding="utf-8")
+    if _EMCRAFT_ANCHOR not in html:
+        return f"append_emcraft_module error: {_EMCRAFT_ANCHOR} not found in {path}"
+    block = module_code.strip()
+    if not block.startswith("modules.push("):
+        return "append_emcraft_module error: module_code must start with `modules.push({`"
+    updated = html.replace(
+        _EMCRAFT_ANCHOR, block + "\n\n" + _EMCRAFT_ANCHOR, 1
+    )
+    p.write_text(updated, encoding="utf-8")
+    issues = _check_emcraft_structure(updated)
+    count = updated.count("modules.push(")
+    if issues:
+        return f"Inserted module #{count}, but structural check flagged: {'; '.join(issues)}"
+    return json.dumps({"status": "ok", "path": path, "module_count": count, "structure": "valid"})
+
+
+@tool
+def verify_emcraft_html(path: str) -> str:
+    """
+    Run a headless Playwright smoke-test gate on an EMCraft HTML file:
+    verifies vertical sidebar layout, stage dimensions > 100px, clicks every module button,
+    exercises controls, and fails if any pageerror or console.error occurs.
+    """
+    p = resolve_agent_path(path)
+    if is_sensitive_path(str(p)):
+        return f"Access denied: sensitive path: {path}"
+    if not p.is_file():
+        return f"verify_emcraft_html error: file not found: {path}"
+    html = p.read_text(encoding="utf-8")
+    issues = _check_emcraft_structure(html)
+    if issues:
+        return "VERIFY FAILED (structural):\n- " + "\n- ".join(issues)
+
+    probe = f"""
+import json, sys
+from pathlib import Path
+
+try:
+    from playwright.sync_api import sync_playwright
+except Exception as e:
+    print(json.dumps({{"status": "skipped_no_playwright", "reason": str(e)}}))
+    sys.exit(0)
+
+uri = Path({str(p)!r}).resolve().as_uri()
+errors = []
+with sync_playwright() as pw:
+    browser = pw.chromium.launch(headless=True, args=["--use-gl=angle", "--use-angle=swiftshader"])
+    page = browser.new_page(viewport={{"width": 1440, "height": 900}})
+    page.on("pageerror", lambda err: errors.append(f"pageerror: {{err}}"))
+    page.on("console", lambda msg: errors.append(f"console.error: {{msg.text}}") if msg.type == "error" else None)
+    page.goto(uri, wait_until="domcontentloaded")
+    page.wait_for_timeout(400)
+    stage_box = page.locator("#stage").bounding_box() or {{"width": 0, "height": 0}}
+    if stage_box["height"] < 120 or stage_box["width"] < 200:
+        errors.append(f"stage collapsed: {{stage_box}}")
+    btns = page.locator(".mod-btn")
+    n = btns.count()
+    if n == 0:
+        errors.append("no .mod-btn elements rendered")
+    for i in range(n):
+        btns.nth(i).click()
+        page.wait_for_timeout(120)
+        sliders = page.locator("#controls input[type='range']")
+        if sliders.count() > 0:
+            sliders.first.dispatch_event("input")
+    browser.close()
+
+print(json.dumps({{"status": "ok" if not errors else "fail", "modules_tested": n, "stage": stage_box, "errors": errors}}))
+"""
+    res = _run_subprocess(
+        ["python3", "-c", probe],
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+        timeout=45,
+        cwd=str(AGENT_WORKSPACE),
+    )
+    out = (res.stdout or "").strip()
+    err = (res.stderr or "").strip()
+    if res.returncode != 0:
+        return f"verify_emcraft_html error (exit {res.returncode}):\n{err}\n{out}"
+    return out or err or "verify_emcraft_html: no output"
+
+
 ALL_TOOLS = [
     shell_exec,
     read_file,
@@ -2564,6 +3316,9 @@ ALL_TOOLS = [
     recall,
     forget,
     compose_tool,
+    init_emcraft_shell,
+    append_emcraft_module,
+    verify_emcraft_html,
 ]
 
 TOOL_DESCRIPTIONS = {
@@ -2590,6 +3345,9 @@ TOOL_DESCRIPTIONS = {
     "recall": "Retrieve facts from persistent memory (optionally by key). Call at conversation start.",
     "forget": "Delete a fact from persistent memory by key.",
     "compose_tool": "Create a new compound tool that chains multiple primitive tools.",
+    "init_emcraft_shell": "Create a locked EMCraft interactive 3D HTML shell with vertical sidebar CSS, WebGL stage, and smooth wheel zoom.",
+    "append_emcraft_module": "Insert a modules.push({...}) block at /* === EMCRAFT_MODULES_ANCHOR === */ in an EMCraft HTML file.",
+    "verify_emcraft_html": "Run headless Playwright smoke tests across all EMCraft modules and fail on any layout collapse or JS runtime error.",
     "speak": "Read text aloud with the local BlueTTS voice service; supports [voice] markers for multi-speaker lines.",
     "audio_briefing": "Read a multi-agent briefing aloud with distinct voices per role (orchestrator=david, researcher=noa, coder/reviewer=adam).",
 }
@@ -2631,6 +3389,9 @@ TOOL-EFFICIENCY RULE:
 - When editing or appending to an existing file, inspect only the target region once (e.g., via `read_file`) before writing.
 - NEVER use `run_python` to print or inspect file contents or line ranges: no `open(...).read()`, `.readlines()`, `.splitlines()`, or `Path(...).read_text()`. Use `read_file` once, then write. Repeating the same inspection snippet is blocked.
 - When extending an existing file, immediately call `append_file` with the next <= 100-line chunk; do not re-read, re-derive, or verify the same lines first.
+- NEVER use `shell_exec` with `sed`, `grep`, `cat`, `head`, or `tail` to inspect files; those commands are blocked. Use `read_file` once instead.
+- When appending to an existing file, `append_file` MUST be the first tool call for that step; this overrides any generic inspect-first guidance above. Do not call `read_file`, `shell_exec`, `run_python`, or any other tool first.
+- When harness tail context is provided (`Tail of <path> (lines N-M):`), that tail is already in context: on Turn 1 you MUST immediately emit `append_file` with a single <= 100-line chunk matching the exact structure shown in the tail (e.g. `modules.push({...})`, `build()`, `update()`), with zero `read_file`, `shell_exec`, or `run_python` calls beforehand.
 - Do not request the same read slice twice; if it is already in context, proceed directly to writing the next chunk.
 
 INCREMENTAL DISK-FIRST RULE:
@@ -2639,6 +3400,11 @@ INCREMENTAL DISK-FIRST RULE:
 - Append each subsequent section one section at a time with append_file (<= 100 lines, and never more than 120 lines or 4,500 characters per call).
 - Do not re-read the whole file between appends; use the JSON receipt from append_file to track progress.
 - Run syntax verification (e.g. python3 -m py_compile) only after the final chunk has been written.
+
+
+EMCRAFT INTERACTIVE LAB RULE:
+- When building or extending an EMCraft 3D HTML app, NEVER strip or rewrite the <style> block or write after </html>.
+- For new EMCraft apps, call `init_emcraft_shell(path, title, subtitle)` first, add each module with `append_emcraft_module(path, module_code)` (each module defines `build()` and zero-argument `update()` using `this.state` and `setHud(title, eqTex, rows)`), and finish by calling `verify_emcraft_html(path)`. If `verify_emcraft_html` reports any errors, fix them before finishing.
 
 DOCUMENT / REPORT RULE:
 - For questions about documents, PDFs, resumes, business plans, LOIs, or
@@ -2699,7 +3465,7 @@ Rules:
     a. shell_exec: enumerate open ports and listening services
        (e.g., ss -tulpn, netstat -tulpn)
     b. shell_exec: check firewall rules (ufw status verbose, iptables -L -n)
-    c. shell_exec: audit failed logins (grep 'Failed' /var/log/auth.log | tail -20)
+    c. read_file: audit failed logins (read_file /var/log/auth.log once)
     d. shell_exec: find SUID/SGID files (find / -perm /6000 -type f 2>/dev/null)
     e. shell_exec: check for outdated packages (apt list --upgradeable 2>/dev/null)
     f. shell_exec: inspect cron jobs (crontab -l; ls /etc/cron*)
@@ -2812,8 +3578,9 @@ if AgentMiddleware is not None:
           repeated read slices and repeated run_python inspection snippets.
         - ``wrap_model_call`` / ``awrap_model_call`` compact old write payloads,
           enforce a hard thinking ceiling on every turn (3,072 tokens before
-          any tool result, 1,536 after), cap ``max_tokens`` at 8,192, and lower
-          ``reasoning_effort`` whenever a tool result is recent.
+          any tool result, 1,536 after), cap ``max_tokens`` at ``AGENT_MAX_TOKENS``
+          (16,384 by default), and lower ``reasoning_effort`` whenever a tool
+          result is recent.
         """
 
         def __init__(
@@ -2830,15 +3597,34 @@ if AgentMiddleware is not None:
             self.read_only_calls = 0
             self._read_slices = set()
             self._executed_python_hashes = set()
+            self._injected_tail_files = set()
+            self._tail_context_keys = set()
 
         def reset_inspection_budget(self):
             self.read_only_calls = 0
+
+        @staticmethod
+        def _message_text(message) -> str:
+            content = getattr(message, "content", "")
+            if isinstance(content, str):
+                return content
+            if isinstance(content, list):
+                parts = []
+                for block in content:
+                    if isinstance(block, str):
+                        parts.append(block)
+                    elif isinstance(block, dict):
+                        parts.append(str(block.get("text") or ""))
+                    else:
+                        parts.append(str(block))
+                return "".join(parts)
+            return str(content or "")
 
         def _new_user_turn(self, state):
             messages = (state or {}).get("messages") or []
             return not messages or isinstance(messages[-1], HumanMessage)
 
-        def _seed_session_state(self, messages):
+        def _seed_session_state(self, messages, tail_path=None):
             """Remember reads and inspection snippets already in session history."""
             for message in messages or []:
                 if not isinstance(message, AIMessage):
@@ -2853,16 +3639,54 @@ if AgentMiddleware is not None:
                         self._read_slices.add(key)
                     if name == "run_python" and python_reads_files(args.get("code")):
                         self._executed_python_hashes.add(python_code_hash(args.get("code")))
+            if tail_path:
+                resolved = str(resolve_agent_path(tail_path))
+                self._injected_tail_files.add(resolved)
+                self._read_slices.add(("read_file", resolved, 0, 0))
+                self._read_slices.add(("read_file", str(tail_path), 0, 0))
+
+        def _prepare_tail_context(self, state, new_turn):
+            messages = list((state or {}).get("messages") or [])
+            if not new_turn or not messages:
+                return messages, None
+            target = _append_target_from_text(self._message_text(messages[-1]))
+            if not target:
+                return messages, None
+            tail = _file_tail(target)
+            if not tail:
+                return messages, None
+            key = _tail_context_key(tail)
+            header = (
+                f"Tail of {tail['path']} "
+                f"(lines {tail['start']}-{tail['end']}):"
+            )
+            already_present = any(
+                isinstance(message, SystemMessage)
+                and TAIL_CONTEXT_MARKER in self._message_text(message)
+                and header in self._message_text(message)
+                for message in messages
+            )
+            if key not in self._tail_context_keys:
+                self._tail_context_keys.add(key)
+                if not already_present:
+                    messages.append(SystemMessage(content=_tail_context_note(tail)))
+            return messages, tail
 
         def before_agent(self, state, runtime):
-            self._seed_session_state((state or {}).get("messages") or [])
-            if self._new_user_turn(state):
+            new_turn = self._new_user_turn(state)
+            messages, tail = self._prepare_tail_context(state, new_turn)
+            self._seed_session_state(messages, tail["path"] if tail else None)
+            if new_turn:
                 self.reset_inspection_budget()
+            return {"messages": messages}
 
         async def abefore_agent(self, state, runtime):
-            self._seed_session_state((state or {}).get("messages") or [])
-            if self._new_user_turn(state):
+            new_turn = self._new_user_turn(state)
+            messages, tail = self._prepare_tail_context(state, new_turn)
+            self._seed_session_state(messages, tail["path"] if tail else None)
+            if new_turn:
                 self.reset_inspection_budget()
+            return {"messages": messages}
 
         def _repeat_read_message(self, request, name):
             return ToolMessage(
@@ -2977,6 +3801,7 @@ if AgentMiddleware is not None:
                 if strata:
                     extra_body.pop("reasoning_effort", None)
                     extra_body.pop("budget_tokens", None)
+                    extra_body.pop("reasoning_budget_tokens", None)
                     extra_body.update(
                         reasoning_request_overrides(
                             TOOL_TURN_REASONING,
@@ -3031,6 +3856,14 @@ if AgentMiddleware is not None:
         def _dedupe_read(self, request, name, args):
             if request is None:
                 return None
+            if name == "read_file":
+                for key in ("path", "file", "file_path", "filename"):
+                    if not args.get(key):
+                        continue
+                    resolved = str(resolve_agent_path(args[key]))
+                    if resolved in self._injected_tail_files:
+                        return self._repeat_read_message(request, name)
+                    break
             key = _read_slice_key(name, args)
             if key is not None and key in self._read_slices:
                 return self._repeat_read_message(request, name)
@@ -3143,7 +3976,9 @@ else:  # pragma: no cover - optional dependency drift
 def build_agent(model_name: str = None, upstream: str = None,
                 api_key: str = None, task_id: str = None, goal: str = None,
                 user_message: str = None, provider: str = None,
-                reasoning_effort: str = None, max_tokens: int = None,
+                reasoning_effort: str = None,
+                reasoning_budget_tokens: int | None = None,
+                max_tokens: int = None,
                 checkpointer=None, extra_tools: list | None = None):
 
     extra = {}
@@ -3161,10 +3996,16 @@ def build_agent(model_name: str = None, upstream: str = None,
         )
     elif _is_strata_model(model_name, upstream, provider):
         extra_body.update(reasoning_request_overrides("default", model_name, upstream, provider))
+    if reasoning_budget_tokens is not None and _is_strata_model(
+        model_name, upstream, provider
+    ):
+        if reasoning_budget_tokens > 0:
+            extra_body["reasoning_budget_tokens"] = reasoning_budget_tokens
+        else:
+            extra_body.pop("reasoning_budget_tokens", None)
     if extra_body:
         extra["extra_body"] = extra_body
-    if max_tokens and max_tokens > 0:
-        extra["max_tokens"] = max_tokens
+    extra["max_tokens"] = max_tokens if max_tokens and max_tokens > 0 else AGENT_MAX_TOKENS
 
     llm = ChatOpenAI(
         model=model_name or "qwen3:14b-q8_0",

@@ -91,8 +91,9 @@ class TestAppendFile:
             "path": str(f),
             "bytes_appended": len("appended"),
             "total_lines": 2,
+            "last_5_lines": ["base", "appended"],
         }
-        assert result.count("appended") == 1
+        assert receipt["last_5_lines"] == ["base", "appended"]
         assert f.read_text() == "base\nappended"
 
     def test_to_new_file(self, tmp_path):
@@ -106,13 +107,14 @@ class TestAppendFile:
         assert receipt["total_lines"] == 1
         assert f.read_text() == "first line"
 
-    def test_receipt_does_not_echo_written_text(self, tmp_path):
+    def test_receipt_includes_last_five_lines(self, tmp_path):
         from agent_handler import append_file
 
-        secret = "s3cr3t-payload\n"
-        result = append_file.invoke({"path": str(tmp_path / "secret.txt"), "content": secret})
-        assert secret.strip() not in result
-        assert json.loads(result)["bytes_appended"] == len(secret)
+        payload = "s3cr3t-payload\n"
+        result = append_file.invoke({"path": str(tmp_path / "secret.txt"), "content": payload})
+        receipt = json.loads(result)
+        assert receipt["last_5_lines"] == ["s3cr3t-payload"]
+        assert receipt["bytes_appended"] == len(payload)
 
 
 class TestWriteChunkLimits:

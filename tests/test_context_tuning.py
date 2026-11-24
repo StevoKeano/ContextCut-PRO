@@ -4,8 +4,14 @@ import asyncio
 
 import pytest
 from langchain.agents.middleware import ModelRequest
-from langchain_core.messages import AIMessage, HumanMessage, ToolMessage
+from langchain_core.messages import AIMessage, HumanMessage, SystemMessage, ToolMessage
 from langchain_openai import ChatOpenAI
+
+
+def _agent_max_tokens():
+    from agent_handler import AGENT_MAX_TOKENS
+
+    return AGENT_MAX_TOKENS
 
 
 def _chat_model(*, extra_body=None, max_tokens=None):
@@ -151,12 +157,12 @@ class TestModelCallTuning:
         request = _model_request(
             [HumanMessage(content="hi")],
             extra_body={"reasoning_effort": "high", "thinking_budget": 32578},
-            max_tokens=24576,
+            max_tokens=_agent_max_tokens() + 8192,
         )
         out = mw.wrap_model_call(request, lambda req: req)
         assert out.model.extra_body["reasoning_effort"] == "high"
         assert out.model.extra_body["thinking_budget"] == 3072
-        assert out.model.max_tokens == 8192
+        assert out.model.max_tokens == _agent_max_tokens()
 
     def test_tool_turn_lowers_reasoning_and_caps_tokens(self):
         from agent_handler import ContextTuningMiddleware
@@ -169,12 +175,12 @@ class TestModelCallTuning:
                 ToolMessage(content="result", tool_call_id="1", name="run_python"),
             ],
             extra_body={"reasoning_effort": "high"},
-            max_tokens=24576,
+            max_tokens=_agent_max_tokens() + 8192,
         )
         out = mw.wrap_model_call(request, lambda req: req)
         assert out.model.extra_body == {"enable_thinking": False}
         assert out.model.model_kwargs["extra_body"] == {"enable_thinking": False}
-        assert out.model.max_tokens == 8192
+        assert out.model.max_tokens == _agent_max_tokens()
 
     def test_tool_turn_keeps_lower_user_cap(self):
         from agent_handler import ContextTuningMiddleware
@@ -195,11 +201,11 @@ class TestModelCallTuning:
         request = _model_request(
             [ToolMessage(content="result", tool_call_id="1", name="run_python")],
             extra_body={"reasoning_effort": "high"},
-            max_tokens=24576,
+            max_tokens=_agent_max_tokens() + 8192,
         )
         out = mw.wrap_model_call(request, lambda req: req)
         assert out.model.extra_body["reasoning_effort"] == "high"
-        assert out.model.max_tokens == 8192
+        assert out.model.max_tokens == _agent_max_tokens()
 
     def test_async_tool_turn(self):
         from agent_handler import ContextTuningMiddleware
@@ -211,12 +217,12 @@ class TestModelCallTuning:
         request = _model_request(
             [ToolMessage(content="result", tool_call_id="1", name="run_python")],
             extra_body={"reasoning_effort": "high"},
-            max_tokens=24576,
+            max_tokens=_agent_max_tokens() + 8192,
         )
         out = asyncio.run(mw.awrap_model_call(request, handler))
         assert out.model.extra_body == {"enable_thinking": False}
         assert out.model.model_kwargs["extra_body"] == {"enable_thinking": False}
-        assert out.model.max_tokens == 8192
+        assert out.model.max_tokens == _agent_max_tokens()
 
 
 class _ToolRequest:
@@ -497,11 +503,11 @@ class TestThinkingBudgetLookback:
                 AIMessage(content="", tool_calls=[]),
             ],
             extra_body={"reasoning_effort": "high"},
-            max_tokens=24576,
+            max_tokens=_agent_max_tokens() + 8192,
         )
         out = mw.wrap_model_call(request, lambda req: req)
         assert out.model.extra_body == {"enable_thinking": False}
-        assert out.model.max_tokens == 8192
+        assert out.model.max_tokens == _agent_max_tokens()
 
     def test_old_tool_message_still_uses_lower_ceiling(self):
         from agent_handler import ContextTuningMiddleware
@@ -515,11 +521,11 @@ class TestThinkingBudgetLookback:
                 HumanMessage(content="next"),
             ],
             extra_body={"reasoning_effort": "high", "thinking_budget": 24576},
-            max_tokens=24576,
+            max_tokens=_agent_max_tokens() + 8192,
         )
         out = mw.wrap_model_call(request, lambda req: req)
         assert out.model.extra_body == {"reasoning_effort": "high", "thinking_budget": 1536}
-        assert out.model.max_tokens == 8192
+        assert out.model.max_tokens == _agent_max_tokens()
 
 
 class TestReadSliceDedup:
@@ -585,6 +591,63 @@ class TestReadSliceDedup:
         )
 
 
+class TestAppendTailContext:
+    @staticmethod
+    def _write_targets(tmp_path):
+        target = tmp_path / "mods.py"
+        target.write_text("\n".join(f"line {i}" for i in range(1, 41)) + "\n")
+        nested = tmp_path / "src" / "router.py"
+        nested.parent.mkdir(parents=True, exist_ok=True)
+        nested.write_text("route = 1\n")
+        return target
+
+    def test_append_target_detection(self, tmp_path, monkeypatch):
+        import agent_handler
+
+        monkeypatch.setattr(agent_handler, "AGENT_WORKSPACE", tmp_path)
+        self._write_targets(tmp_path)
+        assert agent_handler._append_target_from_text("append a module to mods.py") == "mods.py"
+        assert agent_handler._append_target_from_text('append_file("mods.py") now') == "mods.py"
+        assert agent_handler._append_target_from_text("continue src/router.py") == "src/router.py"
+        assert agent_handler._append_target_from_text("what is 2 + 2?") is None
+
+    def test_before_agent_injects_tail_and_marks_inspected(self, tmp_path, monkeypatch):
+        import agent_handler
+        from agent_handler import REPEAT_READ_MESSAGE, ContextTuningMiddleware
+
+        monkeypatch.setattr(agent_handler, "AGENT_WORKSPACE", tmp_path)
+        self._write_targets(tmp_path)
+        mw = ContextTuningMiddleware(provider="DeepSeek")
+        update = mw.before_agent(
+            {"messages": [HumanMessage(content="append a module to mods.py")]}, None
+        )
+        note = update["messages"][-1]
+        assert isinstance(note, SystemMessage)
+        assert "Tail of mods.py (lines 11-40):" in note.content
+        assert "line 40" in note.content
+        assert "line 1\n" not in note.content
+
+        result = mw.wrap_tool_call(
+            _ToolRequest("read_file", {"path": "mods.py"}),
+            lambda req: pytest.fail("tail-injected file should not execute a read"),
+        )
+        assert result.content == REPEAT_READ_MESSAGE
+
+    def test_abefore_agent_also_injects_tail(self, tmp_path, monkeypatch):
+        import agent_handler
+        from agent_handler import ContextTuningMiddleware
+
+        monkeypatch.setattr(agent_handler, "AGENT_WORKSPACE", tmp_path)
+        self._write_targets(tmp_path)
+        mw = ContextTuningMiddleware(provider="DeepSeek")
+        update = asyncio.run(
+            mw.abefore_agent(
+                {"messages": [HumanMessage(content="extend mods.py with a module")]}, None
+            )
+        )
+        assert "Tail of mods.py (lines 11-40):" in update["messages"][-1].content
+
+
 class TestThinkingCeiling:
     def test_ceiling_values_and_history_detection(self):
         from agent_handler import (
@@ -612,6 +675,7 @@ class TestThinkingCeiling:
             "budget_tokens": 24576,
             "max_thinking_tokens": 9999,
             "reasoning_effort": 24576,
+            "reasoning_budget_tokens": 8192,
             "top_p": 0.9,
         }
         assert cap_thinking_budget(body, 3072) is True
@@ -620,6 +684,7 @@ class TestThinkingCeiling:
             "budget_tokens": 3072,
             "max_thinking_tokens": 3072,
             "reasoning_effort": 3072,
+            "reasoning_budget_tokens": 3072,
             "top_p": 0.9,
         }
         assert cap_thinking_budget(body, 3072) is False
@@ -636,7 +701,7 @@ class TestThinkingCeiling:
         )
         out = mw.wrap_model_call(request, lambda req: req)
         assert out.model.extra_body["thinking_budget"] == 3072
-        assert out.model.max_tokens == 8192
+        assert out.model.max_tokens == _agent_max_tokens()
 
     def test_no_oversized_token_budget_survives_human_turn(self):
         from agent_handler import ContextTuningMiddleware
@@ -650,7 +715,7 @@ class TestThinkingCeiling:
         out = mw.wrap_model_call(request, lambda req: req)
         assert out.model.extra_body["thinking_budget"] == 3072
         assert out.model.extra_body["budget_tokens"] == 3072
-        assert 6144 <= out.model.max_tokens <= 8192
+        assert 6144 <= out.model.max_tokens <= _agent_max_tokens()
 
 
 class TestRunPythonInspectionDedup:

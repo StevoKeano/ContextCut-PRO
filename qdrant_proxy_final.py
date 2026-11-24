@@ -14,6 +14,7 @@ Configuration via environment variables (all optional — defaults shown):
   CONTEXTCUT_PROXY_PORT      18788                    Proxy listen port
   CONTEXTCUT_DASHBOARD_PORT  18787                    Dashboard listen port
   CONTEXTCUT_CTX_LIMIT       32768                    Model context window size
+  CONTEXTCUT_REASONING_BUDGET_TOKENS  256             Strata thinking cap (0 disables)
   CONTEXTCUT_TOP_K           5                        Max Qdrant chunks to retrieve
   CONTEXTCUT_MIN_SCORE       0.30                     Minimum relevance score (0.0-1.0)
   CONTEXTCUT_MODEL                                    Default model name for chat tab
@@ -509,6 +510,9 @@ load_saved_credentials()
 DEFAULT_TEMP = float(os.getenv("CONTEXTCUT_TEMP", "0.7"))
 DEFAULT_MAX_TK = int(os.getenv("CONTEXTCUT_MAX_TOKENS", "8192"))
 MAX_OUTPUT_TOKENS = int(os.getenv("CONTEXTCUT_MAX_OUTPUT_TOKENS", str(DEFAULT_MAX_TK)))
+DEFAULT_REASONING_BUDGET_TOKENS = int(
+    os.getenv("CONTEXTCUT_REASONING_BUDGET_TOKENS", "256")
+)
 MAX_BODY_BYTES = int(os.getenv("CONTEXTCUT_MAX_BODY_BYTES", str(16 * 1024 * 1024)))
 MAX_LOOP_RETRIES = int(os.getenv("CONTEXTCUT_MAX_LOOP_RETRIES", "5"))
 APPROVAL_TIMEOUT = int(os.getenv("CONTEXTCUT_APPROVAL_TIMEOUT", "300"))
@@ -528,6 +532,7 @@ def _env_bool(name: str, default: bool = False) -> bool:
 
 USE_OPENCODE = _env_bool("CONTEXTCUT_USE_OPENCODE", False)
 OPENCODE_CACHE = _env_bool("CONTEXTCUT_OPENCODE_CACHE", False)
+AGENT_KB_DEFAULT = _env_bool("CONTEXTCUT_AGENT_KB", False)
 _DEFAULT_WORKSPACE = str(Path(__file__).resolve().parent)
 _ENV_AGENT_WORKSPACE = os.getenv("CONTEXTCUT_AGENT_WORKSPACE", "").strip()
 _ENV_OPENCODE_WORKSPACE = os.getenv("CONTEXTCUT_OPENCODE_WORKSPACE", "").strip()
@@ -1868,6 +1873,36 @@ def count_body_tokens(body: dict) -> int:
     return total
 
 
+def count_message_tokens(messages) -> int:
+    total = 0
+    for message in messages or []:
+        content = getattr(message, "content", "")
+        total += count_tokens(content if isinstance(content, str) else str(content))
+    return total
+
+
+def agent_kb_enabled(body: dict | None) -> bool:
+    if body and "kb" in body:
+        return bool(body.get("kb"))
+    return AGENT_KB_DEFAULT
+
+
+def record_kb_lookup(query: str, tokens_before: int, tokens_after: int, hits: list) -> None:
+    pct = round(tokens_after / CTX_LIMIT * 100, 1) if CTX_LIMIT else 0.0
+    record(
+        {
+            "ts": datetime.now().strftime("%H:%M:%S"),
+            "query": str(query)[:120],
+            "tokens_before": tokens_before,
+            "tokens_after": tokens_after,
+            "ctx_limit": CTX_LIMIT,
+            "pct": pct,
+            "hits": hits,
+            "type": "agent-kb",
+        }
+    )
+
+
 # ── Server base ───────────────────────────────────────────────────────────────
 class ReusableHTTPServer(ThreadingMixIn, HTTPServer):
     allow_reuse_address = True
@@ -1914,6 +1949,36 @@ def _clamp_generation_params(body: dict) -> dict:
                     options[key] = min(max(1, value), CTX_LIMIT)
                 elif value > 0:
                     options[key] = min(value, MAX_OUTPUT_TOKENS)
+    return body
+
+
+def _is_strata_request(model_name=None, upstream=None, provider=None) -> bool:
+    name = str(model_name or "").lower()
+    host = str(upstream or "").lower()
+    prov = str(provider or "").lower()
+    return (
+        name.startswith("deepseek")
+        or "ds4" in name
+        or "strata" in host
+        or "strata" in prov
+        or "deepseek" in prov
+    )
+
+
+def _apply_strata_reasoning_defaults(body: dict) -> dict:
+    if not isinstance(body, dict):
+        return body
+    if not _is_strata_request(
+        body.get("model") or DEFAULT_MODEL, get_current_upstream(), _provider_name
+    ):
+        return body
+    effort = str(body.get("reasoning_effort") or "").strip().lower()
+    if effort in {"none", "off", "false"}:
+        return body
+    if not effort or effort == "default":
+        body["reasoning_effort"] = "low"
+    if DEFAULT_REASONING_BUDGET_TOKENS > 0 and "reasoning_budget_tokens" not in body:
+        body["reasoning_budget_tokens"] = DEFAULT_REASONING_BUDGET_TOKENS
     return body
 
 
@@ -2342,6 +2407,8 @@ class ProxyHandler(_SuppressBrokenPipe, BaseHTTPRequestHandler):
                 body = None
             if isinstance(body, dict):
                 body = _clamp_generation_params(body)
+                if "messages" in body:
+                    body = _apply_strata_reasoning_defaults(body)
                 raw_body = json.dumps(body).encode()
 
             query = ""
@@ -2467,7 +2534,12 @@ class ProxyHandler(_SuppressBrokenPipe, BaseHTTPRequestHandler):
                 )
 
             if isinstance(body, dict) and _provider_name == "Ollama":
+                stripped = False
                 if body.pop("reasoning_effort", None) is not None:
+                    stripped = True
+                if body.pop("reasoning_budget_tokens", None) is not None:
+                    stripped = True
+                if stripped:
                     raw_body = json.dumps(body).encode()
 
             is_streaming = isinstance(body, dict) and body.get("stream", False)
@@ -3534,8 +3606,11 @@ tr:hover td{{background:var(--surf2)}}
 .unattended-lbl{{display:none;margin-left:8px;font-size:11px;color:var(--muted);cursor:pointer;font-family:'JetBrains Mono',monospace;white-space:nowrap;align-items:center;gap:4px}}
 .unattended-lbl.show{{display:inline-flex}}
 .unattended-lbl input{{accent-color:var(--accent);cursor:pointer}}
-.scan-toggle{{background:transparent;border:1px solid var(--border);color:var(--muted);border-radius:3px;padding:8px 10px;font-size:11px;cursor:pointer;line-height:1;flex-shrink:0;font-family:'JetBrains Mono',monospace}}
-.scan-toggle.scan-on{{background:#f59e0b;color:#000;border-color:#f59e0b;font-weight:600}}
+ .scan-toggle{{background:transparent;border:1px solid var(--border);color:var(--muted);border-radius:3px;padding:8px 10px;font-size:11px;cursor:pointer;line-height:1;flex-shrink:0;font-family:'JetBrains Mono',monospace}}
+ .scan-toggle.scan-on{{background:#f59e0b;color:#000;border-color:#f59e0b;font-weight:600}}
+ .kb-toggle{{background:transparent;border:1px solid var(--border);color:var(--muted);border-radius:3px;padding:4px 8px;font-size:10px;cursor:pointer;font-family:'JetBrains Mono',monospace}}
+ .kb-toggle.kb-on{{background:var(--accent);color:#000;border-color:var(--accent);font-weight:600}}
+
 .scan-test{{background:transparent;border:1px solid var(--border);color:var(--muted);border-radius:3px;padding:8px 10px;font-size:11px;cursor:pointer;line-height:1;flex-shrink:0;font-family:'JetBrains Mono',monospace;margin-left:4px}}
 .scan-test:hover{{background:var(--surf2);color:var(--text)}}
 .scan-deep-lbl{{display:inline-flex;align-items:center;gap:3px;font-size:10px;color:var(--muted);cursor:pointer;margin-left:4px;padding:4px 6px;border:1px solid var(--border);border-radius:3px;white-space:nowrap;font-family:'JetBrains Mono',monospace}}
@@ -3724,6 +3799,7 @@ tr.cloud-off td{{background:#0a1a2e!important;color:#22c55e!important;border-top
           <div class="param-group" style="border-top:1px solid var(--border);padding-top:6px;margin-top:4px">
             <span class="param-label">Mode:</span>
             <button class="agent-toggle" id="agentToggle" onclick="toggleAgentMode()" title="Toggle Agent mode (tool-use)" style="font-size:10px;padding:4px 8px">🤖 Agent OFF</button>
+            <button class="kb-toggle" id="kbToggle" onclick="toggleAgentKb()" title="Allow automatic knowledge-base retrieval on Agent runs (off by default)">📚 KB OFF</button>
             <button class="opencode-toggle" id="opencodeToggle" onclick="toggleOpenCodeMode()" title="Route Agent runs through the opencode CLI (changes apply to the next run)" style="background:{'var(--accent)' if USE_OPENCODE else 'transparent'};border:1px solid {'var(--accent)' if USE_OPENCODE else 'var(--border)'};color:{'#000' if USE_OPENCODE else 'var(--muted)'};border-radius:3px;padding:4px 8px;font-size:10px;cursor:pointer;font-family:'JetBrains Mono',monospace;font-weight:{'600' if USE_OPENCODE else '400'}">⌨ OpenCode {'ON' if USE_OPENCODE else 'OFF'}</button>
             <label class="unattended-lbl{' show' if USE_OPENCODE else ''}" id="opencodeCacheLbl" title="Pass -c to continue the last OpenCode session. If you change the workspace, -c may resume a different session. Applies to the next run."><input type="checkbox" id="opencodeCacheChk"{' checked' if OPENCODE_CACHE else ''} onchange="setOpenCodeCache(this.checked)"> -c cache</label>
             <span id="opencodeNextRunHint" title="OpenCode changes apply to the next Agent run; an in-flight run keeps its current mode" style="font-size:9px;color:var(--muted);margin:0 4px;white-space:nowrap">⏭ applies to the next run</span>
@@ -3772,8 +3848,10 @@ let sessionId = null;
 let conversationHistory = [];
 let inputHistory = [];
 let inputHistoryIdx = -1;
-let agentMode = false;
-let scanMode = false;
+ let agentMode = false;
+ let agentKbMode = {'true' if AGENT_KB_DEFAULT else 'false'};
+ let scanMode = false;
+
 let scanPending = false;
 let deepMode = false;
 let loopMode = false;
@@ -3789,8 +3867,10 @@ let opencodeCache = {'true' if OPENCODE_CACHE else 'false'};
 let clientTimeoutMs = {CLIENT_TIMEOUT_MS};
 
 function saveState() {{
-  localStorage.setItem('cc_agentMode', agentMode ? '1' : '0');
-  localStorage.setItem('cc_scanMode', scanMode ? '1' : '0');
+   localStorage.setItem('cc_agentMode', agentMode ? '1' : '0');
+   localStorage.setItem('cc_agentKbMode', agentKbMode ? '1' : '0');
+   localStorage.setItem('cc_scanMode', scanMode ? '1' : '0');
+
   localStorage.setItem('cc_deepMode', deepMode ? '1' : '0');
   localStorage.setItem('cc_loopMode', loopMode ? '1' : '0');
   localStorage.setItem('cc_maxRetries', String(maxRetries));
@@ -3832,9 +3912,12 @@ function loadState() {{
       if (el) el.value = v;
     }}
   }}
-  const am = ls.getItem('cc_agentMode');
-  if (am !== null) agentMode = am === '1';
-  const sm = ls.getItem('cc_scanMode');
+   const am = ls.getItem('cc_agentMode');
+   if (am !== null) agentMode = am === '1';
+   const ak = ls.getItem('cc_agentKbMode');
+   if (ak !== null) agentKbMode = ak === '1';
+   const sm = ls.getItem('cc_scanMode');
+
   if (sm !== null) scanMode = sm === '1';
   const dm = ls.getItem('cc_deepMode');
   if (dm !== null) deepMode = dm === '1';
@@ -3856,7 +3939,13 @@ function loadState() {{
   if (mtSaved !== null) {{
     const el = document.getElementById('maxTokInput');
     if (el) {{
-      if (mtSaved === '0' && {DEFAULT_MAX_TK} > 0 && !ls.getItem('cc_maxTokMigrated')) {{
+      const mtNum = Number(mtSaved);
+      const staleLow = mtSaved === '0' || (Number.isFinite(mtNum) && mtNum > 0 && mtNum < 16384);
+      if (staleLow && !ls.getItem('cc_maxTokBudgetMigrated')) {{
+        el.value = '{DEFAULT_MAX_TK}';
+        ls.setItem('cc_maxTokBudgetMigrated', '1');
+        ls.setItem('cc_maxTok', el.value);
+      }} else if (mtSaved === '0' && {DEFAULT_MAX_TK} > 0 && !ls.getItem('cc_maxTokMigrated')) {{
         el.value = '{DEFAULT_MAX_TK}';
         ls.setItem('cc_maxTokMigrated', '1');
       }} else {{
@@ -3875,11 +3964,17 @@ function loadState() {{
     agentBtn.textContent = agentMode ? '🤖 Agent ON' : '🤖 Agent OFF';
     agentBtn.classList.toggle('agent-on', agentMode);
   }}
-  const scanBtn = document.getElementById('scanToggle');
-  if (scanBtn) {{
-    scanBtn.textContent = scanMode ? '🧪 Scan ON' : '🧪 Scan OFF';
-    scanBtn.classList.toggle('scan-on', scanMode);
-  }}
+   const kbBtn = document.getElementById('kbToggle');
+   if (kbBtn) {{
+     kbBtn.textContent = agentKbMode ? '📚 KB ON' : '📚 KB OFF';
+     kbBtn.classList.toggle('kb-on', agentKbMode);
+   }}
+   const scanBtn = document.getElementById('scanToggle');
+   if (scanBtn) {{
+     scanBtn.textContent = scanMode ? '🧪 Scan ON' : '🧪 Scan OFF';
+     scanBtn.classList.toggle('scan-on', scanMode);
+   }}
+
   const loopBtn = document.getElementById('loopToggle');
   if (loopBtn) {{
     loopBtn.textContent = loopMode ? '🔄 Loop ON' : '🔄 Loop OFF';
@@ -3917,7 +4012,7 @@ function loadState() {{
 
 function resetDefaults() {{
   if (!confirm('Reset all settings to defaults?')) return;
-  const keys = ['cc_agentMode','cc_scanMode','cc_deepMode','cc_unattended','cc_model','cc_temp','cc_topp','cc_maxTok','cc_maxTokMigrated','cc_reasoning','cc_minscore','cc_topk','cc_loopMode','cc_maxRetries'];
+  const keys = ['cc_agentMode','cc_agentKbMode','cc_scanMode','cc_deepMode','cc_unattended','cc_model','cc_temp','cc_topp','cc_maxTok','cc_maxTokMigrated','cc_maxTokBudgetMigrated','cc_reasoning','cc_minscore','cc_topk','cc_loopMode','cc_maxRetries'];
   keys.forEach(k => localStorage.removeItem(k));
   sessionStorage.removeItem('cc_directImageUnlocked');
   location.reload();
@@ -3956,7 +4051,18 @@ function toggleAgentMode() {{
   saveState();
 }}
 
-function toggleScanMode() {{
+ function toggleAgentKb() {{
+   agentKbMode = !agentKbMode;
+   const btn = document.getElementById('kbToggle');
+   if (btn) {{
+     btn.textContent = agentKbMode ? '📚 KB ON' : '📚 KB OFF';
+     btn.classList.toggle('kb-on', agentKbMode);
+   }}
+   saveState();
+ }}
+
+ function toggleScanMode() {{
+
   scanMode = !scanMode;
   const btn = document.getElementById('scanToggle');
   if (btn) {{
@@ -4632,6 +4738,7 @@ const tourSteps = [
   {{sel:'button[onclick*="seedDemo"]',title:'Demo Data',text:'Click this to seed the audit log with sample queries from various professions (law, accounting, real estate, etc.). Demonstrates how real-world queries appear with before/after token counts and matched knowledge base hits.',pos:'bottom'}},
   {{sel:'button[onclick*="clearContext"]',title:'Clear Context',text:'Clears the response cache and resets session context without removing chat history.',pos:'bottom'}},
   {{sel:'.hinfo',title:'Connection Info',text:'Shows your LLM provider, Qdrant host, minimum relevance score, and Top-K setting. All configurable via the Settings page.',pos:'bottom'}},
+  {{sel:'#kbToggle',title:'Agent KB Retrieval',text:'When ON, Agent runs query the knowledge base before planning. OFF is the default and skips hidden lookups; the model can still call vector_search explicitly.',pos:'bottom'}},
   {{sel:'.cards',title:'Statistics Cards',text:'Real-time metrics: license status, total requests, context compression %, tokens saved, peak token usage, context limit, and cache hits.',pos:'bottom'}},
   {{sel:'.ctx-wrap',title:'Context Usage Meter',text:'Visual bar showing how much of your token limit the most recent request consumed. Green = efficient. Red = nearing the limit.',pos:'bottom'}},
   {{sel:'.tbl-wrap',title:'Audit Log',text:'Every query is logged with timestamp, before/after tokens, compression percentage, and which knowledge base files matched. Exportable as CSV.',pos:'top'}},
@@ -5685,7 +5792,7 @@ async function sendMessage(taskIdOverride) {{
         method: 'POST',
         headers: {{'Content-Type':'application/json'}},
         signal: abortController.signal,
-        body: JSON.stringify({{message: text, session_id: sessionId, model, stream: true, deep: deepMode, scan: scanMode, loop_retries: loopMode ? maxRetries : 0, task_id: taskIdOverride || lastTaskId || '', reasoning_effort: genParams.reasoning_effort || 'low', max_tokens: genParams.max_tokens || 0}})
+        body: JSON.stringify({{message: text, session_id: sessionId, model, stream: true, kb: agentKbMode, deep: deepMode, scan: scanMode, loop_retries: loopMode ? maxRetries : 0, task_id: taskIdOverride || lastTaskId || '', reasoning_effort: genParams.reasoning_effort || 'low', max_tokens: genParams.max_tokens || 0}})
       }});
       if (!resp.ok) {{
         removeTyping();
@@ -9036,11 +9143,18 @@ class DashboardHandler(_SuppressBrokenPipe, BaseHTTPRequestHandler):
                 deep = body.get("deep", False)
                 task_id = body.get("task_id", "").strip()
                 scan = body.get("scan", True)
+                agent_kb = agent_kb_enabled(body)
                 try:
                     loop_retries = max(0, min(int(body.get("loop_retries", 0)), MAX_LOOP_RETRIES))
                 except Exception:
                     loop_retries = 0
                 reasoning_effort = body.get("reasoning_effort", "")
+                reasoning_budget_tokens = body.get("reasoning_budget_tokens")
+                if reasoning_budget_tokens is not None:
+                    try:
+                        reasoning_budget_tokens = int(reasoning_budget_tokens)
+                    except Exception:
+                        reasoning_budget_tokens = None
                 try:
                     max_tokens = min(max(0, int(body.get("max_tokens", 0) or 0)), MAX_OUTPUT_TOKENS)
                 except Exception:
@@ -9248,6 +9362,7 @@ class DashboardHandler(_SuppressBrokenPipe, BaseHTTPRequestHandler):
                         user_message=message,
                         provider=_provider_name,
                         reasoning_effort=reasoning_effort,
+                        reasoning_budget_tokens=reasoning_budget_tokens,
                         max_tokens=max_tokens,
                         extra_tools=(
                             (
@@ -9285,10 +9400,20 @@ class DashboardHandler(_SuppressBrokenPipe, BaseHTTPRequestHandler):
                 if resume_context:
                     input_messages.insert(0, SystemMessage(content=resume_context))
 
+                tok_before = count_message_tokens(input_messages)
+                kb_lookup_done = False
                 if is_image_request(message, chat_history):
                     ctx, hits_meta = "", []
-                else:
+                elif agent_kb:
                     ctx, hits_meta = _timed_qdrant_context(message, "agent")
+                    kb_lookup_done = True
+                else:
+                    ctx, hits_meta = "", []
+                    print(
+                        f"[{datetime.now().strftime('%H:%M:%S')}] [Agent] "
+                        "KB auto-retrieval skipped (kb=false)",
+                        flush=True,
+                    )
                 session["_kb_context"] = ctx
                 if ctx:
                     safe_ctx = wrap_untrusted(
@@ -9308,6 +9433,14 @@ class DashboardHandler(_SuppressBrokenPipe, BaseHTTPRequestHandler):
                     input_messages.insert(0, SystemMessage(
                         content=capabilities_block()
                     ))
+
+                if kb_lookup_done:
+                    record_kb_lookup(
+                        message,
+                        tok_before,
+                        count_message_tokens(input_messages),
+                        hits_meta,
+                    )
 
                 shell_mode = session.get("shell_confirm_mode", "ask")
 
@@ -9929,19 +10062,20 @@ class DashboardHandler(_SuppressBrokenPipe, BaseHTTPRequestHandler):
                         )
                         print(f"[{datetime.now().strftime('%H:%M:%S')}] [Agent] ⏰ Timeout", flush=True)
                     add_to_history(sid, "assistant", output)
-                    tok = count_tokens(message) + count_tokens(output)
-                    record(
-                        {
-                            "ts": datetime.now().strftime("%H:%M:%S"),
-                            "query": message[:120],
-                            "tokens_before": count_tokens(message),
-                            "tokens_after": tok,
-                            "ctx_limit": CTX_LIMIT,
-                            "pct": round(tok / CTX_LIMIT * 100, 1),
-                            "hits": hits_meta,
-                            "type": "agent",
-                        }
-                    )
+                    if not kb_lookup_done:
+                        tok = count_tokens(message) + count_tokens(output)
+                        record(
+                            {
+                                "ts": datetime.now().strftime("%H:%M:%S"),
+                                "query": message[:120],
+                                "tokens_before": count_tokens(message),
+                                "tokens_after": tok,
+                                "ctx_limit": CTX_LIMIT,
+                                "pct": round(tok / CTX_LIMIT * 100, 1),
+                                "hits": hits_meta,
+                                "type": "agent",
+                            }
+                        )
                     payload = {"response": output, "task_id": task_id}
                     if agent_warning:
                         payload["warning"] = agent_warning
@@ -9966,6 +10100,8 @@ class DashboardHandler(_SuppressBrokenPipe, BaseHTTPRequestHandler):
                         )
                         self.wfile.flush()
 
+                    if not agent_kb and not is_image_request(message, chat_history):
+                        _agent_sse({"type": "phase", "phase": "knowledge base skipped"})
                     try:
                         full_output = asyncio.run(_run_agent_stream(_agent_sse))
                     except Exception as stream_exc:
@@ -9986,19 +10122,20 @@ class DashboardHandler(_SuppressBrokenPipe, BaseHTTPRequestHandler):
                         pass
 
                     add_to_history(sid, "assistant", full_output)
-                    tok = count_tokens(message) + count_tokens(full_output)
-                    record(
-                        {
-                            "ts": datetime.now().strftime("%H:%M:%S"),
-                            "query": message[:120],
-                            "tokens_before": count_tokens(message),
-                            "tokens_after": tok,
-                            "ctx_limit": CTX_LIMIT,
-                            "pct": round(tok / CTX_LIMIT * 100, 1),
-                            "hits": hits_meta,
-                            "type": "agent",
-                        }
-                    )
+                    if not kb_lookup_done:
+                        tok = count_tokens(message) + count_tokens(full_output)
+                        record(
+                            {
+                                "ts": datetime.now().strftime("%H:%M:%S"),
+                                "query": message[:120],
+                                "tokens_before": count_tokens(message),
+                                "tokens_after": tok,
+                                "ctx_limit": CTX_LIMIT,
+                                "pct": round(tok / CTX_LIMIT * 100, 1),
+                                "hits": hits_meta,
+                                "type": "agent",
+                            }
+                        )
                 return
             except Exception as e:
                 import traceback

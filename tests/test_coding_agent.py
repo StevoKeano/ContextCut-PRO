@@ -405,6 +405,55 @@ def test_run_task_forwards_explicit_reasoning(tmp_path, ws, mode):
     }
 
 
+def test_is_strata_target_matches_model_or_host():
+    assert coding_agent._is_strata_target(
+        "deepseek-v4.1-flash", "http://192.168.137.1:8080/v1"
+    )
+    assert coding_agent._is_strata_target("other", "http://strata.local:8080/v1")
+    assert not coding_agent._is_strata_target("qwen3:14b", "http://localhost:11434/v1")
+
+
+def test_run_task_caps_strata_thinking_budget(tmp_path, ws, monkeypatch):
+    monkeypatch.delenv("CONTEXTCUT_CODING_REASONING_BUDGET_TOKENS", raising=False)
+    client = FakeClient([_response(FakeMessage("ok"))])
+    coding_agent.run_task(
+        "say hi",
+        workspace=ws.root,
+        client=client,
+        logger=_logger(tmp_path),
+        model="deepseek-v4.1-flash",
+        base_url="http://192.168.137.1:8080/v1",
+        reasoning="low",
+        max_tokens=16384,
+    )
+    call = client.chat.completions.calls[0]
+    assert call["max_tokens"] == 16384
+    assert call["extra_body"] == {
+        "reasoning_effort": "low",
+        "reasoning_budget_tokens": 256,
+    }
+
+
+def test_run_task_reasoning_budget_env_and_override(tmp_path, ws, monkeypatch):
+    monkeypatch.setenv("CONTEXTCUT_CODING_REASONING_BUDGET_TOKENS", "512")
+    kwargs = {
+        "workspace": ws.root,
+        "logger": _logger(tmp_path),
+        "model": "deepseek-v4.1-flash",
+        "base_url": "http://192.168.137.1:8080/v1",
+        "reasoning": "low",
+    }
+    client = FakeClient([_response(FakeMessage("ok"))])
+    coding_agent.run_task("say hi", client=client, **kwargs)
+    assert client.chat.completions.calls[0]["extra_body"]["reasoning_budget_tokens"] == 512
+
+    client = FakeClient([_response(FakeMessage("ok"))])
+    coding_agent.run_task(
+        "say hi", client=client, reasoning_budget_tokens=0, **kwargs
+    )
+    assert client.chat.completions.calls[0]["extra_body"] == {"reasoning_effort": "low"}
+
+
 def test_run_task_default_reasoning_skips_extra_body(tmp_path, ws):
     client = FakeClient([_response(FakeMessage("ok"))])
     coding_agent.run_task(
@@ -534,6 +583,36 @@ def test_cli_dry_run_reports_reasoning(ws, capsys):
     )
     assert code == 0
     assert json.loads(capsys.readouterr().out)["reasoning"] == "medium"
+
+
+def test_cli_forwards_reasoning_budget(ws, monkeypatch):
+    captured = {}
+
+    def fake_run_task(prompt, **kwargs):
+        captured.update(kwargs)
+        return SimpleNamespace(
+            status="done",
+            output="ok",
+            steps=1,
+            duration=0.0,
+            usage={},
+            log_path="",
+            workspace="",
+            to_dict=lambda: {},
+        )
+
+    monkeypatch.setattr(coding_agent, "run_task", fake_run_task)
+    code = coding_agent.main(
+        [
+            "--workspace",
+            str(ws.root),
+            "--reasoning-budget-tokens",
+            "128",
+            "task",
+        ]
+    )
+    assert code == 0
+    assert captured["reasoning_budget_tokens"] == 128
 
 
 def test_run_task_done_without_tools(tmp_path, ws):

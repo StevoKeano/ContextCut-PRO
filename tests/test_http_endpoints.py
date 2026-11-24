@@ -58,6 +58,25 @@ class TestDashboardHandlerGET:
         assert b"ContextCut" in raw
         assert b"https://github.com/StevoKeano/ContextCut-PRO/blob/main/README.md" in raw
 
+    def test_agent_kb_enabled_helper(self, monkeypatch):
+        import qdrant_proxy_final as qpf
+
+        monkeypatch.setattr(qpf, "AGENT_KB_DEFAULT", False)
+        assert qpf.agent_kb_enabled({}) is False
+        assert qpf.agent_kb_enabled({"kb": False}) is False
+        assert qpf.agent_kb_enabled({"kb": True}) is True
+        monkeypatch.setattr(qpf, "AGENT_KB_DEFAULT", True)
+        assert qpf.agent_kb_enabled({}) is True
+
+    def test_dashboard_has_agent_kb_toggle(self, make_handler):
+        status, raw = make_handler("/", "GET")
+        assert status == 200
+        html = raw.decode("utf-8", errors="replace")
+        assert 'id="kbToggle"' in html
+        assert "function toggleAgentKb()" in html
+        assert "cc_agentKbMode" in html
+        assert "kb: agentKbMode" in html
+
     def test_dashboard_unattended_label_visibility_targets_label(self, make_handler):
         status, raw = make_handler("/", "GET")
         assert status == 200
@@ -636,3 +655,54 @@ def test_system_prompt_has_tool_efficiency_rule():
         "- When extending an existing file, immediately call `append_file` with "
         "the next <= 100-line chunk"
     ) in agent_handler.SYSTEM_PROMPT
+    assert (
+        "- When harness tail context is provided (`Tail of <path> (lines N-M):`)"
+    ) in agent_handler.SYSTEM_PROMPT
+
+
+def test_strata_chat_defaults_include_reasoning_budget(monkeypatch):
+    import qdrant_proxy_final as qpf
+
+    monkeypatch.setattr(
+        qpf, "get_current_upstream", lambda: "http://192.168.137.1:8080"
+    )
+    monkeypatch.setattr(qpf, "_provider_name", "Custom")
+    body = {"model": "deepseek-v4.1-flash", "max_tokens": 16384}
+    out = qpf._apply_strata_reasoning_defaults(body)
+    assert out["reasoning_effort"] == "low"
+    assert out["reasoning_budget_tokens"] == 256
+    assert out["max_tokens"] == 16384
+
+
+def test_strata_chat_defaults_respect_explicit_settings(monkeypatch):
+    import qdrant_proxy_final as qpf
+
+    monkeypatch.setattr(qpf, "get_current_upstream", lambda: "http://strata.local:8080")
+    monkeypatch.setattr(qpf, "_provider_name", "Custom")
+    body = {
+        "model": "deepseek-v4.1-flash",
+        "reasoning_effort": "medium",
+        "reasoning_budget_tokens": 512,
+    }
+    assert qpf._apply_strata_reasoning_defaults(body)["reasoning_budget_tokens"] == 512
+
+    disabled = {
+        "model": "deepseek-v4.1-flash",
+        "reasoning_effort": "none",
+    }
+    assert qpf._apply_strata_reasoning_defaults(disabled) == disabled
+
+
+def test_non_strata_chat_is_unchanged(monkeypatch):
+    import qdrant_proxy_final as qpf
+
+    monkeypatch.setattr(qpf, "get_current_upstream", lambda: "http://localhost:11434")
+    monkeypatch.setattr(qpf, "_provider_name", "Ollama")
+    body = {"model": "qwen3:14b-q8_0", "max_tokens": 8192}
+    assert qpf._apply_strata_reasoning_defaults(body) == body
+
+
+def test_dashboard_migrates_stale_max_tokens(make_handler):
+    status, raw = make_handler("/", "GET")
+    assert status == 200
+    assert b"cc_maxTokBudgetMigrated" in raw

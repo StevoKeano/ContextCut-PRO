@@ -16,6 +16,7 @@ Environment:
     CONTEXTCUT_CODING_SHELL_TIMEOUT     fallback: AGENT_SHELL_TIMEOUT, then 60
     CONTEXTCUT_CODING_MAX_TOKENS        fallback: CONTEXTCUT_MAX_TOKENS, then 8192
     CONTEXTCUT_CODING_REASONING         auto|none|low|medium|high|default (default auto)
+    CONTEXTCUT_CODING_REASONING_BUDGET_TOKENS  256 (Strata thinking cap; 0 disables)
     CONTEXTCUT_CODING_ALLOWLIST         extra command executables (comma list)
     CONTEXTCUT_CODING_PASSTHROUGH_ENV   1 to keep secret env vars in subprocesses
     CONTEXTCUT_CTX_LIMIT                32768 (used for message trimming)
@@ -49,6 +50,7 @@ from coding_tools import TOOL_SCHEMAS, Workspace, dispatch
 DEFAULT_RUN_ROOT = Path.home() / ".contextcut" / "coding_runs"
 MAX_TOOL_RESULT_CHARS = 32 * 1024
 REASONING_MODES = ("auto", "none", "low", "medium", "high", "default")
+DEFAULT_REASONING_BUDGET_TOKENS = 256
 
 _AUTO_COMPLEX_RE = re.compile(
     r"\b(?:algorithm|architecture|async|boundary|bug|concurren\w*|debug|design|edge\s+case|"
@@ -144,6 +146,16 @@ def default_base_url() -> str:
 
 def default_api_key() -> str:
     return _first_env("CONTEXTCUT_CODING_API_KEY") or "not-needed"
+
+
+def _is_strata_target(model: str, base_url: str | None) -> bool:
+    name = str(model or "").lower()
+    host = str(base_url or "").lower()
+    return (
+        name.startswith("deepseek")
+        or "ds4" in name
+        or "strata" in host
+    )
 
 
 def default_allowlist() -> tuple[str, ...]:
@@ -313,6 +325,7 @@ def _create_with_retry(
     messages: list[dict],
     max_tokens: int,
     reasoning_effort: str | None = None,
+    reasoning_budget_tokens: int | None = None,
 ) -> Any:
     last_error: Exception | None = None
     for attempt in range(3):
@@ -323,8 +336,13 @@ def _create_with_retry(
                 "tools": TOOL_SCHEMAS,
                 "max_tokens": max_tokens,
             }
+            extra_body: dict[str, Any] = {}
             if reasoning_effort and reasoning_effort != "default":
-                kwargs["extra_body"] = {"reasoning_effort": reasoning_effort}
+                extra_body["reasoning_effort"] = reasoning_effort
+            if reasoning_budget_tokens and reasoning_budget_tokens > 0:
+                extra_body["reasoning_budget_tokens"] = reasoning_budget_tokens
+            if extra_body:
+                kwargs["extra_body"] = extra_body
             return client.chat.completions.create(**kwargs)
         except Exception as exc:
             last_error = exc
@@ -435,6 +453,7 @@ def run_task(
     max_steps: int | None = None,
     timeout: float | None = None,
     reasoning: str | None = None,
+    reasoning_budget_tokens: int | None = None,
     shell_timeout: int | None = None,
     max_tokens: int | None = None,
     ctx_limit: int | None = None,
@@ -455,6 +474,15 @@ def run_task(
     ctx_limit = ctx_limit if ctx_limit is not None else _env_int("CONTEXTCUT_CTX_LIMIT", 32768)
     reasoning_mode = _normalize_reasoning(
         reasoning if reasoning is not None else _first_env("CONTEXTCUT_CODING_REASONING")
+    )
+    if reasoning_budget_tokens is None:
+        reasoning_budget_tokens = _env_int(
+            "CONTEXTCUT_CODING_REASONING_BUDGET_TOKENS", DEFAULT_REASONING_BUDGET_TOKENS
+        )
+    effective_budget = (
+        reasoning_budget_tokens
+        if reasoning_budget_tokens > 0 and _is_strata_target(model, base_url)
+        else 0
     )
     shell_timeout = shell_timeout if shell_timeout is not None else _env_int(
         "CONTEXTCUT_CODING_SHELL_TIMEOUT", _env_int("AGENT_SHELL_TIMEOUT", 60)
@@ -503,6 +531,8 @@ def run_task(
         workspace=str(ws.root),
         purpose=prompt[:300],
         reasoning=reasoning_mode,
+        reasoning_budget_tokens=effective_budget,
+        max_tokens=max_tokens,
     )
     started = time.monotonic()
     usage = {"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0}
@@ -547,6 +577,7 @@ def run_task(
                 messages=messages,
                 max_tokens=max_tokens,
                 reasoning_effort=effort,
+                reasoning_budget_tokens=effective_budget,
             )
         except Exception as exc:
             status = "error"
@@ -569,6 +600,7 @@ def run_task(
             effort=effort,
             reason=effort_reason,
             reasoning_tokens=reasoning_tokens,
+            reasoning_budget_tokens=effective_budget,
         )
         message = response.choices[0].message
         messages.append(_message_dump(message))
@@ -1017,6 +1049,12 @@ def main(argv: list[str] | None = None) -> int:
         default=None,
         help="reasoning effort: auto, none, low, medium, high, or default",
     )
+    parser.add_argument(
+        "--reasoning-budget-tokens",
+        type=int,
+        default=None,
+        help="Strata thinking budget in tokens (default 256; 0 disables)",
+    )
     parser.add_argument("--resume", default=None, metavar="RUN_ID")
     parser.add_argument(
         "--use-opencode",
@@ -1071,6 +1109,18 @@ def main(argv: list[str] | None = None) -> int:
                     "reasoning": _normalize_reasoning(
                         args.reasoning or _first_env("CONTEXTCUT_CODING_REASONING")
                     ),
+                    "reasoning_budget_tokens": args.reasoning_budget_tokens
+                    if args.reasoning_budget_tokens is not None
+                    else _env_int(
+                        "CONTEXTCUT_CODING_REASONING_BUDGET_TOKENS",
+                        DEFAULT_REASONING_BUDGET_TOKENS,
+                    ),
+                    "max_tokens": args.max_tokens
+                    if args.max_tokens is not None
+                    else _env_int(
+                        "CONTEXTCUT_CODING_MAX_TOKENS",
+                        _env_int("CONTEXTCUT_MAX_TOKENS", 8192),
+                    ),
                     "allow_extra": list(default_allowlist()),
                     "use_opencode": args.use_opencode,
                     "opencode_agent": args.opencode_agent,
@@ -1103,6 +1153,7 @@ def main(argv: list[str] | None = None) -> int:
                 max_steps=args.max_steps,
                 timeout=args.timeout,
                 reasoning=args.reasoning,
+                reasoning_budget_tokens=args.reasoning_budget_tokens,
                 max_tokens=args.max_tokens,
                 resume_run_id=args.resume,
                 progress=None if args.quiet else _stderr_progress,

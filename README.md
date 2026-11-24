@@ -446,6 +446,8 @@ fi
 | `CONTEXTCUT_PROXY_PORT` | `18788` | Proxy listen port |
 | `CONTEXTCUT_DASHBOARD_PORT` | `18787` | Dashboard port |
 | `CONTEXTCUT_CTX_LIMIT` | `32768` | Model context window; set to match the model's actual `num_ctx` |
+| `CONTEXTCUT_MAX_TOKENS` | `16384` | Agent-mode `max_tokens` ceiling/request default (dashboard also uses this for its clamp) |
+| `CONTEXTCUT_REASONING_BUDGET_TOKENS` | `256` | Strata thinking cap for chat/agent requests (`0` disables); stale dashboard `cc_maxTok` values below 16384 migrate once |
 | `CONTEXTCUT_STREAM_CHUNK_TIMEOUT` | `600` | Seconds to wait for the next streamed chunk before aborting; `0` disables |
 | `CONTEXTCUT_TOP_K` | `5` | Max chunks to retrieve |
 | `CONTEXTCUT_MIN_SCORE` | `0.50` | Minimum relevance threshold |
@@ -670,10 +672,11 @@ Every run writes `events.jsonl` and a resumable `messages.json` to `~/.contextcu
 | `CONTEXTCUT_CODING_SHELL_TIMEOUT` | `AGENT_SHELL_TIMEOUT` → `60` | Per-command timeout |
 | `CONTEXTCUT_CODING_MAX_TOKENS` | `CONTEXTCUT_MAX_TOKENS` → `8192` | Response budget |
 | `CONTEXTCUT_CODING_REASONING` | `auto` | Reasoning effort: `auto`, `none`, `low`, `medium`, `high`, or `default` |
+| `CONTEXTCUT_CODING_REASONING_BUDGET_TOKENS` | `256` | Strata thinking cap sent as `reasoning_budget_tokens`; `0` disables |
 | `CONTEXTCUT_CODING_ALLOWLIST` | — | Extra executables (comma list) for `run_command` |
 | `CONTEXTCUT_CODING_PASSTHROUGH_ENV` | off | Keep secret env vars in child processes (not recommended) |
 
-`--reasoning` overrides `CONTEXTCUT_CODING_REASONING`. `default` omits the `reasoning_effort` field entirely. `none` disables thinking for throughput. `auto` selects `none` for inspection-only prompts, `low` for normal edits, and `medium` for complex/numeric tasks or after any tool/test failure. An empty model response is retried once with lower effort. Each turn logs `mode`, `effort`, `reason`, and `reasoning_tokens` to `events.jsonl`.
+`--reasoning` overrides `CONTEXTCUT_CODING_REASONING`. `default` omits the `reasoning_effort` field entirely. `none` disables thinking for throughput. `auto` selects `none` for inspection-only prompts, `low` for normal edits, and `medium` for complex/numeric tasks or after any tool/test failure. An empty model response is retried once with lower effort. For Strata/DeepSeek targets, requests also carry `reasoning_budget_tokens` (default `256`) so hidden thinking is capped instead of consuming 75% of `max_tokens`; override with `--reasoning-budget-tokens` or set the env var to `0` to disable. Each turn logs `mode`, `effort`, `reason`, `reasoning_tokens`, and the effective budget to `events.jsonl`.
 
 **Sandbox model.** File tools are jailed with `Path.resolve()` + `is_relative_to()`, deny `.env`/keys/`.ssh`/`.git/config`, and refuse symlink escapes. Writes are atomic with optional `.bak-*` backups. `run_command` splits with `shlex` and runs with `shell=False` against an executable allowlist (build/test/lint tools, read-only git); destructive commands, package installs, network clients, and shells are denied. Child processes get a scrubbed environment.
 

@@ -28,6 +28,7 @@ either mode.
 | **DEEP** | Replaces the simple scan with a sub-agent verifier that checks claims against the Qdrant KB (evidence-backed). Requires `deepagents`. |
 | **🛡 TypeSafe** | Routes scanning to the TypeSafe.ai cloud verifier (requires `TYPESAFE_API_KEY`). |
 | **Agent ON/OFF** | Enables tool-use mode. |
+| **📚 KB ON/OFF** | Controls automatic KB retrieval on Agent runs. OFF by default; the model can still call `vector_search` explicitly. |
 | **Unattended** | Auto-approves shell commands, skipping Allow/Deny. |
 | **Model** | Model name used for chat/agent (e.g. `qwen3:14b-q8_0`). |
 | **Workspace** | Directory that relative agent file paths and `run_python`/`shell_exec` use as `cwd`. |
@@ -39,9 +40,12 @@ either mode.
 - The watcher (`ingest.py --watch`) auto-ingests changed files. Supported: `.md`, `.txt`,
   `.py`, `.js`, `.ts`, `.html`, `.css`, and more (see `ALLOWED_EXT` in `ingest.py`).
 - Upload via the dashboard File Browser, or drop files into the KB directory.
-- Retrieval: `CONTEXTCUT_TOP_K` (default 5) chunks with score ≥ `CONTEXTCUT_MIN_SCORE`
-  (default 0.50). Below threshold → nothing injected.
-- Tune retrieval with `python ingest.py --query "your typical query"`.
+ - Normal chat injects KB context automatically. Agent runs skip automatic KB retrieval unless
+   the 📚 KB toggle is ON (or `/api/agent` sends `kb:true`); explicit `vector_search` still works.
+ - Retrieval: `CONTEXTCUT_TOP_K` (default 5) chunks with score ≥ `CONTEXTCUT_MIN_SCORE`
+   (default 0.50). Below threshold → nothing injected.
+ - Tune retrieval with `python ingest.py --query "your typical query"`.
+
 - Embeddings: Voyage AI (`VOYAGE_API_KEY`) or local Ollama embeddings.
 
 ## Agent tools
@@ -128,8 +132,9 @@ Three ways to code with it:
    ~/contextcut/venv/bin/python coding_agent.py --workspace ~/dev/sandbox \
      "add a test for the parse_date helper and run it"
    ```
-   Flags: `--model`, `--reasoning {auto,none,low,medium,high,default}`, `--json`,
-   `--resume <run_id>`, `--dry-run`. Runs are logged to `~/.contextcut/coding_runs/<run_id>/`.
+   Flags: `--model`, `--reasoning {auto,none,low,medium,high,default}`,
+   `--reasoning-budget-tokens`, `--json`, `--resume <run_id>`, `--dry-run`. Runs are
+   logged to `~/.contextcut/coding_runs/<run_id>/`.
 3. **Two-agent orchestrator** — `orchestrator.py` runs an implementer plus a verifier with
    deterministic gates and a git baseline:
    ```bash
@@ -183,6 +188,8 @@ Tools: `knowledge_search`, `knowledge_search_structured`, `knowledge_list_files`
 | `CONTEXTCUT_UPSTREAM` | `http://localhost:11434` | LLM endpoint |
 | `CONTEXTCUT_MODEL` | `qwen3:14b-q8_0` | Default chat/agent model |
 | `CONTEXTCUT_CTX_LIMIT` | `32768` | Context window (match the model's `num_ctx`) |
+| `CONTEXTCUT_MAX_TOKENS` | `16384` | Agent-mode `max_tokens` ceiling/request default |
+| `CONTEXTCUT_REASONING_BUDGET_TOKENS` | `256` | Strata thinking cap for chat/agent requests (`0` disables) |
 | `CONTEXTCUT_TOP_K` | `5` | Chunks retrieved |
 | `CONTEXTCUT_MIN_SCORE` | `0.50` | Relevance threshold |
 | `CONTEXTCUT_KB_DIR` | `~/contextcut/knowledge` | Knowledge base directory |

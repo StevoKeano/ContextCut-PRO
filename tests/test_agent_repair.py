@@ -136,6 +136,57 @@ def _run_agent(make_handler, agent, warning=None, stream=True):
         return make_handler("/api/agent", "POST", body)
 
 
+def _run_agent_with_kb(make_handler, agent, kb_flag=None):
+    body = {
+        "message": "Check the last 10 lines of EM-KRAUS-LAB.html",
+        "model": "qwen3-coder:30b",
+        "stream": True,
+        "scan": False,
+        "loop_retries": 0,
+    }
+    if kb_flag is not None:
+        body["kb"] = kb_flag
+    with patch("agent_handler.build_agent", return_value=agent), patch(
+        "agent_handler.CheckpointManager", _FakeCheckpointManager
+    ), patch(
+        "qdrant_proxy_final.model_tool_template_warning", return_value=None
+    ):
+        return make_handler("/api/agent", "POST", json.dumps(body).encode())
+
+
+def test_agent_skips_kb_by_default(make_handler):
+    agent = _FakeAgent(["done"])
+    with patch(
+        "qdrant_proxy_final._timed_qdrant_context",
+        return_value=("ctx", [{"source": "x.md", "score": 0.9}]),
+    ) as kb, patch("qdrant_proxy_final.record") as rec:
+        status, raw = _run_agent_with_kb(make_handler, agent)
+
+    assert status == 200
+    kb.assert_not_called()
+    events = [data for _name, data in _parse_sse(raw)]
+    assert any(e.get("phase") == "knowledge base skipped" for e in events)
+    assert rec.call_count == 1
+    assert rec.call_args[0][0]["hits"] == []
+
+
+def test_agent_can_opt_in_to_kb(make_handler):
+    agent = _FakeAgent(["done"])
+    hits = [{"source": "x.md", "score": 0.9}]
+    with patch(
+        "qdrant_proxy_final._timed_qdrant_context", return_value=("KB text", hits)
+    ) as kb, patch("qdrant_proxy_final.record") as rec:
+        status, raw = _run_agent_with_kb(make_handler, agent, kb_flag=True)
+
+    assert status == 200
+    kb.assert_called_once()
+    events = [data for _name, data in _parse_sse(raw)]
+    assert not any(e.get("phase") == "knowledge base skipped" for e in events)
+    rec.assert_called_once()
+    assert rec.call_args[0][0]["type"] == "agent-kb"
+    assert rec.call_args[0][0]["hits"] == hits
+
+
 def test_image_reply_includes_elapsed_time_in_stream(make_handler):
     status, raw = _run_agent(make_handler, _FakeImageAgent())
 
